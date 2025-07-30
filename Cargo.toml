@@ -1,0 +1,16 @@
+[package]
+name = "gosub-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "gosub_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ffi-support = "0.4"       # For C-compatible string management
+gtk4 = { version = "0.7", optional = true }
+
+[features]
+default = []
+gtk = ["gtk4"]
