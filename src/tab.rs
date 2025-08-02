@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 use gtk4::cairo;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -26,19 +27,34 @@ pub enum TabState {
     Failed(String),
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum TabMode {
+    /// Fully active: network, animations, layout, painting at 60 Hz
+    Active,
+    /// “Live” background: keep CSS animations & timers at, say, 10 Hz
+    BackgroundLive,
+    /// “Sleeping” background: only tick network / JS timers at 1 Hz
+    BackgroundIdle,
+    /// Completely suspended: no ticking until an event or visibility change
+    Suspended,
+}
+
+pub struct TabMeta {}
+
 pub struct Tab {
-    pub id: TabId,
-    pub instance: EngineInstance,
-    pub state: TabState,
+    pub id: TabId,                  // ID of the tab
+    pub instance: EngineInstance,   // Engine instance running for this tab
+    pub state: TabState,            // State of the tab (idle, loading, loaded, etc.)
+
+    // Scheduling and lifecycle management
+    pub mode: TabMode,              // Current tab mode (idle, live, background)
+    pub last_tick: Instant,         // When was the last tick?
 
     pub favicon: Vec<u8>,               // Favicon binary data for the current tab
     pub title: String,                  // Title of the current tab
 
-    // pub pending_url: Option<String>,    // Url to load or is loading
     pub is_loading: bool,               // Is the current URL being loaded
-
     pub is_error: bool,                 // Is there an error in the current tab?
-
 }
 
 impl Tab {
@@ -53,7 +69,9 @@ impl Tab {
 
             is_loading: false,
             is_error: false,
-            // pending_url: None,
+
+            mode: TabMode::Active,              // Default mode is active
+            last_tick: Instant::now(),
         }
     }
 

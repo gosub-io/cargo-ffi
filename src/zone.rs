@@ -1,24 +1,25 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
-use crate::config::TabGroupConfig;
+use crate::config::ZoneConfig;
 use crate::errors::EngineError;
-use crate::tab::{Tab, TabId};
+use crate::tab::{Tab, TabId, TabMode};
 use crate::tick::TickResult;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct GroupId(Uuid);
+pub struct ZoneId(Uuid);
 
-impl GroupId {
+impl ZoneId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }
 
-pub struct TabGroup {
-    pub id: GroupId,            // ID of the group
-    config: TabGroupConfig,     // Configuration for the group (like max tabs allowed)
+pub struct Zone {
+    pub id: ZoneId,            // ID of the group
+    config: ZoneConfig,     // Configuration for the group (like max tabs allowed)
     pub title: String,          // Title of the group (ie: Home, Work)
     pub icon: Vec<u8>,          // Icon of the group (could be a base64 encoded image)
     pub description: String,    // Description of the group
@@ -29,8 +30,8 @@ pub struct TabGroup {
     // @TODO: We probably want to isolate the tabs from other groups. We need cookiejars, storage etc
 }
 
-impl TabGroup {
-    pub fn new(config: TabGroupConfig) -> Self {
+impl Zone {
+    pub fn new(config: ZoneConfig) -> Self {
         let random_color = [
             rand::random::<u8>(),
             rand::random::<u8>(),
@@ -39,7 +40,7 @@ impl TabGroup {
         ];
 
         Self {
-            id: GroupId::new(),
+            id: ZoneId::new(),
             title: "Untitled Group".to_string(),
             icon: vec![],
             description: "".to_string(),
@@ -90,13 +91,27 @@ impl TabGroup {
     }
 
     pub fn tick_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
-        let mut result = BTreeMap::new();
+        let now = Instant::now();
+        let mut results = BTreeMap::new();
 
-        for (id, tab) in self.tabs.iter_mut() {
-            // Insert tab tick result into the map
-            result.insert(*id, tab.tick());
+        for (tab_id, tab) in self.tabs.iter_mut() {
+            let interval = match tab.mode {
+                TabMode::Active => Duration::from_secs(0),              // Always run
+                TabMode::BackgroundLive => Duration::from_millis(100),  // Run at 10Hz
+                TabMode::BackgroundIdle => Duration::from_secs(1),      // Run at 1Hz
+                TabMode::Suspended => continue,                              // Skip suspended tabs
+            };
+
+            // Check if enough time has passed since the last tick
+            if !interval.is_zero() && now.duration_since(tab.last_tick) < interval {
+                continue; // Skip if not time to tick
+            }
+            tab.last_tick = now;
+
+            let result = tab.tick();
+            results.insert(*tab_id, result);
         }
 
-        result
+        results
     }
 }

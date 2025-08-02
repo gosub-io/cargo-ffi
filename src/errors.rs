@@ -3,11 +3,11 @@ pub enum EngineError {
     #[error("Invalid tab ID")]
     InvalidTabId,
 
-    #[error("Invalid group ID")]
-    InvalidGroupId,
+    #[error("Invalid zone ID")]
+    InvalidZoneId,
 
-    #[error("Group limit exceeded")]
-    GroupLimitExceeded,
+    #[error("Zone limit exceeded")]
+    ZoneLimitExceeded,
 
     #[error("Network error: {0}")]
     NetworkError(String),
@@ -21,9 +21,9 @@ pub enum EngineError {
     #[error("Internal engine error")]
     Internal,
 
-    #[error("Group not found")]
-    GroupNotFound,
+    #[error("Zone not found")]
+    ZoneNotFound,
 
-    #[error("Tab limit in group exceeded")]
+    #[error("Tab limit in zone exceeded")]
     TabLimitExceeded,
 }

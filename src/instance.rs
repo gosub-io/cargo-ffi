@@ -34,9 +34,7 @@ impl EngineInstance {
             render_surface: None,
         }
     }
-}
 
-impl EngineInstance {
     pub fn tick(&mut self) -> TickResult {
         let mut result = TickResult::default();
 
