@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
-use crate::config::ZoneConfig;
-use crate::errors::EngineError;
+use crate::engine::errors::EngineError;
 use crate::tab::{Tab, TabId, TabMode};
 use crate::tick::TickResult;
 use crate::viewport::Viewport;
+use crate::ZoneConfig;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ZoneId(Uuid);
@@ -86,12 +86,6 @@ impl Zone {
     pub fn get_tab_mut(&mut self, tab_id: TabId) -> Option<&mut Tab> {
         self.tabs.get_mut(&tab_id)
     }
-
-    // pub fn tick(&mut self) {
-    //     for tab in self.tabs.values_mut() {
-    //         tab.tick();
-    //     }
-    // }
 
     pub fn tick_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
         let now = Instant::now();

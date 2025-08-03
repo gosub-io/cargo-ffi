@@ -3,8 +3,7 @@ use std::time::Instant;
 use gtk4::cairo;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
-use crate::instance::EngineInstance;
-use crate::event::{EngineCommand, EngineEvent};
+use crate::{EngineCommand, EngineEvent, EngineInstance};
 use crate::tick::TickResult;
 use crate::viewport::Viewport;
 

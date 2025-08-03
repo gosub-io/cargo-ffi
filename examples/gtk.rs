@@ -1,5 +1,4 @@
-use gosub_engine::event::{EngineCommand, EngineEvent};
-use gosub_engine::GosubEngine;
+use gosub_engine::{GosubEngine, EngineCommand, EngineEvent};
 use gtk4::glib::clone;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, Orientation};
