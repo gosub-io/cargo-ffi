@@ -17,17 +17,18 @@ impl ZoneId {
     }
 }
 
+// A zone is a "container" where all tabs share its session storage, local storage, cookie jars, bookmarks,
+// autocomplete etc. A zone can be marked as "shared", in which case other zones can also read (and sometimes
+// write) data back into the zone.
 pub struct Zone {
-    pub id: ZoneId,            // ID of the group
-    config: ZoneConfig,     // Configuration for the group (like max tabs allowed)
-    pub title: String,          // Title of the group (ie: Home, Work)
-    pub icon: Vec<u8>,          // Icon of the group (could be a base64 encoded image)
-    pub description: String,    // Description of the group
+    pub id: ZoneId,             // ID of the zone
+    config: ZoneConfig,         // Configuration for the zone (like max tabs allowed)
+    pub title: String,          // Title of the zone (ie: Home, Work)
+    pub icon: Vec<u8>,          // Icon of the zone (could be a base64 encoded image)
+    pub description: String,    // Description of the zone
     pub color: [u8; 4],         // Tab color (RGBA)
 
-    tabs: HashMap<TabId, Tab>,  // Tabs in the group, indexed by TabId
-
-    // @TODO: We probably want to isolate the tabs from other groups. We need cookiejars, storage etc
+    tabs: HashMap<TabId, Tab>,  // Tabs in the zone
 }
 
 impl Zone {
@@ -41,7 +42,7 @@ impl Zone {
 
         Self {
             id: ZoneId::new(),
-            title: "Untitled Group".to_string(),
+            title: "Untitled Zone".to_string(),
             icon: vec![],
             description: "".to_string(),
             color: random_color,
@@ -66,6 +67,7 @@ impl Zone {
         self.color = color;
     }
 
+    // Open a new tab into the zone
     pub fn open_tab(&mut self, runtime: Arc<Runtime>) -> Result<TabId, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
@@ -84,11 +86,11 @@ impl Zone {
         self.tabs.get_mut(&tab_id)
     }
 
-    pub fn tick(&mut self) {
-        for tab in self.tabs.values_mut() {
-            tab.tick();
-        }
-    }
+    // pub fn tick(&mut self) {
+    //     for tab in self.tabs.values_mut() {
+    //         tab.tick();
+    //     }
+    // }
 
     pub fn tick_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
         let now = Instant::now();

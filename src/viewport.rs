@@ -1,3 +1,4 @@
+// Simple width/height viewport. Used for rendering
 #[derive(Debug, Clone)]
 pub struct Viewport {
     pub width: u32,

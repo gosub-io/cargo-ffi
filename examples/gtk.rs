@@ -1,7 +1,5 @@
-use gosub_engine::config::EngineConfig;
-use gosub_engine::event::EngineEvent;
+use gosub_engine::event::EngineCommand;
 use gosub_engine::GosubEngine;
-use gosub_engine::viewport::Viewport;
 use gtk4::glib::clone;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, Orientation};
@@ -16,17 +14,10 @@ fn main() {
 
     app.connect_activate(|app| {
         // Engine setup
-        let config = EngineConfig {
-            viewport: Viewport::new(800, 600),
-            user_agent: "GosubEngine/1.0".to_string(),
-            max_zones: 4,
-            zone_config: gosub_engine::config::ZoneConfig { max_tabs: 10 },
-        };
-
-        let engine = Rc::new(RefCell::new(GosubEngine::new(config)));
+        let engine = Rc::new(RefCell::new(GosubEngine::new(None)));
 
         // Create a zone and N tabs
-        let zone_id = engine.borrow_mut().create_zone().expect("zone creation failed");
+        let zone_id = engine.borrow_mut().create_zone(None).expect("zone creation failed");
         let mut tab_ids = Vec::new();
         for _ in 0..3 {
             let tab_id = engine.borrow_mut().open_tab(zone_id).expect("open_tab failed");
@@ -101,9 +92,9 @@ fn main() {
         let draw_entry = drawing_area.clone();
         address_entry.connect_activate(clone!(@strong eng_entry => move |entry| {
             let url = entry.text().to_string();
-            eng_entry
+            _ = eng_entry
                 .borrow_mut()
-                .handle_event(*vis_entry.borrow(), EngineEvent::LoadUrl(url));
+                .execute(*vis_entry.borrow(), EngineCommand::LoadUrl(url));
             draw_entry.queue_draw();
         }));
 

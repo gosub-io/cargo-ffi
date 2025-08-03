@@ -6,20 +6,24 @@ use tokio::task::JoinHandle;
 use crate::net::{fetch, Response};
 use crate::tick::{DirtyFlags, TickResult};
 
+// An engine instance is a single instance of the engine that deals with a specific tab. Each tab
+// has one engine instance. These instances though, can use shared processes or threads, but not
+// from other instances, but from the main engine.
 pub struct EngineInstance {
-    pub dirty: DirtyFlags,              // Is there anything that needs to be redrawn?
+    pub dirty: DirtyFlags,              // Is there anything that needs to be rendered or redrawn?
     pub current_url: Option<String>,    // Current URL being processed
-    pub raw_html: String,
+    pub raw_html: String,               // This should become the DOM document, but maybe we can leave the raw HTML here as well
+    pub failed: bool,                   // True when the tab has failed loading (mostly net issues)
 
     runtime: Arc<Runtime>,              // Tokio runtime for async operations
-    loading_task: Option<JoinHandle<Result<Response, reqwest::Error>>>,
+    loading_task: Option<JoinHandle<Result<Response, reqwest::Error>>>,     // Handle for loading the task (async)
 
-    pub failed: bool,
-
-    pub render_surface: Option<cairo::ImageSurface>,
+    pub render_surface: Option<cairo::ImageSurface>,    // Render surface onto which the tab will render things
 }
 
 impl EngineInstance {
+    // Create a new runtime instance. Note that we pass the runtime to the engine instance so all instances
+    // uses the same runtime.
     pub(crate) fn new(runtime: Arc<Runtime>) -> EngineInstance {
         Self {
             dirty: DirtyFlags::default(),
@@ -35,16 +39,20 @@ impl EngineInstance {
         }
     }
 
+    // Process a "tick". Basically forwards the tab based on its current state.
     pub fn tick(&mut self) -> TickResult {
         let mut result = TickResult::default();
 
+        // Check if we are currently loading something (which is async)
         if let Some(handle) = &mut self.loading_task {
             use futures::FutureExt;
 
+            // If the loading has completed, we can process the result
             if let Some(join_result) = handle.now_or_never() {
                 self.loading_task = None;
 
                 match join_result {
+                    // All is ok, set the current URL and raw HTML and tell the result we needed to redraw
                     Ok(Ok(response)) => {
                         self.current_url = Some(response.url);
                         self.raw_html = String::from_utf8_lossy(&response.body).to_string();
@@ -53,6 +61,7 @@ impl EngineInstance {
                         println!("Loaded URL: {}", self.current_url.clone().unwrap_or("".to_string()));
                     }
                     Ok(Err(e)) => {
+                        // Error while loading the page.
                         eprintln!("Error loading URL: {}", e);
                         self.raw_html = "<h1>Failed to load page</h1>".to_string();
                         result.needs_redraw = true;
@@ -64,6 +73,7 @@ impl EngineInstance {
             }
         }
 
+        // @TODO: I don't think this is used anymore
         if self.dirty.viewport {
             result.needs_redraw = true;
         }
@@ -71,6 +81,7 @@ impl EngineInstance {
         result
     }
 
+    // Starts a task that will load the actual url
     pub fn start_loading(&mut self, url: String) {
         let handle = self.runtime.spawn(async move {
             fetch(&url).await
@@ -79,14 +90,17 @@ impl EngineInstance {
         self.failed = false;
     }
 
+    // Returns true when the loading of the url has been completed
     pub fn loading_complete(&self) -> bool {
         self.loading_task.is_none()
     }
 
+    // Returns true when the loading failed
     pub fn failed(&self) -> bool {
         self.failed
     }
 
+    // Polls the loading to see if it is still running or not.
     pub fn poll_loading(&mut self) -> Option<Result<String, String>> {
         use futures::FutureExt;
 
@@ -108,6 +122,7 @@ impl EngineInstance {
         self.raw_html = html;
     }
 
+    // Start the process of rendering. This will be changed later and will trigger the render pipeline. Not sure yet how
     pub fn start_rendering(&mut self) {
         let surface = ImageSurface::create(cairo::Format::ARgb32, 800, 600).unwrap();
         let cr = cairo::Context::new(&surface).unwrap();
@@ -126,14 +141,17 @@ impl EngineInstance {
         self.render_surface = Some(surface);
     }
 
+    // Returns true when we hav a rendered surface
     pub fn rendering_complete(&self) -> bool {
         self.render_surface.is_some()
     }
 
+    // Returns the actual surface
     pub fn surface(&self) -> Option<&ImageSurface> {
         self.render_surface.as_ref()
     }
 
+    // Renders an error onto the surface
     pub fn render_error(&mut self, msg: &str) {
         let surface = ImageSurface::create(cairo::Format::ARgb32, 800, 600).unwrap();
         let cr = cairo::Context::new(&surface).unwrap();
