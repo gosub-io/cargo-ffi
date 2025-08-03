@@ -1,4 +1,4 @@
-use gosub_engine::event::EngineCommand;
+use gosub_engine::event::{EngineCommand, EngineEvent};
 use gosub_engine::GosubEngine;
 use gtk4::glib::clone;
 use gtk4::prelude::*;
@@ -6,6 +6,7 @@ use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, E
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
+use gosub_engine::viewport::Viewport;
 
 fn main() {
     let app = Application::builder()
@@ -16,11 +17,13 @@ fn main() {
         // Engine setup
         let engine = Rc::new(RefCell::new(GosubEngine::new(None)));
 
+        let viewport = Viewport::new(800, 600);
+
         // Create a zone and N tabs
         let zone_id = engine.borrow_mut().create_zone(None).expect("zone creation failed");
         let mut tab_ids = Vec::new();
         for _ in 0..3 {
-            let tab_id = engine.borrow_mut().open_tab(zone_id).expect("open_tab failed");
+            let tab_id = engine.borrow_mut().open_tab(zone_id, &viewport).expect("open_tab failed");
             tab_ids.push(tab_id);
         }
         let tab_ids = Rc::new(tab_ids);
@@ -65,11 +68,12 @@ fn main() {
                 // Update visible tab
                 *vis_tab.borrow_mut() = tid;
                 // Immediate render if needed
-                if let Some(res) = eng_mut.tick().get(&tid) {
-                    if res.needs_redraw {
+                if let Some(_res) = eng_mut.tick().get(&tid) {
+                    println!("Ticked a new tab and redrawing it");
+                    // if res.needs_redraw {
                         // eng_mut.render_tab(tid);
                         drawing_area_ref.queue_draw();
-                    }
+                    // }
                 }
             }));
             tab_bar.append(&button);
@@ -85,6 +89,13 @@ fn main() {
                 cr.paint().unwrap();
             }
         });
+
+        let eng_resize = engine.clone();
+        let vis_resize = current_visible_tab.clone();
+        drawing_area.connect_resize(clone!(@strong eng_resize, @strong vis_resize => move |_area, width, height| {
+            let mut eng = eng_resize.borrow_mut();
+            let _ = eng.handle_event(*vis_resize.borrow(), EngineEvent::Resize{width: width as u32, height: height as u32});
+        }));
 
         // Address entry activation
         let eng_entry = engine.clone();

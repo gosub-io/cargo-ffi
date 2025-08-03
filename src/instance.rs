@@ -5,6 +5,7 @@ use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use crate::net::{fetch, Response};
 use crate::tick::{DirtyFlags, TickResult};
+use crate::viewport::Viewport;
 
 // An engine instance is a single instance of the engine that deals with a specific tab. Each tab
 // has one engine instance. These instances though, can use shared processes or threads, but not
@@ -123,8 +124,8 @@ impl EngineInstance {
     }
 
     // Start the process of rendering. This will be changed later and will trigger the render pipeline. Not sure yet how
-    pub fn start_rendering(&mut self) {
-        let surface = ImageSurface::create(cairo::Format::ARgb32, 800, 600).unwrap();
+    pub fn start_rendering(&mut self, viewport: Viewport) {
+        let surface = ImageSurface::create(cairo::Format::ARgb32, viewport.width as i32, viewport.height as i32).unwrap();
         let cr = cairo::Context::new(&surface).unwrap();
         cr.set_source_rgb(0.0, 0.0, 0.1);
         cr.paint().unwrap();
@@ -152,8 +153,8 @@ impl EngineInstance {
     }
 
     // Renders an error onto the surface
-    pub fn render_error(&mut self, msg: &str) {
-        let surface = ImageSurface::create(cairo::Format::ARgb32, 800, 600).unwrap();
+    pub fn render_error(&mut self, msg: &str, viewport: Viewport) {
+        let surface = ImageSurface::create(cairo::Format::ARgb32, viewport.width as i32, viewport.height as i32).unwrap();
         let cr = cairo::Context::new(&surface).unwrap();
         cr.set_source_rgb(0.2, 0.0, 0.0);
         cr.paint().unwrap();
@@ -166,6 +167,4 @@ impl EngineInstance {
         cr.show_text(msg).ok();
         self.render_surface = Some(surface);
     }
-
-
 }

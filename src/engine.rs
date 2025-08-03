@@ -9,6 +9,7 @@ use crate::event::{EngineCommand, EngineEvent};
 use crate::zone::{ZoneId, Zone};
 use crate::tab::{Tab, TabId};
 use crate::tick::TickResult;
+use crate::viewport::Viewport;
 
 pub struct GosubEngine {
     config: EngineConfig,               // Configuration for the whole engine
@@ -65,9 +66,9 @@ impl GosubEngine {
     }
 
     // Opens a new tab in the specified zone, returning its ID
-    pub fn open_tab(&mut self, zone_id: ZoneId) -> Result<TabId, EngineError> {
+    pub fn open_tab(&mut self, zone_id: ZoneId, viewport: &Viewport) -> Result<TabId, EngineError> {
         let zone = self.zones.get_mut(&zone_id).ok_or(ZoneNotFound)?;
-        zone.open_tab(self.runtime.clone())
+        zone.open_tab(self.runtime.clone(), viewport)
     }
 
     // Do an engine tick, processing all zones and tabs

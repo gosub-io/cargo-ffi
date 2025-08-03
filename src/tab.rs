@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::instance::EngineInstance;
 use crate::event::{EngineCommand, EngineEvent};
 use crate::tick::TickResult;
+use crate::viewport::Viewport;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(Uuid);
@@ -26,6 +27,8 @@ pub enum TabState {
     Loading,
     /// Tab has loaded the URL
     Loaded,
+    /// Render for a new viewport
+    PendingRendering(Viewport),
     /// Tab is currently rendering a new surface
     Rendering,
     /// New surface has been rendered
@@ -52,6 +55,8 @@ pub struct Tab {
     pub instance: EngineInstance,   // Engine instance running for this tab
     pub state: TabState,            // State of the tab (idle, loading, loaded, etc.)
 
+    pub viewport: Viewport,         // Current (or wanted) viewport for rendering
+
     // Scheduling and lifecycle management
     pub mode: TabMode,              // Current tab mode (idle, live, background)
     pub last_tick: Instant,         // When was the last tick?
@@ -65,11 +70,12 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(runtime: Arc<Runtime>) -> Self {
+    pub fn new(runtime: Arc<Runtime>, viewport: &Viewport) -> Self {
         Self {
             id: TabId::new(),
             state: TabState::Idle,
             instance: EngineInstance::new(runtime),
+            viewport: viewport.clone(),
 
             favicon: vec![],                    // Placeholder for favicon data
             title: "New Tab".to_string(),       // Title of the new tab
@@ -81,6 +87,11 @@ impl Tab {
             mode: TabMode::Active,              // Default mode is active
             last_tick: Instant::now(),
         }
+    }
+
+    pub fn set_viewport(&mut self, viewport: Viewport) {
+        self.viewport = viewport;
+        self.state = TabState::PendingRendering(self.viewport.clone())
     }
 
     pub fn tick(&mut self) -> TickResult {
@@ -95,6 +106,7 @@ impl Tab {
             TabState::PendingLoad(url) => {
                 self.instance.start_loading(url.clone());
                 self.state = TabState::Loading;
+                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
                 self.is_loading = true;
                 self.current_url = url;
             }
@@ -105,12 +117,16 @@ impl Tab {
                     match done {
                         Ok(html) => {
                             self.state = TabState::Loaded;
+                            println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
                             self.instance.set_raw_html(html);
                             self.is_loading = false;
                             result.page_loaded = true;
                         }
                         Err(e) => {
                             self.state = TabState::Failed(e);
+                            println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
                             self.is_loading = false;
                             self.is_error = true;
                             result.needs_redraw = true;
@@ -122,26 +138,36 @@ impl Tab {
             // Start rendering after we finished loading
             TabState::Loaded => {
                 println!("Tabstate loaded, starting rendering");
-                self.instance.start_rendering();
+                self.state = TabState::PendingRendering(self.viewport.clone());
+            }
+
+            TabState::PendingRendering(viewport) => {
+                self.instance.start_rendering(viewport);
                 self.state = TabState::Rendering;
             }
 
             // Notify the outside world that we have something to paint, and we can go back to idle state.
             TabState::Rendered => {
                 self.state = TabState::Idle;
+                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
                 result.needs_redraw = true;
             }
 
             TabState::Failed(msg) => {
-                self.instance.render_error(&msg);
+                self.instance.render_error(&msg, self.viewport.clone());
                 self.state = TabState::Rendered;
+                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
                 result.needs_redraw = true;
             }
 
-            // Normally, rendering will take a while (async). Currently it doesn't so we move directly
-            // to Rendered state.
+            // Normally, rendering will take a while (async). Currently, it doesn't so we move directly
+            // to a Rendered state.
             TabState::Rendering => {
                 self.state = TabState::Rendered;
+                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
             }
         }
 
@@ -173,6 +199,7 @@ impl Tab {
             }
             EngineEvent::Resize { width, height } => {
                 println!("Resize event on tab {:?}: new size {}x{}", self.id, width, height);
+                self.set_viewport(Viewport::new(width, height))
             }
         }
     }
@@ -183,12 +210,16 @@ impl Tab {
                 println!("Loading URL '{}' in tab {:?}", url, self.id);
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
+                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
             }
             EngineCommand::Reload() => {
                 let url = self.current_url.clone();
                 println!("Reloading URL '{}' in tab {:?}", url, self.id);
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
+                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+
             }
         }
     }

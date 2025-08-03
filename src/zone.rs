@@ -7,6 +7,7 @@ use crate::config::ZoneConfig;
 use crate::errors::EngineError;
 use crate::tab::{Tab, TabId, TabMode};
 use crate::tick::TickResult;
+use crate::viewport::Viewport;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ZoneId(Uuid);
@@ -68,13 +69,13 @@ impl Zone {
     }
 
     // Open a new tab into the zone
-    pub fn open_tab(&mut self, runtime: Arc<Runtime>) -> Result<TabId, EngineError> {
+    pub fn open_tab(&mut self, runtime: Arc<Runtime>, viewport: &Viewport) -> Result<TabId, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
         let tab_id = TabId::new();
-        self.tabs.insert(tab_id, Tab::new(runtime));
+        self.tabs.insert(tab_id, Tab::new(runtime, viewport));
         Ok(tab_id)
     }
 
