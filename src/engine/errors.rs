@@ -24,6 +24,9 @@ pub enum EngineError {
     #[error("Zone not found")]
     ZoneNotFound,
 
+    #[error("Zone is already locked")]
+    ZoneLocked,
+
     #[error("Tab limit in zone exceeded")]
     TabLimitExceeded,
 }

@@ -6,20 +6,31 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 use gosub_engine::viewport::Viewport;
+use gosub_engine::zone::cookies::cookie_store::{CookieStore, JsonCookieStore, SqliteCookieStore};
 
 fn main() {
     let app = Application::builder()
         .application_id("io.gosub.engine")
         .build();
 
-    app.connect_activate(|app| {
+
+    let cookie_store = JsonCookieStore::new(".gosub-gtk-cookie-store.json".parse().unwrap());
+    let cookie_store = SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
+
+    app.connect_activate(move |app| {
         // Engine setup
         let engine = Rc::new(RefCell::new(GosubEngine::new(None)));
 
         let viewport = Viewport::new(800, 600);
 
-        // Create a zone and N tabs
+        // Create a zone and attach a cookie jar from the cookie store to it
         let zone_id = engine.borrow_mut().create_zone(None).expect("zone creation failed");
+        let zone_arc = engine.borrow_mut().get_zone_mut(zone_id).expect("get_zone_mut failed");
+        let mut zone = zone_arc.lock().expect("lock zone failed");
+
+        let cookie_jar = cookie_store.get_jar(zone_id).expect("get cookie jar failed");
+        zone.set_cookie_jar(cookie_jar);
+
         let mut tab_ids = Vec::new();
         for _ in 0..3 {
             let tab_id = engine.borrow_mut().open_tab(zone_id, &viewport).expect("open_tab failed");
@@ -55,7 +66,9 @@ fn main() {
                 let now = Instant::now();
                 // Demote all tabs, promote clicked
                 for &other in tab_ids_for_closure.iter() {
-                    if let Some(tab) = eng_mut.get_tab_mut(other) {
+                    if let Some(tab_arc) = eng_mut.get_tab(other) {
+                        let mut tab = tab_arc.lock().ok().unwrap();
+
                         if other == tid {
                             tab.mode = gosub_engine::tab::TabMode::Active;
                             tab.last_tick = now;
@@ -104,7 +117,7 @@ fn main() {
             let url = entry.text().to_string();
             _ = eng_entry
                 .borrow_mut()
-                .execute(*vis_entry.borrow(), EngineCommand::LoadUrl(url));
+                .execute_command(*vis_entry.borrow(), EngineCommand::LoadUrl(url));
             draw_entry.queue_draw();
         }));
 

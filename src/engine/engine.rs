@@ -1,16 +1,17 @@
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use gtk4::cairo;
 use tokio::runtime::Runtime;
 use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent, ZoneConfig};
 use crate::tab::{Tab, TabId};
 use crate::tick::TickResult;
 use crate::viewport::Viewport;
-use crate::zone::{Zone, ZoneId};
+use crate::zone::manager::ZoneManager;
+use crate::zone::zone::{ZoneId, Zone};
 
 pub struct GosubEngine {
-    config: EngineConfig,               // Configuration for the whole engine
-    zones: HashMap<ZoneId, Zone>,       // List of zones
+    _config: EngineConfig,               // Configuration for the whole engine
+    zone_manager: ZoneManager,          // Manages zones
     pub runtime: Arc<Runtime>,          // Tokio runtime for async operations
 }
 
@@ -25,36 +26,32 @@ impl GosubEngine {
                 .expect("Failed to create Tokio runtime")
         );
 
+        // I don't like that we have to clone the config but we need it in the "engine" and the zone manager as well.
+        let resolved_config = config.unwrap_or_else(EngineConfig::default);
+
         Self {
-            config: config.unwrap_or_else(EngineConfig::default),
-            zones: HashMap::new(),
+            _config: resolved_config.clone(),
+            zone_manager: ZoneManager::new(resolved_config),
             runtime,
         }
     }
 
-    // Creates a new zone, returning its ID or error
-    pub fn create_zone(&mut self, zone_config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
-        if self.zones.len() >= self.config.max_zones {
-            return Err(EngineError::ZoneLimitExceeded);
-        }
-
-        let zone = Zone::new(zone_config.unwrap_or(self.config.default_zone_config.clone()));
-        let id = zone.id;
-
-        self.zones.insert(zone.id, zone);
-
-        Ok(id)
+    pub fn create_zone(&mut self, config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
+        self.zone_manager.create_zone(config)
     }
 
     // Retrieves a reference to a zone by its ID
-    pub fn get_zone_mut(&mut self, zone_id: ZoneId) -> Option<&mut Zone> {
-        self.zones.get_mut(&zone_id)
+    pub fn get_zone_mut(&mut self, zone_id: ZoneId) -> Option<Arc<Mutex<Zone>>> {
+        self.zone_manager.get_zone_mut(&zone_id)
     }
 
     // Retrieves a reference to a tab regardless of its zone
-    pub fn get_tab_mut(&mut self, tab_id: TabId) -> Option<&mut Tab> {
-        for zone in self.zones.values_mut() {
-            if let Some(tab) = zone.get_tab_mut(tab_id) {
+    pub fn get_tab(&self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
+        for zone_id in self.zone_manager.iter() {
+            let zone = self.zone_manager.get_zone_mut(&zone_id)?;
+            let zone = zone.lock().ok()?;
+
+            if let Some(tab) = zone.get_tab(tab_id) {
                 return Some(tab);
             }
         }
@@ -64,7 +61,9 @@ impl GosubEngine {
 
     // Opens a new tab in the specified zone, returning its ID
     pub fn open_tab(&mut self, zone_id: ZoneId, viewport: &Viewport) -> Result<TabId, EngineError> {
-        let zone = self.zones.get_mut(&zone_id).ok_or(EngineError::ZoneNotFound)?;
+        let zone_arc = self.zone_manager.get_zone(zone_id).ok_or(EngineError::ZoneNotFound)?;
+        let mut zone = zone_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
+
         zone.open_tab(self.runtime.clone(), viewport)
     }
 
@@ -72,7 +71,15 @@ impl GosubEngine {
     pub fn tick(&mut self) -> BTreeMap<TabId, TickResult> {
         let mut results = BTreeMap::new();
 
-        for zone in self.zones.values_mut() {
+        for zone_id in self.zone_manager.iter() {
+            let Some(zone_arc) = self.zone_manager.get_zone(zone_id) else {
+                continue;
+            };
+
+            let Ok(mut zone) = zone_arc.lock() else {
+                continue;
+            };
+
             for (tab_id, result) in zone.tick_tabs() {
                 results.insert(tab_id, result);
             }
@@ -83,27 +90,27 @@ impl GosubEngine {
 
     // Handle an event for a specific tab
     pub fn handle_event(&mut self, tab_id: TabId, event: EngineEvent) -> Result<(), EngineError> {
-        let tab = self.get_tab_mut(tab_id).ok_or(EngineError::InvalidTabId)?;
+        let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
+        let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
 
         tab.handle_event(event);
         Ok(())
     }
 
     // Executes a command for a specific tab
-    pub fn execute(&mut self, tab_id: TabId, command: EngineCommand) -> Result<(), EngineError> {
-        let tab = self.get_tab_mut(tab_id).ok_or(EngineError::InvalidTabId)?;
+    pub fn execute_command(&mut self, tab_id: TabId, command: EngineCommand) -> Result<(), EngineError> {
+        let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
+        let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
 
         tab.execute_command(command);
         Ok(())
     }
 
     // Retrieves the rendered surface for a specific tab
-    pub fn get_surface(&self, tab_id: TabId) -> Option<&cairo::ImageSurface> {
-        for zone in self.zones.values() {
-            if let Some(tab) = zone.get_tab(tab_id) {
-                return tab.get_surface();
-            }
-        }
-        None
+    pub fn get_surface(&self, tab_id: TabId) -> Option<cairo::ImageSurface> {
+        let tab_arc = self.get_tab(tab_id)?;
+        let tab = tab_arc.lock().ok()?;
+
+        tab.get_surface().cloned()
     }
 }

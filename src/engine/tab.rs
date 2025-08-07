@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::{EngineCommand, EngineEvent, EngineInstance};
 use crate::tick::TickResult;
 use crate::viewport::Viewport;
+use crate::zone::zone::ZoneId;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(Uuid);
@@ -51,6 +52,7 @@ pub enum TabMode {
 
 pub struct Tab {
     pub id: TabId,                  // ID of the tab
+    pub zone_id: ZoneId,            // ID of the zone in which this tab resides
     pub instance: EngineInstance,   // Engine instance running for this tab
     pub state: TabState,            // State of the tab (idle, loading, loaded, etc.)
 
@@ -69,9 +71,10 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(runtime: Arc<Runtime>, viewport: &Viewport) -> Self {
+    pub fn new(zone_id: ZoneId, runtime: Arc<Runtime>, viewport: &Viewport) -> Self {
         Self {
             id: TabId::new(),
+            zone_id,
             state: TabState::Idle,
             instance: EngineInstance::new(runtime),
             viewport: viewport.clone(),
