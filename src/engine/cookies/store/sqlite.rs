@@ -6,19 +6,24 @@ use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use r2d2_sqlite::rusqlite::params;
 
-use crate::zone::cookies::{CookieJar, CookieEntry};
-use crate::zone::cookies::cookie_jar::DefaultCookieJar;
-use crate::zone::cookies::cookie_store::CookieStore;
-use crate::zone::cookies::persistent_cookie_jar::PersistentCookieJar;
-use crate::zone::zone::ZoneId;
+use crate::engine::cookies::{Cookie, CookieJarHandle, CookieStoreHandle};
+use crate::engine::cookies::cookie_jar::DefaultCookieJar;
+use crate::engine::cookies::store::CookieStore;
+use crate::engine::cookies::persistent_cookie_jar::PersistentCookieJar;
+use crate::engine::zone::ZoneId;
 
+/// A SQLite-based cookie store that persists cookies across sessions.
 pub struct SqliteCookieStore {
+    /// Connection pool for SQLite database (so it can run multithreaded)
     pool: Pool<SqliteConnectionManager>,
-    jars: RwLock<HashMap<ZoneId, Arc<RwLock<dyn CookieJar + Send + Sync>>>>,
-    store_self: RwLock<Option<Arc<dyn CookieStore + Send + Sync>>>,
+    /// Cookie jars per zone
+    jars: RwLock<HashMap<ZoneId, CookieJarHandle>>,
+    /// Handle to itself to send to the persistent cookie jars
+    store_self: RwLock<Option<CookieStoreHandle>>,
 }
 
 impl SqliteCookieStore {
+    #[allow(unused)]
     pub fn new(path: PathBuf) -> Arc<Self> {
         let manager = SqliteConnectionManager::file(path);
         let pool = Pool::new(manager).expect("Failed to create SQLite pool");
@@ -50,7 +55,7 @@ impl SqliteCookieStore {
 
         {
             let mut self_ref = store.store_self.write().unwrap();
-            *self_ref = Some(store.clone() as Arc<dyn CookieStore + Send + Sync>);
+            *self_ref = Some(store.clone() as CookieStoreHandle);
         }
 
         store
@@ -70,7 +75,7 @@ impl SqliteCookieStore {
 
         let rows = stmt.query_map([zone_id.to_string()], |row| {
             let origin: String = row.get(0)?;
-            let entry = CookieEntry {
+            let entry = Cookie {
                 name: row.get(1)?,
                 value: row.get(2)?,
                 path: row.get(3)?,
@@ -135,7 +140,7 @@ impl SqliteCookieStore {
 }
 
 impl CookieStore for SqliteCookieStore {
-    fn get_jar(&self, zone_id: ZoneId) -> Option<Arc<RwLock<dyn CookieJar + Send + Sync>>> {
+    fn get_jar(&self, zone_id: ZoneId) -> Option<CookieJarHandle> {
         {
             let jars = self.jars.read().unwrap();
             if let Some(jar) = jars.get(&zone_id) {
@@ -144,7 +149,7 @@ impl CookieStore for SqliteCookieStore {
         }
 
         let jar = self.load_zone(zone_id);
-        let arc_jar: Arc<RwLock<dyn CookieJar + Send + Sync>> = Arc::new(RwLock::new(jar));
+        let arc_jar: CookieJarHandle = Arc::new(RwLock::new(jar));
 
         let store_ref = self.store_self.read().unwrap();
         let store = store_ref.as_ref().expect("store_self not initialized").clone();
@@ -160,18 +165,8 @@ impl CookieStore for SqliteCookieStore {
         Some(persistent)
     }
 
-    fn persist_zone(&self, zone_id: ZoneId) {
-        let jars = self.jars.read().unwrap();
-        let Some(jar) = jars.get(&zone_id) else { return };
-
-        let jar = jar.read().unwrap();
-
-        let Some(inner) = jar.as_any().downcast_ref::<PersistentCookieJar>() else { return };
-        let jar_data = inner.inner.read().unwrap();
-
-        let Some(default) = jar_data.as_any().downcast_ref::<DefaultCookieJar>() else { return };
-
-        self.save_zone(zone_id, default);
+    fn persist_zone_from_snapshot(&self, zone_id: ZoneId, snapshot: &DefaultCookieJar) {
+        self.save_zone(zone_id, snapshot);
     }
 
     fn remove_zone(&self, zone_id: ZoneId) {

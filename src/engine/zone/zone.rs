@@ -1,27 +1,41 @@
+// src/engine/zone.rs
+//! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
+//!
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
-use crate::tab::{Tab, TabId, TabMode};
+use crate::engine::tab::{Tab, TabId, TabMode};
 use crate::viewport::Viewport;
 use crate::{EngineError, ZoneConfig};
-use crate::tick::TickResult;
+use crate::engine::tick::TickResult;
 use uuid::Uuid;
-use crate::zone::cookies::CookieJar;
-use crate::zone::cookies::cookie_jar::DefaultCookieJar;
-use crate::zone::password_store::PasswordStore;
-use crate::zone::storage::Storage;
+use crate::engine::cookies::CookieJarHandle;
+use crate::engine::cookies::DefaultCookieJar;
+use crate::engine::zone::password_store::PasswordStore;
+use crate::engine::zone::storage::Storage;
 
-pub type CookieJarHandle = Arc<RwLock<dyn CookieJar + Send + Sync>>;
-
+/// A unique identifier for a zone, represented as a UUID.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ZoneId(Uuid);
 
 impl ZoneId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl From<Uuid> for ZoneId {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
+
+impl From<&str> for ZoneId {
+    fn from(s: &str) -> Self {
+        Self(Uuid::parse_str(s).unwrap_or_else(|_| Uuid::new_v4()))
     }
 }
 
@@ -59,7 +73,8 @@ pub struct SharedFlags {
 }
 
 impl Zone {
-    pub fn new(config: ZoneConfig) -> Self {
+    // Creates a new zone with a specific zone ID
+    pub fn new_with_id(zone_id: ZoneId, config: ZoneConfig) -> Self {
         let random_color = [
             rand::random::<u8>(),
             rand::random::<u8>(),
@@ -68,7 +83,7 @@ impl Zone {
         ];
 
         Self {
-            id: ZoneId::new(),
+            id: zone_id,
             title: "Untitled Zone".to_string(),
             icon: vec![],
             description: "".to_string(),
@@ -89,6 +104,12 @@ impl Zone {
         }
     }
 
+    // Creates a new zone with a random ID and the provided configuration
+    pub fn new(config: ZoneConfig) -> Self {
+        let zone_id = ZoneId::new();
+        Zone::new_with_id(zone_id, config)
+    }
+
     pub fn set_title(&mut self, title: &str) {
         self.title = title.to_string();
     }
@@ -105,7 +126,7 @@ impl Zone {
         self.color = color;
     }
 
-    pub fn set_cookie_jar(&mut self, cookie_jar: Arc<RwLock<dyn CookieJar + Send + Sync>>) {
+    pub fn set_cookie_jar(&mut self, cookie_jar: CookieJarHandle) {
         self.cookie_jar = cookie_jar;
     }
 
@@ -116,7 +137,7 @@ impl Zone {
         }
 
         let tab_id = TabId::new();
-        self.tabs.insert(tab_id, Arc::new(Mutex::new(Tab::new(self.id, runtime, viewport))));
+        self.tabs.insert(tab_id, Arc::new(Mutex::new(Tab::new(self.id, runtime, viewport, Some(self.cookie_jar.clone())))));
         Ok(tab_id)
     }
 
@@ -128,7 +149,8 @@ impl Zone {
         self.tabs.get_mut(&tab_id).cloned()
     }
 
-    pub fn tick_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
+    // Ticks all tabs in the zone, returning a map of TabId to TickResult
+    pub fn tick_all_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
         let now = Instant::now();
         let mut results = BTreeMap::new();
 

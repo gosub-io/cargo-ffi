@@ -1,11 +1,18 @@
+//! Engine API surface.
+//!
+//! Most users should start with [`GosubEngine`].
+
+#[allow(unused)]
+
 mod config;
 mod instance;
 mod event;
 mod errors;
-pub mod tick;
+mod tick;
 pub mod zone;
 pub mod tab;
-pub mod engine;
+mod engine;
+pub mod cookies;
 
 pub use config::{EngineConfig, ZoneConfig};
 pub use event::{EngineCommand, EngineEvent};

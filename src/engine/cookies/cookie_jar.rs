@@ -1,15 +1,41 @@
 use std::any::Any;
 use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use crate::zone::cookies::{CookieEntry, CookieJar};
+use crate::engine::cookies::Cookie;
 use http::HeaderMap;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-// Default cookie jar which holds cookies for a single zone. It is in-memory only and does not do
-// any persistance.
+/// A cookie jar keeps the cookies for one single zone.
+pub trait CookieJar: Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Store the cookies found int he headers given into the jar
+    fn store_response_cookies(&mut self, url: &Url, headers: &HeaderMap);
+
+    /// Returns the cookies to be added to a request based on a specific URL
+    fn get_request_cookies(&self, url: &Url) -> Option<String>;
+
+    /// Clear the cookie jar
+    fn clear(&mut self);
+
+    /// Retrieve all cookies from the jar
+    fn get_all_cookies(&self) -> Vec<(Url, String)>;
+
+    /// Remove specific cookie name for a URL
+    fn remove_cookie(&mut self, url: &Url, cookie_name: &str);
+
+    /// Remove all cookies for a url
+    fn remove_cookies_for_url(&mut self, url: &Url);
+}
+
+
+/// Default cookie jar which holds cookies for a single zone. It is in-memory only and does not do
+/// any persistance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultCookieJar {
-    pub entries: HashMap<String, Vec<CookieEntry>>,
+    /// Simple hashmap of cookies (per domain)
+    pub entries: HashMap<String, Vec<Cookie>>,
 }
 
 impl DefaultCookieJar {
@@ -36,7 +62,7 @@ impl CookieJar for DefaultCookieJar {
         for header in headers.get_all("set-cookie") {
             if let Ok(header_str) = header.to_str() {
                 if let Some((name, rest)) = header_str.split_once('=') {
-                    let mut cookie = CookieEntry {
+                    let mut cookie = Cookie {
                         name: name.trim().to_string(),
                         value: String::new(),
                         path: None,
@@ -59,10 +85,31 @@ impl CookieJar for DefaultCookieJar {
                                 "path" => cookie.path = Some(v.to_string()),
                                 "domain" => cookie.domain = Some(v.trim_start_matches('.').to_string()),
                                 "expires" => cookie.expires = Some(v.to_string()),
+                                "samesite" => {
+                                    // normalize to "Lax" | "Strict" | "None"
+                                    let val = v.trim();
+                                    if val.eq_ignore_ascii_case("lax") {
+                                        cookie.same_site = Some("Lax".to_string());
+                                    } else if val.eq_ignore_ascii_case("strict") {
+                                        cookie.same_site = Some("Strict".to_string());
+                                    } else if val.eq_ignore_ascii_case("none") {
+                                        cookie.same_site = Some("None".to_string());
+                                        // Optional hardening: SameSite=None SHOULD be Secure.
+                                        // If you want to enforce it, uncomment the next line.
+                                        // if !cookie.secure { cookie.secure = true; }
+                                    } else {
+                                        // leave as-is if unknown, or set Some(val.to_string())
+                                        cookie.same_site = Some(val.to_string());
+                                    }
+                                }
                                 _ => {}
                             }
-                        } else if part.eq_ignore_ascii_case("secure") {
-                            cookie.secure = true;
+                        } else {
+                            if part.eq_ignore_ascii_case("secure") {
+                                cookie.secure = true;
+                            } else if part.eq_ignore_ascii_case("httponly") {
+                                cookie.http_only = true;
+                            }
                         }
                     }
 

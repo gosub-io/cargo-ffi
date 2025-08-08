@@ -5,8 +5,11 @@ use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, E
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
-use gosub_engine::viewport::Viewport;
-use gosub_engine::zone::cookies::cookie_store::{CookieStore, JsonCookieStore, SqliteCookieStore};
+use gosub_engine::Viewport;
+use gosub_engine::cookies::{CookieStore, SqliteCookieStore};
+use gosub_engine::ZoneId;
+
+const DEFAULT_MAIN_ZONE : &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
 
 fn main() {
     let app = Application::builder()
@@ -14,7 +17,7 @@ fn main() {
         .build();
 
 
-    let cookie_store = JsonCookieStore::new(".gosub-gtk-cookie-store.json".parse().unwrap());
+    // let cookie_store = JsonCookieStore::new(".gosub-gtk-cookie-store.json".parse().unwrap());
     let cookie_store = SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
 
     app.connect_activate(move |app| {
@@ -24,12 +27,14 @@ fn main() {
         let viewport = Viewport::new(800, 600);
 
         // Create a zone and attach a cookie jar from the cookie store to it
-        let zone_id = engine.borrow_mut().create_zone(None).expect("zone creation failed");
+        let zone_id = engine.borrow_mut().create_zone(Some(ZoneId::from(DEFAULT_MAIN_ZONE)), None).expect("zone creation failed");
         let zone_arc = engine.borrow_mut().get_zone_mut(zone_id).expect("get_zone_mut failed");
         let mut zone = zone_arc.lock().expect("lock zone failed");
 
         let cookie_jar = cookie_store.get_jar(zone_id).expect("get cookie jar failed");
         zone.set_cookie_jar(cookie_jar);
+        // Make sure we drop the zone lock before we continue
+        drop(zone);
 
         let mut tab_ids = Vec::new();
         for _ in 0..3 {

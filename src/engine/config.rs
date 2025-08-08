@@ -1,17 +1,21 @@
 const DEFAULT_USER_AGENT: &str = "Gosub/1.0 (X11; Linux x86_64) Gecko/20250802 GosubBrowser/1.0";
 
-/// Zone configuration
+/// Zone configuration that defines the properties of a zone
 #[derive(Debug, Clone)]
 pub struct ZoneConfig {
-    pub max_tabs: usize,            // How many tabs might be opened in the zone
+    /// How many tabs might be opened in the zone
+    pub max_tabs: usize,
 }
 
 /// Main engine configuration. Also contains default configuration for other components like zones.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    pub user_agent: String,                 // User agent string for HTTP requests
-    pub max_zones: usize,                   // Maximum number of zones that can be created
-    pub default_zone_config: ZoneConfig,    // Default zone config if none is supplied
+    /// User agent string for HTTP requests
+    pub user_agent: String,
+    /// Maximum number of zones that can be created
+    pub max_zones: usize,
+    /// Default zone config if none is supplied
+    pub default_zone_config: ZoneConfig,
 }
 
 impl Default for EngineConfig {

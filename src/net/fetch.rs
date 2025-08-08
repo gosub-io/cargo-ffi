@@ -1,25 +1,23 @@
 use crate::net::Response;
 
-// Loads an URL
+// Loads an URL and returns the response in a result if any
 pub async fn fetch(url: &str) -> Result<Response, reqwest::Error> {
     let client = reqwest::Client::new();
     let res = client.get(url).send().await?;
+
+    // Fetch results
+    let final_url = res.url().clone();
     let status = res.status().as_u16();
-    let final_url = res.url().to_string();
+    let status_text = res.status().canonical_reason().unwrap_or("Unknown").to_string();
+    let headers = res.headers().clone();
 
-    // Collect all the headers we've received
-    let headers = res
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-
-    // Note: does not deal with streaming
+    // Fetch body. We don't do streaming yet
     let body = res.bytes().await?.to_vec();
 
     Ok(Response {
         url: final_url,
         status,
+        status_text,
         headers,
         body,
     })

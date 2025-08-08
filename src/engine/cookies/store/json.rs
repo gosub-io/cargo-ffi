@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
-use crate::zone::cookies::CookieJar;
-use crate::zone::cookies::cookie_jar::DefaultCookieJar;
-use crate::zone::cookies::cookie_store::CookieStore;
-use crate::zone::cookies::persistent_cookie_jar::PersistentCookieJar;
-use crate::zone::zone::ZoneId;
+use crate::engine::cookies::{CookieJarHandle, CookieStoreHandle};
+use crate::engine::cookies::cookie_jar::DefaultCookieJar;
+use crate::engine::cookies::store::CookieStore;
+use crate::engine::cookies::persistent_cookie_jar::PersistentCookieJar;
+use crate::engine::zone::ZoneId;
 
 /// Serializable structure for all zones' cookie jars
 #[derive(Debug, Serialize, Deserialize)]
@@ -17,13 +17,18 @@ struct CookieStoreFile {
     zones: HashMap<ZoneId, DefaultCookieJar>,
 }
 
+/// A JSON-based cookie store that persists cookies across sessions.
 pub struct JsonCookieStore {
+    /// Path to the JSON file where cookies are stored.
     path: PathBuf,
-    jars: RwLock<HashMap<ZoneId, Arc<RwLock<dyn CookieJar + Send + Sync>>>>,
-    store_self: RwLock<Option<Arc<dyn CookieStore + Send + Sync>>>,
+    /// Actual list of cookie jars per zone
+    jars: RwLock<HashMap<ZoneId, CookieJarHandle>>,
+    /// Link to the actual cookie store to send to the persistent cookie jars
+    store_self: RwLock<Option<CookieStoreHandle>>,
 }
 
 impl JsonCookieStore {
+    #[allow(unused)]
     pub fn new(path: PathBuf) -> Arc<Self> {
         // Try to create empty file if it doesn't exist
         if !path.exists() {
@@ -38,7 +43,7 @@ impl JsonCookieStore {
 
         {
             let mut self_ref = store.store_self.write().unwrap();
-            *self_ref = Some(store.clone() as Arc<dyn CookieStore + Send + Sync>);
+            *self_ref = Some(store.clone() as CookieStoreHandle);
         }
 
         store
@@ -60,7 +65,7 @@ impl JsonCookieStore {
 }
 
 impl CookieStore for JsonCookieStore {
-    fn get_jar(&self, zone_id: ZoneId) -> Option<Arc<RwLock<dyn CookieJar + Send + Sync>>> {
+    fn get_jar(&self, zone_id: ZoneId) -> Option<CookieJarHandle> {
         {
             // Fast path: already in memory
             let jars = self.jars.read().unwrap();
@@ -72,7 +77,7 @@ impl CookieStore for JsonCookieStore {
         // Load from disk
         let mut file = self.load_file();
         let jar = file.zones.remove(&zone_id).unwrap_or_else(DefaultCookieJar::new);
-        let arc_jar: Arc<RwLock<dyn CookieJar + Send + Sync>> = Arc::new(RwLock::new(jar));
+        let arc_jar: CookieJarHandle = Arc::new(RwLock::new(jar));
 
         let store_ref = self.store_self.read().unwrap();
         let store = store_ref.as_ref().expect("store_self not initialized").clone();
@@ -89,19 +94,9 @@ impl CookieStore for JsonCookieStore {
         Some(persistent)
     }
 
-    fn persist_zone(&self, zone_id: ZoneId) {
-        let jars = self.jars.read().unwrap();
-        let Some(jar) = jars.get(&zone_id) else { return };
-
-        let jar = jar.read().unwrap();
-
-        let Some(inner) = jar.as_any().downcast_ref::<PersistentCookieJar>() else { return };
-        let jar_data = inner.inner.read().unwrap();
-
-        let Some(default) = jar_data.as_any().downcast_ref::<DefaultCookieJar>() else { return };
-
+    fn persist_zone_from_snapshot(&self, zone_id: ZoneId, snapshot: &DefaultCookieJar) {
         let mut store_file = self.load_file();
-        store_file.zones.insert(zone_id, default.clone());
+        store_file.zones.insert(zone_id, snapshot.clone());
         self.save_file(&store_file);
     }
 

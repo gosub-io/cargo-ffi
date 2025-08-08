@@ -1,7 +1,10 @@
+// src/engine/zone.rs
+//! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
+//!
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use crate::{EngineConfig, EngineError, ZoneConfig};
-use crate::zone::zone::{Zone, ZoneId};
+use crate::engine::zone::{Zone, ZoneId};
 
 pub struct ZoneManager {
     config: EngineConfig,
@@ -18,7 +21,7 @@ impl ZoneManager {
 
 
     /// Create a new zone with the given config
-    pub fn create_zone(&self, config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
+    pub fn create_zone(&self, zone_id: Option<ZoneId>, config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
         let mut zones = self.zones.lock().unwrap();
 
         if zones.len() >= self.config.max_zones {
@@ -26,7 +29,17 @@ impl ZoneManager {
         }
 
         let resolved_config = config.unwrap_or_else(|| self.config.default_zone_config.clone());
-        let zone = Zone::new(resolved_config);
+        let zone = match zone_id {
+            Some(id) => {
+                if zones.contains_key(&id) {
+                    return Err(EngineError::ZoneAlreadyExists);
+                }
+                Zone::new_with_id(id, resolved_config)
+            },
+            None => {
+                Zone::new(resolved_config)
+            }
+        };
         let zone_id = zone.id;
 
         zones.insert(zone_id, Arc::new(Mutex::new(zone)));
@@ -46,6 +59,7 @@ impl ZoneManager {
     }
 
     /// Remove a zone
+    #[allow(unused)]
     pub fn remove_zone(&self, zone_id: ZoneId) -> Result<(), EngineError> {
         if !self.zones.lock().is_ok() {
             return Err(EngineError::ZoneNotFound);

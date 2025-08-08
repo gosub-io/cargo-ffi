@@ -1,13 +1,20 @@
+// src/engine/tab.rs
+//! Tab system: [`Tab`], ['Tick'], and [`TabId`].
+//!
+
 use std::sync::Arc;
 use std::time::Instant;
 use gtk4::cairo;
+use serde::__private::from_utf8_lossy;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 use crate::{EngineCommand, EngineEvent, EngineInstance};
-use crate::tick::TickResult;
+use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
-use crate::zone::zone::ZoneId;
+use crate::engine::cookies::CookieJarHandle;
+use crate::engine::zone::ZoneId;
 
+/// A unique identifier for a tab, represented as a UUID.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(Uuid);
 
@@ -17,9 +24,11 @@ impl TabId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Current state of the tab. This is a state machine that defines what the tab is doing at the moment.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum TabState {
     /// Tab is not doing anything and does not have timers or animations
+    #[default]
     Idle,
     /// Tab is currently triggered to load an URL
     PendingLoad(String),
@@ -37,7 +46,7 @@ pub enum TabState {
     Failed(String),
 }
 
-// Tab mode defines its activity. Based on this, it will get a certain slice of time for processing.
+/// Tab mode defines its activity. Based on this, it will get a certain slice of time for processing.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TabMode {
     /// Fully active: network, animations, layout, painting at 60 Hz
@@ -50,28 +59,50 @@ pub enum TabMode {
     Suspended,
 }
 
+
+/// A tab is a single instance of a web page that is being rendered in a zone. It has its own
+/// viewport, engine instance etc. You could have 2 tabs open in a single window, like split-screen.
 pub struct Tab {
-    pub id: TabId,                  // ID of the tab
-    pub zone_id: ZoneId,            // ID of the zone in which this tab resides
-    pub instance: EngineInstance,   // Engine instance running for this tab
-    pub state: TabState,            // State of the tab (idle, loading, loaded, etc.)
+    /// ID of the tab
+    pub id: TabId,
+    /// ID of the zone in which this tab resides
+    pub zone_id: ZoneId,
+    /// Engine instance running for this tab
+    pub instance: EngineInstance,
+    /// State of the tab (idle, loading, loaded, etc.)
+    pub state: TabState,
 
-    pub viewport: Viewport,         // Current (or wanted) viewport for rendering
+    /// Current (or wanted) viewport for rendering
+    pub viewport: Viewport,
 
-    // Scheduling and lifecycle management
-    pub mode: TabMode,              // Current tab mode (idle, live, background)
-    pub last_tick: Instant,         // When was the last tick?
+    /// Current tab mode (idle, live, background)
+    pub mode: TabMode,
+    /// When was the last tick?
+    pub last_tick: Instant,
 
-    pub favicon: Vec<u8>,               // Favicon binary data for the current tab
-    pub title: String,                  // Title of the current tab
+    /// Favicon binary data for the current tab
+    pub favicon: Vec<u8>,
+    /// Title of the current tab
+    pub title: String,
 
-    pub current_url: String,            // Current URL that is loaded or being loadeds
-    pub is_loading: bool,               // Is the current URL being loaded
-    pub is_error: bool,                 // Is there an error in the current tab?
+    /// Current URL that is loaded or being loadeds
+    pub current_url: String,
+    /// Is the current URL being loaded
+    pub is_loading: bool,
+    /// Is there an error in the current tab?
+    pub is_error: bool,
+
+    /// Cookie jar for this tab. This is shared with the rest of the zone tabs
+    pub cookie_jar: Option<CookieJarHandle>,
 }
 
 impl Tab {
-    pub fn new(zone_id: ZoneId, runtime: Arc<Runtime>, viewport: &Viewport) -> Self {
+    pub fn new(
+        zone_id: ZoneId,
+        runtime: Arc<Runtime>,
+        viewport: &Viewport,
+        cookie_jar: Option<CookieJarHandle>,
+    ) -> Self {
         Self {
             id: TabId::new(),
             zone_id,
@@ -88,14 +119,18 @@ impl Tab {
 
             mode: TabMode::Active,              // Default mode is active
             last_tick: Instant::now(),
+
+            cookie_jar,
         }
     }
 
+    // Set the viewport for the tab. This will trigger a re-rendering of the tab.
     pub fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = viewport;
         self.state = TabState::PendingRendering(self.viewport.clone())
     }
 
+    // Tick the tab. This will process the current state of the tab and return a TickResult.
     pub fn tick(&mut self) -> TickResult {
         let mut result = TickResult::default();
 
@@ -117,11 +152,19 @@ impl Tab {
             TabState::Loading => {
                 if let Some(done) = self.instance.poll_loading() {
                     match done {
-                        Ok(html) => {
+                        Ok(resp) => {
                             self.state = TabState::Loaded;
                             println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
 
-                            self.instance.set_raw_html(html);
+                            if let Some(cookie_jar) = &self.cookie_jar {
+                                // Store cookies from the response in the cookie jar
+                                cookie_jar.write().unwrap().store_response_cookies(
+                                    &resp.url,
+                                    &resp.headers,
+                                );
+                            }
+
+                            self.instance.set_raw_html(from_utf8_lossy(resp.body.as_slice()).to_string());
                             self.is_loading = false;
                             result.page_loaded = true;
                         }
@@ -221,7 +264,6 @@ impl Tab {
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
                 println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
-
             }
         }
     }

@@ -1,3 +1,4 @@
+#[allow(unused)]
 pub trait Storable {
     fn save(&self) -> anyhow::Result<()>;
     fn load(&mut self) -> anyhow::Result<()>;

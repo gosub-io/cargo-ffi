@@ -3,21 +3,35 @@ use std::sync::{Arc, Mutex};
 use gtk4::cairo;
 use tokio::runtime::Runtime;
 use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent, ZoneConfig};
-use crate::tab::{Tab, TabId};
-use crate::tick::TickResult;
+use crate::engine::tab::{Tab, TabId};
+use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
-use crate::zone::manager::ZoneManager;
-use crate::zone::zone::{ZoneId, Zone};
+use crate::engine::zone::ZoneManager;
+use crate::engine::zone::{ZoneId, Zone};
 
+/// Entry point to the Gosub engine.
+///
+/// Create an engine, then create zones and open tabs.
+///
+/// See [`Viewport`], [`ZoneId`], [`TabId`], [`EngineEvent`], [`EngineCommand`].
 pub struct GosubEngine {
-    _config: EngineConfig,               // Configuration for the whole engine
-    zone_manager: ZoneManager,          // Manages zones
-    pub runtime: Arc<Runtime>,          // Tokio runtime for async operations
+    /// Configuration for the whole engine
+    _config: EngineConfig,
+    /// Manages zones
+    zone_manager: ZoneManager,
+    /// Tokio runtime for async operations
+    pub runtime: Arc<Runtime>,
 }
 
 impl GosubEngine {
-    // Initializes a new Gosub Engine with the provided configuration. Can use None when using the
-    // default configuration.
+    /// Create a new engine.
+    ///
+    /// If `config` is `None`, defaults are used.
+    ///
+    /// ```
+    /// # use gosub_engine::prelude::*;
+    /// let engine = GosubEngine::new(None);
+    /// ```
     pub fn new(config: Option<EngineConfig>) -> Self {
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -36,11 +50,21 @@ impl GosubEngine {
         }
     }
 
-    pub fn create_zone(&mut self, config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
-        self.zone_manager.create_zone(config)
+
+    /// Create a new zone and return its [`ZoneId`].
+    ///
+    /// ```
+    /// # use gosub_engine::prelude::*;
+    /// # let mut engine = GosubEngine::new(None);
+    /// let zone_id = engine.create_zone(None, None).unwrap();
+    /// ```
+    pub fn create_zone(&mut self, zone_id: Option<ZoneId>, config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
+        self.zone_manager.create_zone(zone_id, config)
     }
 
-    // Retrieves a reference to a zone by its ID
+    /// Get a mutable handle to a zone.
+    ///
+    /// This returns an [`Arc<Mutex<Zone>>`]; lock it before use.
     pub fn get_zone_mut(&mut self, zone_id: ZoneId) -> Option<Arc<Mutex<Zone>>> {
         self.zone_manager.get_zone_mut(&zone_id)
     }
@@ -59,7 +83,15 @@ impl GosubEngine {
         None
     }
 
-    // Opens a new tab in the specified zone, returning its ID
+    /// Open a new tab in a zone and return its [`TabId`].
+    ///
+    /// ```
+    /// # use gosub_engine::prelude::*;
+    /// # let mut engine = GosubEngine::new(None);
+    /// # let zone_id = engine.create_zone(None, None).unwrap();
+    /// # let vp = Viewport::new(800, 600);
+    /// let tab_id = engine.open_tab(zone_id, &vp).unwrap();
+    /// ```
     pub fn open_tab(&mut self, zone_id: ZoneId, viewport: &Viewport) -> Result<TabId, EngineError> {
         let zone_arc = self.zone_manager.get_zone(zone_id).ok_or(EngineError::ZoneNotFound)?;
         let mut zone = zone_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
@@ -80,7 +112,7 @@ impl GosubEngine {
                 continue;
             };
 
-            for (tab_id, result) in zone.tick_tabs() {
+            for (tab_id, result) in zone.tick_all_tabs() {
                 results.insert(tab_id, result);
             }
         }
