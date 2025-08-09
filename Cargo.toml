@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [[example]]
 name = "gtk_example"
-path = "examples/gtk.rs"
+path = "examples/gtk/main.rs"
 required-features = ["gtk"]
 
 [dependencies]

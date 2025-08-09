@@ -251,7 +251,7 @@ impl Tab {
 
     pub fn execute_command(&mut self, command: EngineCommand) {
         match command {
-            EngineCommand::LoadUrl(url) => {
+            EngineCommand::Navigate(url) => {
                 println!("Loading URL '{}' in tab {:?}", url, self.id);
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);

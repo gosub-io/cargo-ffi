@@ -32,7 +32,7 @@ pub enum EngineEvent {
 /// Commands that the engine need to execute
 pub enum EngineCommand {
     /// An url must be loaded inside the tab
-    LoadUrl(String),
+    Navigate(String),
     /// Reload the current URL in the tab
     Reload(),
 }
