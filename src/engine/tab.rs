@@ -126,6 +126,7 @@ impl Tab {
 
     // Set the viewport for the tab. This will trigger a re-rendering of the tab.
     pub fn set_viewport(&mut self, viewport: Viewport) {
+        dbg!(&viewport);
         self.viewport = viewport;
         self.state = TabState::PendingRendering(self.viewport.clone())
     }
@@ -223,6 +224,13 @@ impl Tab {
         match event {
             EngineEvent::Scroll { dx, dy } => {
                 println!("Scrolling tab {:?} by dx: {}, dy: {}", self.id, dx, dy);
+
+                self.set_viewport(Viewport::new(
+                    self.viewport.x + dx as i32,
+                    self.viewport.y + dy as i32,
+                    self.viewport.width,
+                    self.viewport.height
+                ))
             }
             EngineEvent::MouseMove { x, y } => {
                 println!("Mouse moved on tab {:?} to position ({}, {})", self.id, x, y);
@@ -244,7 +252,7 @@ impl Tab {
             }
             EngineEvent::Resize { width, height } => {
                 println!("Resize event on tab {:?}: new size {}x{}", self.id, width, height);
-                self.set_viewport(Viewport::new(width, height))
+                self.set_viewport(Viewport::new(self.viewport.x, self.viewport.y, width, height))
             }
         }
     }

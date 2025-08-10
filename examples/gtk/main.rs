@@ -2,7 +2,7 @@ use gosub_engine::{GosubEngine, EngineCommand, EngineEvent, Viewport};
 use gosub_engine::cookies::{CookieStore, SqliteCookieStore};
 use gosub_engine::ZoneId;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, Orientation};
+use gtk4::{glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, Orientation};
 use gtk4::{GestureClick};
 use gtk4::glib::clone;
 use std::cell::RefCell;
@@ -21,7 +21,7 @@ fn main() {
 
     app.connect_activate(move |app| {
         let engine = Rc::new(RefCell::new(GosubEngine::new(None)));
-        let viewport = Viewport::new(800, 600);
+        let viewport = Viewport::new(0, 0, 800, 600);
 
         // Let's create our default zone
         let zone_id = engine.borrow_mut().create_zone(Some(ZoneId::from(DEFAULT_MAIN_ZONE)), None).expect("zone creation failed");
@@ -66,7 +66,7 @@ fn main() {
         btn_split_col.connect_clicked(clone!(@strong eng_split, @strong root_split, @strong last_size_split, @strong drawing_split, @strong active_split => move |_| {
             // Open a new tab sized like the active pane
             let (w, h) = *last_size_split.borrow();
-            let new_tab = eng_split.borrow_mut().open_tab(zone_id, &Viewport::new((w/2).max(1) as u32, h as u32)).expect("open_tab failed");
+            let new_tab = eng_split.borrow_mut().open_tab(zone_id, &Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)).expect("open_tab failed");
 
             let target = *active_split.borrow();
             split_leaf_into_cols(&root_split, target, vec![new_tab]);
@@ -85,7 +85,7 @@ fn main() {
         let active_split2 = active_tab.clone();
         btn_split_row.connect_clicked(clone!(@strong eng_split2, @strong root_split2, @strong last_size_split2, @strong drawing_split2, @strong active_split2 => move |_| {
             let (w, h) = *last_size_split2.borrow();
-            let new_tab = eng_split2.borrow_mut().open_tab(zone_id, &Viewport::new(w as u32, (h/2).max(1) as u32)).expect("open_tab failed");
+            let new_tab = eng_split2.borrow_mut().open_tab(zone_id, &Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)).expect("open_tab failed");
 
             let target = *active_split2.borrow();
             split_leaf_into_rows(&root_split2, target, vec![new_tab]);
@@ -158,6 +158,7 @@ fn main() {
             }
         });
 
+        // Resize pane
         let eng_resize = engine.clone();
         let root_resize = root.clone();
         let last_size_resize = last_size.clone();
@@ -196,6 +197,48 @@ fn main() {
             let _ = eng_entry.borrow_mut().execute_command(tid, EngineCommand::Navigate(url));
             draw_entry.queue_draw();
         }));
+
+        let last_pointer = Rc::new(RefCell::new((0.0_f64, 0.0_f64)));
+        let motion = EventControllerMotion::new();
+        {
+            let last_pointer_m = last_pointer.clone();
+            motion.connect_motion(move |_m, x, y| {
+                *last_pointer_m.borrow_mut() = (x, y);
+            });
+        }
+        drawing_area.add_controller(motion);
+
+        // Scroll pane
+        let eng_scroll = engine.clone();
+        let root_scroll = root.clone();
+        let last_size_scroll = last_size.clone();
+        let drawing_scroll = drawing_area.clone();
+        let last_pointer_scroll = last_pointer.clone();
+
+        let scroll = EventControllerScroll::new(EventControllerScrollFlags::BOTH_AXES);
+        scroll.connect_scroll(clone!(@strong eng_scroll, @strong root_scroll, @strong last_size_scroll, @strong drawing_scroll, @strong last_pointer_scroll => move |_ctrl, dx, dy| {
+            // Where is the pointer?
+            let (px, py) = *last_pointer_scroll.borrow();
+
+            // Which pane is under the pointer?
+            let (w, h) = *last_size_scroll.borrow();
+            if let Some(tid) = find_leaf_at(&root_scroll.borrow(), Rect { x:0, y:0, w, h }, px, py) {
+                // Scale deltas: touchpads give smooth deltas; mouse wheel often ~±1 step.
+                // Tweak this multiplier for your content’s line/px semantics.
+                let line_h = 20.0_f64; // about 40 px per "wheel step"
+                let dx_px = (dx * line_h) as f32;
+                let dy_px = (dy * line_h) as f32;
+
+                // Send to the engine (you implement what Scroll does per tab)
+                let _ = eng_scroll.borrow_mut().handle_event(tid, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
+
+                // Ask GTK to redraw
+                drawing_scroll.queue_draw();
+            }
+
+            return glib::Propagation::Proceed;
+        }));
+        drawing_area.add_controller(scroll);
 
         // Layout boxes
         let toolbar = GtkBox::new(Orientation::Horizontal, 6);

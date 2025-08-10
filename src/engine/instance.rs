@@ -98,7 +98,12 @@ impl EngineInstance {
     /// Start the process of rendering. This will be changed later and will trigger the render pipeline. Not sure yet how
     pub fn start_rendering(&mut self, viewport: Viewport) {
         let surface = ImageSurface::create(cairo::Format::ARgb32, viewport.width as i32, viewport.height as i32).unwrap();
+
+        // Transform the surface to the viewport offset
+
         let cr = cairo::Context::new(&surface).unwrap();
+        cr.translate(-(viewport.x as f64), -(viewport.y as f64));
+
         cr.set_source_rgb(0.0, 0.0, 0.1);
         cr.paint().unwrap();
         cr.set_source_rgb(1.0, 1.0, 1.0);
