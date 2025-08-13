@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::{TabId, ZoneId};
 use super::area::{LocalStore, SessionStore, StorageArea};
 use super::event::{StorageEvent, StorageScope};
-use super::types::{Origin, PartitionKey};
+use super::types::PartitionKey;
 
 /// A handle for receiving storage change notifications.
 pub type Subscription = mpsc::Receiver<StorageEvent>;
@@ -41,14 +41,14 @@ impl StorageService {
     pub fn subscribe(&self) -> Subscription { self.bus.subscribe() }
 
     /// Get a localStorage area (wrapped to emit notifications).
-    pub fn local_for(&self, zone: ZoneId, part: &PartitionKey, origin: &Origin) -> Result<Arc<dyn StorageArea>>
+    pub fn local_for(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin) -> Result<Arc<dyn StorageArea>>
     {
         let inner = self.local.area(zone, part, origin)?;
         Ok(self.wrap_notifying(inner, zone, None, part.clone(), origin.clone(), StorageScope::Local))
     }
 
     /// Get a sessionStorage area (wrapped to emit notifications).
-    pub fn session_for(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &Origin) -> Arc<dyn StorageArea>
+    pub fn session_for(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea>
     {
         let inner = self.session.area(zone, tab, part, origin);
         self.wrap_notifying(inner, zone, Some(tab), part.clone(), origin.clone(), StorageScope::Session)
@@ -64,7 +64,7 @@ impl StorageService {
         zone: ZoneId,
         source_tab: Option<TabId>,
         partition: PartitionKey,
-        origin: Origin,
+        origin: url::Origin,
         scope: StorageScope
     ) -> Arc<dyn StorageArea> {
         Arc::new(NotifyingArea {
@@ -84,7 +84,7 @@ struct NotifyingArea {
     inner: Arc<dyn StorageArea>,
     zone: ZoneId,
     partition: PartitionKey,
-    origin: Origin,
+    origin: url::Origin,
     source_tab: Option<TabId>,
     bus: Arc<StorageBus>,
     scope: StorageScope,

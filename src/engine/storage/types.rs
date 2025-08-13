@@ -1,15 +1,4 @@
-use std::fmt;
-use url::Url;
-
-/// (scheme, host, port) as a normalized string. Keep simple for now.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Origin(pub String);
-
-impl fmt::Display for Origin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
+use url::{Origin, Url};
 
 /// Partitioning key (future-proof for state partitioning).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -28,10 +17,7 @@ pub enum PartitionPolicy { None, TopLevelOrigin }
 pub fn compute_partition_key(u: &Url, p: PartitionPolicy) -> PartitionKey {
     match p {
         PartitionPolicy::None => PartitionKey::None,
-        PartitionPolicy::TopLevelOrigin => {
-            let o = Origin(u.origin().ascii_serialization());
-            PartitionKey::TopLevel(o)
-        }
+        PartitionPolicy::TopLevelOrigin => PartitionKey::TopLevel(u.origin())
     }
 }
 
@@ -39,12 +25,6 @@ pub fn compute_partition_key(u: &Url, p: PartitionPolicy) -> PartitionKey {
 mod tests {
     use super::*;
     use url::Url;
-
-    #[test]
-    fn origin_display_roundtrips_inner_string() {
-        let o = Origin("https://example.com".into());
-        assert_eq!(o.to_string(), "https://example.com");
-    }
 
     #[test]
     fn partitionkey_default_is_none() {

@@ -20,7 +20,7 @@ pub struct StorageHandles {
     pub session: Arc<dyn StorageArea>,
 }
 
-pub use types::{Origin, PartitionKey};
+pub use types::PartitionKey;
 pub use area::{StorageArea, LocalStore, SessionStore};
 pub use service::{StorageService, Subscription};
 pub use local::sqlite_store::SqliteLocalStore;

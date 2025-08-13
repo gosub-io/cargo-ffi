@@ -4,12 +4,12 @@ use anyhow::Result;
 
 use crate::ZoneId;
 use crate::engine::storage::area::{LocalStore, StorageArea};
-use crate::engine::storage::types::{Origin, PartitionKey};
+use crate::engine::storage::types::PartitionKey;
 
 /// In‑memory local storage (no persistence). Used as a default when no storage is defined by the UA.
 #[derive(Default)]
 pub struct InMemoryLocalStore {
-    areas: Mutex<HashMap<(ZoneId, PartitionKey, Origin), Arc<dyn StorageArea>>>,
+    areas: Mutex<HashMap<(ZoneId, PartitionKey, url::Origin), Arc<dyn StorageArea>>>,
 }
 
 impl InMemoryLocalStore {
@@ -23,7 +23,7 @@ impl LocalStore for InMemoryLocalStore {
         &self,
         zone: ZoneId,
         part: &PartitionKey,
-        origin: &Origin,
+        origin: &url::Origin,
     ) -> Result<Arc<dyn StorageArea>> {
         let key = (zone, part.clone(), origin.clone());
         let mut guard = self.areas.lock().unwrap();

@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use anyhow::Result;
 
 use crate::engine::storage::area::{SessionStore, StorageArea};
-use crate::engine::storage::types::{Origin, PartitionKey};
+use crate::engine::storage::types::PartitionKey;
 use crate::{TabId, ZoneId};
 
 // In memory storage
@@ -19,15 +19,15 @@ impl InMemorySessionStore {
 }
 
 impl SessionStore for InMemorySessionStore {
-    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &Origin) -> Arc<dyn StorageArea> {
+    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea> {
         let k = (
             zone,
             tab,
             match part {
                 PartitionKey::None => "".to_string(),
-                PartitionKey::TopLevel(o) => format!("top:{}", o.0),
+                PartitionKey::TopLevel(o) => format!("top:{}", o.ascii_serialization()),
             },
-            origin.0.clone(),
+            origin.ascii_serialization(),
         );
 
         {

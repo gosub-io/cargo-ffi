@@ -13,7 +13,7 @@ use crate::{EngineCommand, EngineEvent, EngineInstance};
 use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
 use crate::engine::cookies::CookieJarHandle;
-use crate::engine::storage::{Origin, PartitionKey, StorageEvent, StorageHandles};
+use crate::engine::storage::{PartitionKey, StorageEvent, StorageHandles};
 use crate::engine::storage::types::PartitionPolicy;
 use crate::engine::zone::ZoneId;
 
@@ -323,7 +323,7 @@ impl Tab {
 
     pub fn dispatch_storage_event_to_same_origin_docs(
         &mut self,
-        _origin: &Origin,
+        _origin: &url::Origin,
         _include_iframes: bool,
         _ev: &StorageEvent,
     ) {

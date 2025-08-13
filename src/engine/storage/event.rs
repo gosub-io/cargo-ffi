@@ -1,5 +1,5 @@
 use crate::{TabId, ZoneId};
-use super::types::{Origin, PartitionKey};
+use super::types::{PartitionKey};
 
 #[derive(Copy, Clone, Debug)]
 pub enum StorageScope { Local, Session }
@@ -8,7 +8,7 @@ pub enum StorageScope { Local, Session }
 pub struct StorageEvent {
     pub zone: ZoneId,
     pub partition: PartitionKey,
-    pub origin: Origin,
+    pub origin: url::Origin,
     pub key: Option<String>,
     pub old_value: Option<String>,
     pub new_value: Option<String>,

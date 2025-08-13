@@ -14,7 +14,7 @@ use crate::engine::tick::TickResult;
 use uuid::Uuid;
 use crate::engine::cookies::CookieJarHandle;
 use crate::engine::cookies::DefaultCookieJar;
-use crate::engine::storage::{Origin, PartitionKey, StorageArea, StorageEvent, StorageHandles, StorageService, Subscription};
+use crate::engine::storage::{PartitionKey, StorageArea, StorageEvent, StorageHandles, StorageService, Subscription};
 use crate::engine::storage::event::StorageScope;
 use crate::engine::zone::password_store::PasswordStore;
 use rand::{Rng, SeedableRng};
@@ -203,12 +203,12 @@ impl Zone {
 
 
     /// Get the shared localStorage area for this (zone × partition × origin).
-    pub fn local_area(&self, pk: &PartitionKey, origin: &Origin) -> anyhow::Result<Arc<dyn StorageArea>> {
+    pub fn local_area(&self, pk: &PartitionKey, origin: &url::Origin) -> anyhow::Result<Arc<dyn StorageArea>> {
         self.storage.local_for(self.id, pk, origin)
     }
 
     /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
-    pub fn session_area(&self, tab: TabId, pk: &PartitionKey, origin: &Origin) -> Arc<dyn StorageArea> {
+    pub fn session_area(&self, tab: TabId, pk: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea> {
         self.storage.session_for(self.id, tab, pk, origin)
     }
 
@@ -260,7 +260,7 @@ impl Zone {
         tab.partition_key = compute_partition_key(final_url, tab.partition_policy);
 
         // 2) bind storage
-        let origin = Origin(final_url.origin().ascii_serialization());
+        let origin = final_url.origin().clone();
         let local   = self.local_area(&tab.partition_key, &origin)?;
         let session = self.session_area(tab.id, &tab.partition_key, &origin);
         tab.bind_storage(StorageHandles{ local, session }); // add on EngineInstance

@@ -97,5 +97,6 @@ pub mod cookies {
 pub mod storage {
     pub use crate::engine::storage::{
         StorageService, SqliteLocalStore, InMemorySessionStore,
+        PartitionKey
     };
 }

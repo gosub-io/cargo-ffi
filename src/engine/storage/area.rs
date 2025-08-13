@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use anyhow::Result;
 use crate::{TabId, ZoneId};
-use super::types::{Origin, PartitionKey};
+use super::types::PartitionKey;
 
 /// Object-safe key/value storage area (DOM’s Storage).
 pub trait StorageArea: Send + Sync {
@@ -15,13 +15,13 @@ pub trait StorageArea: Send + Sync {
 
 /// Store for localStorage-like areas (shared per (zone, partition, origin)).
 pub trait LocalStore: Send + Sync {
-    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &Origin)
+    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin)
             -> Result<Arc<dyn StorageArea>>;
 }
 
 /// Store for sessionStorage-like areas (isolated per (zone, tab, partition, origin)).
 pub trait SessionStore: Send + Sync {
-    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &Origin)
+    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin)
             -> Arc<dyn StorageArea>;
     fn drop_tab(&self, zone: ZoneId, tab: TabId);
 }

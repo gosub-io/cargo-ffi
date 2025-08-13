@@ -5,7 +5,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use r2d2_sqlite::rusqlite::{params, OpenFlags};
 
 use crate::engine::storage::area::{LocalStore, StorageArea};
-use crate::engine::storage::types::{Origin, PartitionKey};
+use crate::engine::storage::types::PartitionKey;
 use crate::ZoneId;
 
 /// SQLite-based local storage implementation
@@ -54,7 +54,7 @@ impl SqliteLocalStore {
 }
 
 impl LocalStore for SqliteLocalStore {
-    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &Origin)
+    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin)
             -> Result<Arc<dyn StorageArea>>
     {
         Ok(Arc::new(SqliteLocalArea {
@@ -62,9 +62,9 @@ impl LocalStore for SqliteLocalStore {
             zone,
             partition: match part {
                 PartitionKey::None => "".to_string(),
-                PartitionKey::TopLevel(o) => format!("top:{}", o.0),
+                PartitionKey::TopLevel(o) => format!("top:{}", o.ascii_serialization()),
             },
-            origin: origin.0.clone(),
+            origin: origin.ascii_serialization(),
         }))
     }
 }
