@@ -3,9 +3,9 @@
 //!
 mod manager;
 mod password_store;
-mod storage;
 mod zone;
 
 pub(crate) use manager::ZoneManager;
 pub use zone::ZoneId;
 pub use zone::Zone;
+

@@ -29,6 +29,6 @@ r2d2 = { version = "0.8", optional = true }
 r2d2_sqlite = { version = "0.24", optional = true }
 
 [features]
-default = ["sqlite_cookie_store"]
+default = ["sqlite_cookie_store", "gtk4"]
 gtk = ["gtk4"]
 sqlite_cookie_store = ["r2d2", "r2d2_sqlite"]

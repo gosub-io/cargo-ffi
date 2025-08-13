@@ -1,10 +1,18 @@
+use std::fmt::Debug;
+
 // Simple width/height viewport. Used for rendering
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Viewport {
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+impl Debug for Viewport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Viewport {{ x: {}, y: {}, width: {}, height: {} }}", self.x, self.y, self.width, self.height)
+    }
 }
 
 impl Viewport {

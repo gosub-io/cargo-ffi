@@ -4,6 +4,8 @@ use gtk4::cairo;
 use gtk4::cairo::ImageSurface;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
+use url::Url;
+use crate::engine::storage::{StorageArea, StorageHandles};
 use crate::net::{fetch, Response};
 use crate::engine::tick::DirtyFlags;
 use crate::viewport::Viewport;
@@ -31,6 +33,8 @@ pub struct EngineInstance {
 
     /// Render surface onto which the tab will render things
     pub render_surface: Option<cairo::ImageSurface>,
+
+    storage: Option<StorageHandles>,
 }
 
 impl EngineInstance {
@@ -50,13 +54,20 @@ impl EngineInstance {
             failed: false,
 
             render_surface: None,
+            storage: None,          // Default no storage unless binding manually by a tab
         }
     }
 
+    pub fn bind_storage(&mut self, local: Arc<dyn StorageArea>, session: Arc<dyn StorageArea>) {
+        self.storage = Some(StorageHandles{ local: local.clone(), session: session.clone() });
+
+        // At this point, we would probably want to hook our storage handles into the javascript/lua runtime
+    }
+
     /// Starts a task that will load the actual url
-    pub fn start_loading(&mut self, url: String) {
+    pub fn start_loading(&mut self, url: Url) {
         let handle = self.runtime.spawn(async move {
-            fetch(&url).await
+            fetch(url).await
         });
         self.loading_task = Some(handle);
         self.failed = false;
@@ -68,7 +79,7 @@ impl EngineInstance {
     }
 
     /// Returns true when the loading failed
-    pub fn failed(&self) -> bool {
+    pub fn has_failed(&self) -> bool {
         self.failed
     }
 
@@ -143,5 +154,13 @@ impl EngineInstance {
         cr.move_to(20.0, 70.0);
         cr.show_text(msg).ok();
         self.render_surface = Some(surface);
+    }
+
+    pub fn local_storage(&self) -> Option<Arc<dyn StorageArea>> {
+        self.storage.as_ref().map(|s| s.local.clone())
+    }
+
+    pub fn session_storage(&self) -> Option<Arc<dyn StorageArea>> {
+        self.storage.as_ref().map(|s| s.session.clone())
     }
 }

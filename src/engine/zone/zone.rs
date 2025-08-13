@@ -14,8 +14,12 @@ use crate::engine::tick::TickResult;
 use uuid::Uuid;
 use crate::engine::cookies::CookieJarHandle;
 use crate::engine::cookies::DefaultCookieJar;
+use crate::engine::storage::{Origin, PartitionKey, StorageArea, StorageEvent, StorageHandles, StorageService, Subscription};
+use crate::engine::storage::event::StorageScope;
 use crate::engine::zone::password_store::PasswordStore;
-use crate::engine::zone::storage::Storage;
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
+use crate::engine::storage::types::compute_partition_key;
 
 /// A unique identifier for a zone, represented as a UUID.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -49,18 +53,28 @@ impl Display for ZoneId {
 // autocomplete etc. A zone can be marked as "shared", in which case other zones can also read (and sometimes
 // write) data back into the zone.
 pub struct Zone {
-    pub id: ZoneId,             // ID of the zone
-    config: ZoneConfig,         // Configuration for the zone (like max tabs allowed)
-    pub title: String,          // Title of the zone (ie: Home, Work)
-    pub icon: Vec<u8>,          // Icon of the zone (could be a base64 encoded image)
-    pub description: String,    // Description of the zone
-    pub color: [u8; 4],         // Tab color (RGBA)
+    /// ID of the zone
+    pub id: ZoneId,
+    /// Configuration for the zone (like max tabs allowed)
+    config: ZoneConfig,
+    /// Title of the zone (ie: Home, Work)
+    pub title: String,
+    /// Icon of the zone (could be a base64 encoded image)
+    pub icon: Vec<u8>,
+    /// Description of the zone
+    pub description: String,
+    /// Tab color (RGBA)
+    pub color: [u8; 4],
 
-    tabs: HashMap<TabId, Arc<Mutex<Tab>>>,  // Tabs in the zone
+    /// Tabs in the zone
+    tabs: HashMap<TabId, Arc<Mutex<Tab>>>,
 
-    pub session_storage: Storage,
-    pub local_storage: Storage,
-    pub cookie_jar: CookieJarHandle,     // Where to load/store cookies within this zone
+    /// Session storage for the zone (shared between all tabs in the zone)
+    pub storage: Arc<StorageService>,
+    /// Subscription for session storage changes
+    storage_rx: Subscription,
+
+    pub cookie_jar: CookieJarHandle,        // Where to load/store cookies within this zone
     pub password_store: PasswordStore,
     pub shared_flags: SharedFlags,
 }
@@ -68,19 +82,28 @@ pub struct Zone {
 pub struct SharedFlags {
     pub share_autocomplete: bool,       // Other zones are allowed to read this autocomplete elements
     pub share_bookmarks: bool,          // Other zones are allowed to read bookmarks
-    pub share_passwords: bool,          // Other zones are allowd to read password entries
+    pub share_passwords: bool,          // Other zones are allowed to read password entries
     pub share_cookiejar: bool,          // Other zones are allowed to read cookies
 }
 
 impl Zone {
     // Creates a new zone with a specific zone ID
-    pub fn new_with_id(zone_id: ZoneId, config: ZoneConfig) -> Self {
+    pub fn new_with_id(
+        zone_id: ZoneId,
+        config: ZoneConfig,
+        storage: Arc<StorageService>,
+    ) -> Self {
+
+        // We generate the color by using the zone id as a seed
+        let mut rng = StdRng::seed_from_u64(zone_id.0.as_u64_pair().0);
         let random_color = [
-            rand::random::<u8>(),
-            rand::random::<u8>(),
-            rand::random::<u8>(),
+            rng.random::<u8>(),
+            rng.random::<u8>(),
+            rng.random::<u8>(),
             0xff, // Fully opaque
         ];
+
+        let storage_rx = storage.subscribe();
 
         Self {
             id: zone_id,
@@ -91,8 +114,9 @@ impl Zone {
             tabs: HashMap::new(),
             config,
 
-            session_storage: Storage::new(),
-            local_storage: Storage::new(),
+            storage,
+            storage_rx,
+
             cookie_jar: Arc::new(RwLock::new(DefaultCookieJar::new())),
             password_store: PasswordStore::new(),
             shared_flags: SharedFlags {
@@ -105,9 +129,9 @@ impl Zone {
     }
 
     // Creates a new zone with a random ID and the provided configuration
-    pub fn new(config: ZoneConfig) -> Self {
+    pub fn new(config: ZoneConfig, storage: Arc<StorageService>) -> Self {
         let zone_id = ZoneId::new();
-        Zone::new_with_id(zone_id, config)
+        Zone::new_with_id(zone_id, config, storage)
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -175,5 +199,71 @@ impl Zone {
         }
 
         results
+    }
+
+
+    /// Get the shared localStorage area for this (zone × partition × origin).
+    pub fn local_area(&self, pk: &PartitionKey, origin: &Origin) -> anyhow::Result<Arc<dyn StorageArea>> {
+        self.storage.local_for(self.id, pk, origin)
+    }
+
+    /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
+    pub fn session_area(&self, tab: TabId, pk: &PartitionKey, origin: &Origin) -> Arc<dyn StorageArea> {
+        self.storage.session_for(self.id, tab, pk, origin)
+    }
+
+    /// Tell the storage layer a tab is gone (cleans its sessionStorage).
+    pub fn on_tab_closed(&self, tab: TabId) {
+        self.storage.drop_tab(self.id, tab);
+    }
+
+    // Read the storage channel and process storage events
+    pub fn pump_storage_events(&mut self) {
+        // Drain the queue without blocking.
+        while let Ok(ev) = self.storage_rx.try_recv() {
+            self.dispatch_storage_event(ev);
+        }
+    }
+
+    /// Dispatches the storage event to the correct tabs based on the event's scope.
+    fn dispatch_storage_event(&mut self, ev: StorageEvent) {
+        match ev.scope {
+            StorageScope::Local => {
+                // Deliver to *other* same-origin documents in the same zone/partition.
+                for (tab_id, tab) in &self.tabs {
+                    // Skip the tab that caused it (spec behavior)
+                    if Some(*tab_id) == ev.source_tab { continue; }
+
+                    let mut tab = tab.lock().unwrap();
+                    tab.dispatch_storage_event_to_same_origin_docs(
+                        &ev.origin, /*include_iframes=*/true, &ev
+                    );
+                }
+            }
+            StorageScope::Session => {
+                // sessionStorage is per top-level browsing context (tab).
+                // Optionally deliver to *same tab* same-origin iframes (not other tabs).
+                if let Some(tab_id) = ev.source_tab {
+                    if let Some(tab) = self.tabs.get(&tab_id) {
+                        let mut tab = tab.lock().unwrap();
+                        tab.dispatch_storage_event_to_same_origin_docs(
+                            &ev.origin, /*include_iframes=*/true, &ev
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+
+    pub fn on_tab_commit(&self, tab: &mut Tab, final_url: &url::Url) -> anyhow::Result<()> {
+        tab.partition_key = compute_partition_key(final_url, tab.partition_policy);
+
+        // 2) bind storage
+        let origin = Origin(final_url.origin().ascii_serialization());
+        let local   = self.local_area(&tab.partition_key, &origin)?;
+        let session = self.session_area(tab.id, &tab.partition_key, &origin);
+        tab.bind_storage(StorageHandles{ local, session }); // add on EngineInstance
+        Ok(())
     }
 }

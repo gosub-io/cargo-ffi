@@ -1,12 +1,15 @@
 use gosub_engine::{GosubEngine, EngineCommand, EngineEvent, Viewport};
 use gosub_engine::cookies::{CookieStore, SqliteCookieStore};
 use gosub_engine::ZoneId;
+use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
 use gtk4::prelude::*;
 use gtk4::{glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, Orientation};
 use gtk4::{GestureClick};
 use gtk4::glib::clone;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use url::Url;
 use crate::tiling::{close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle, LayoutNode, Rect};
 
 mod tiling;
@@ -17,14 +20,21 @@ fn main() {
     let app = Application::builder().application_id("io.gosub.engine").build();
 
     // Persistent cookie store
-    let cookie_store = SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
+    let cookie_store= SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
+    let storage = Arc::new(StorageService::new(
+        Arc::new(SqliteLocalStore::new(".gosub-gtk-local-storage.db").unwrap()),
+        Arc::new(InMemorySessionStore::new()),
+    ));
 
     app.connect_activate(move |app| {
         let engine = Rc::new(RefCell::new(GosubEngine::new(None)));
         let viewport = Viewport::new(0, 0, 800, 600);
 
         // Let's create our default zone
-        let zone_id = engine.borrow_mut().create_zone(Some(ZoneId::from(DEFAULT_MAIN_ZONE)), None).expect("zone creation failed");
+        let zone_id = engine.borrow_mut().zone()
+            .id(ZoneId::from(DEFAULT_MAIN_ZONE))
+            .storage(storage.clone())
+            .create().expect("zone creation failed");
 
         // Add sqlite cookie jar to the zone
         let zone_arc = engine.borrow_mut().get_zone_mut(zone_id).expect("get_zone_mut failed");
@@ -192,7 +202,10 @@ fn main() {
         let active_entry = active_tab.clone();
         let draw_entry = drawing_area.clone();
         address_entry.connect_activate(clone!(@strong eng_entry, @strong active_entry, @strong draw_entry => move |entry| {
-            let url = entry.text().to_string();
+            let Ok(url) = Url::parse(&entry.text()) else {
+                return;
+            };
+
             let tid = *active_entry.borrow();
             let _ = eng_entry.borrow_mut().execute_command(tid, EngineCommand::Navigate(url));
             draw_entry.queue_draw();

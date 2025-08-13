@@ -7,11 +7,14 @@ use std::time::Instant;
 use gtk4::cairo;
 use serde::__private::from_utf8_lossy;
 use tokio::runtime::Runtime;
+use url::Url;
 use uuid::Uuid;
 use crate::{EngineCommand, EngineEvent, EngineInstance};
 use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
 use crate::engine::cookies::CookieJarHandle;
+use crate::engine::storage::{Origin, PartitionKey, StorageEvent, StorageHandles};
+use crate::engine::storage::types::PartitionPolicy;
 use crate::engine::zone::ZoneId;
 
 /// A unique identifier for a tab, represented as a UUID.
@@ -31,7 +34,7 @@ pub enum TabState {
     #[default]
     Idle,
     /// Tab is currently triggered to load an URL
-    PendingLoad(String),
+    PendingLoad(Url),
     /// Tab is currently loading an URL
     Loading,
     /// Tab has loaded the URL
@@ -85,8 +88,10 @@ pub struct Tab {
     /// Title of the current tab
     pub title: String,
 
-    /// Current URL that is loaded or being loadeds
-    pub current_url: String,
+    /// URL that ready to load or is loading
+    pub pending_url: Option<Url>,
+    /// Current URL that is now loaded
+    pub current_url: Option<Url>,
     /// Is the current URL being loaded
     pub is_loading: bool,
     /// Is there an error in the current tab?
@@ -94,6 +99,11 @@ pub struct Tab {
 
     /// Cookie jar for this tab. This is shared with the rest of the zone tabs
     pub cookie_jar: Option<CookieJarHandle>,
+
+    /// Storage partition key
+    pub partition_key: PartitionKey,
+    /// Storage partition policy
+    pub partition_policy: PartitionPolicy,
 }
 
 impl Tab {
@@ -113,20 +123,41 @@ impl Tab {
             favicon: vec![],                    // Placeholder for favicon data
             title: "New Tab".to_string(),       // Title of the new tab
 
-            current_url: "".to_string(),
+            pending_url: None,
+            current_url: None,
             is_loading: false,
             is_error: false,
 
-            mode: TabMode::Active,              // Default mode is active
+            mode: TabMode::Active,                  // Default mode is active
             last_tick: Instant::now(),
 
             cookie_jar,
+            partition_key: PartitionKey::None,      // Start with no partition key
+            partition_policy: PartitionPolicy::TopLevelOrigin,
         }
+    }
+
+    pub fn navigate_to(&mut self, url: impl Into<String>) {
+        let url = match Url::parse(&url.into()) {
+            Ok(url) => url,
+            Err(_) => {
+                // Can't parse string to a URL to load
+                eprintln!("Invalid URL");
+                return
+            }
+        };
+
+        self.state = TabState::PendingLoad(url.into());
+        self.is_loading = true;
+    }
+
+    /// Bind storage handles into the engine instance
+    pub fn bind_storage(&mut self, storage: StorageHandles) {
+        self.instance.bind_storage(storage.local, storage.session);
     }
 
     // Set the viewport for the tab. This will trigger a re-rendering of the tab.
     pub fn set_viewport(&mut self, viewport: Viewport) {
-        dbg!(&viewport);
         self.viewport = viewport;
         self.state = TabState::PendingRendering(self.viewport.clone())
     }
@@ -142,11 +173,10 @@ impl Tab {
 
             // Start loading the URL
             TabState::PendingLoad(url) => {
-                self.instance.start_loading(url.clone());
                 self.state = TabState::Loading;
-                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
                 self.is_loading = true;
-                self.current_url = url;
+                self.instance.start_loading(url.clone());
+                self.pending_url = Some(url.clone());
             }
 
             // Poll the loading task until it's completed (or failed)
@@ -154,25 +184,31 @@ impl Tab {
                 if let Some(done) = self.instance.poll_loading() {
                     match done {
                         Ok(resp) => {
-                            self.state = TabState::Loaded;
                             println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
 
+                            // Store cookies from the response in the cookie jar
                             if let Some(cookie_jar) = &self.cookie_jar {
-                                // Store cookies from the response in the cookie jar
                                 cookie_jar.write().unwrap().store_response_cookies(
                                     &resp.url,
                                     &resp.headers,
                                 );
                             }
 
-                            self.instance.set_raw_html(from_utf8_lossy(resp.body.as_slice()).to_string());
+                            // Set tab state
+                            self.state = TabState::Loaded;
                             self.is_loading = false;
+                            self.instance.set_raw_html(from_utf8_lossy(resp.body.as_slice()).to_string());
+                            self.pending_url = None;
+                            self.current_url = Some(resp.url.clone());
+
+                            // Set result
                             result.page_loaded = true;
+                            result.commited_url = Some(resp.url.clone());
                         }
                         Err(e) => {
-                            self.state = TabState::Failed(e);
                             println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
 
+                            self.state = TabState::Failed(e);
                             self.is_loading = false;
                             self.is_error = true;
                             result.needs_redraw = true;
@@ -220,6 +256,7 @@ impl Tab {
         result
     }
 
+    /// Handle an external (UA) eventf for this tab
     pub(crate) fn handle_event(&mut self, event: EngineEvent) {
         match event {
             EngineEvent::Scroll { dx, dy } => {
@@ -257,6 +294,7 @@ impl Tab {
         }
     }
 
+    /// Executes an engine command on the tab
     pub fn execute_command(&mut self, command: EngineCommand) {
         match command {
             EngineCommand::Navigate(url) => {
@@ -264,10 +302,12 @@ impl Tab {
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
                 println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
-
             }
             EngineCommand::Reload() => {
-                let url = self.current_url.clone();
+                let Some(url) = self.current_url.clone() else {
+                    return;
+                };
+
                 println!("Reloading URL '{}' in tab {:?}", url, self.id);
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
@@ -276,7 +316,32 @@ impl Tab {
         }
     }
 
+    /// Retrieves the surface allocated for this tab
     pub fn get_surface(&self) -> Option<&cairo::ImageSurface> {
         self.instance.surface()
+    }
+
+    pub fn dispatch_storage_event_to_same_origin_docs(
+        &mut self,
+        _origin: &Origin,
+        _include_iframes: bool,
+        _ev: &StorageEvent,
+    ) {
+        // Pseudocode stuff.. need to fill in what it actually needs to do
+        // for doc in self.iter_documents(include_iframes) {
+        //     if doc.origin() == origin {
+        //         // Don’t fire the event at the *mutating document* itself.
+        //         if Some(self.id) == ev.source_tab && doc.is_the_mutating_document() {
+        //             continue;
+        //         }
+        //         doc.runtime().dispatch_storage_event(
+        //             ev.key.as_deref(),
+        //             ev.old_value.as_deref(),
+        //             ev.new_value.as_deref(),
+        //             doc.url().to_string(),
+        //             match ev.scope { StorageScope::Local => "local", StorageScope::Session => "session" }
+        //         );
+        //     }
+        // }
     }
 }

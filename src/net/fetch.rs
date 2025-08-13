@@ -1,7 +1,8 @@
+use url::Url;
 use crate::net::Response;
 
 // Loads an URL and returns the response in a result if any
-pub async fn fetch(url: &str) -> Result<Response, reqwest::Error> {
+pub async fn fetch(url: Url) -> Result<Response, reqwest::Error> {
     let client = reqwest::Client::new();
     let res = client.get(url).send().await?;
 

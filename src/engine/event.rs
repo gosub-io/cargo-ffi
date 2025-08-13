@@ -1,3 +1,5 @@
+use url::Url;
+
 #[derive(Debug, Clone)]
 pub enum MouseButton {
     /// Left mouse button pressed (or depressed)
@@ -32,7 +34,7 @@ pub enum EngineEvent {
 /// Commands that the engine need to execute
 pub enum EngineCommand {
     /// An url must be loaded inside the tab
-    Navigate(String),
+    Navigate(Url),
     /// Reload the current URL in the tab
     Reload(),
 }

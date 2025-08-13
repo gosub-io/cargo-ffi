@@ -13,19 +13,22 @@
 //! use gosub_engine::prelude::*;
 //!
 //! # fn main() -> Result<(), EngineError> {
+//! use std::str::FromStr;
+//! use url::Url;
+//! use gosub_engine::{MouseButton, Viewport};
 //! let mut engine = GosubEngine::new(None);
-//! let zone_id = engine.create_zone(None, None)?;
+//! let zone_id = engine.create_zone(None, None, None)?;
 //!
 //! // Set up your viewport however your app does it
-//! let viewport = Viewport::new(800, 600);
+//! let viewport = Viewport::new(0, 0, 800, 600);
 //! let tab_id = engine.open_tab(zone_id, &viewport)?;
 //!
 //! // Drive the engine
 //! let _results = engine.tick();
 //!
 //! // Send events/commands
-//! engine.handle_event(tab_id, EngineEvent::FocusGained)?;
-//! engine.execute_command(tab_id, EngineCommand::Navigate("https://example.com".into()))?;
+//! engine.handle_event(tab_id, EngineEvent::MouseDown{ button: MouseButton::Left, x: 10.0, y: 10.0})?;
+//! engine.execute_command(tab_id, EngineCommand::Navigate(Url::from_str("https://example.com").expect("url")))?;
 //!
 //! // Read back the rendered surface
 //! let _surface = engine.get_surface(tab_id);
@@ -56,7 +59,7 @@ mod viewport;
 mod net;
 
 pub use engine::{
-    EngineConfig, ZoneConfig, EngineCommand, EngineEvent,
+    EngineConfig, ZoneConfig, EngineCommand, EngineEvent, MouseButton,
     EngineInstance, EngineError, GosubEngine,
 };
 pub use viewport::Viewport;
@@ -88,5 +91,11 @@ pub mod cookies {
         Cookie, CookieJar, DefaultCookieJar,
         CookieStore, JsonCookieStore, SqliteCookieStore,
         PersistentCookieJar,
+    };
+}
+
+pub mod storage {
+    pub use crate::engine::storage::{
+        StorageService, SqliteLocalStore, InMemorySessionStore,
     };
 }

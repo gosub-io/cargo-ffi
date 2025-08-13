@@ -2,8 +2,6 @@
 //!
 //! Most users should start with [`GosubEngine`].
 
-#[allow(unused)]
-
 mod config;
 mod instance;
 mod event;
@@ -13,9 +11,12 @@ pub mod zone;
 pub mod tab;
 mod engine;
 pub mod cookies;
+#[allow(unused)]
+pub mod storage;
+mod zone_builder;
 
 pub use config::{EngineConfig, ZoneConfig};
-pub use event::{EngineCommand, EngineEvent};
+pub use event::{EngineCommand, EngineEvent, MouseButton};
 pub use instance::EngineInstance;
 pub use errors::EngineError;
 pub use engine::GosubEngine;

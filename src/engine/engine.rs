@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use gtk4::cairo;
 use tokio::runtime::Runtime;
 use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent, ZoneConfig};
+use crate::engine::storage::StorageService;
 use crate::engine::tab::{Tab, TabId};
 use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
@@ -52,14 +53,8 @@ impl GosubEngine {
 
 
     /// Create a new zone and return its [`ZoneId`].
-    ///
-    /// ```
-    /// # use gosub_engine::prelude::*;
-    /// # let mut engine = GosubEngine::new(None);
-    /// let zone_id = engine.create_zone(None, None).unwrap();
-    /// ```
-    pub fn create_zone(&mut self, zone_id: Option<ZoneId>, config: Option<ZoneConfig>) -> Result<ZoneId, EngineError> {
-        self.zone_manager.create_zone(zone_id, config)
+    pub(crate) fn create_zone(&mut self, zone_id: Option<ZoneId>, config: Option<ZoneConfig>, storage_service: Option<Arc<StorageService>>) -> Result<ZoneId, EngineError> {
+        self.zone_manager.create_zone(zone_id, config, storage_service)
     }
 
     /// Get a mutable handle to a zone.
@@ -87,9 +82,10 @@ impl GosubEngine {
     ///
     /// ```
     /// # use gosub_engine::prelude::*;
+    /// # use gosub_engine::Viewport;
     /// # let mut engine = GosubEngine::new(None);
-    /// # let zone_id = engine.create_zone(None, None).unwrap();
-    /// # let vp = Viewport::new(800, 600);
+    /// # let zone_id = engine.create_zone(None, None, None).unwrap();
+    /// # let vp = Viewport::new(0, 0, 800, 600);
     /// let tab_id = engine.open_tab(zone_id, &vp).unwrap();
     /// ```
     pub fn open_tab(&mut self, zone_id: ZoneId, viewport: &Viewport) -> Result<TabId, EngineError> {
@@ -112,6 +108,10 @@ impl GosubEngine {
                 continue;
             };
 
+            // Process and storage events currently pending in the zone
+            zone.pump_storage_events();
+
+            // Tick each tab and aggregate the results
             for (tab_id, result) in zone.tick_all_tabs() {
                 results.insert(tab_id, result);
             }

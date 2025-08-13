@@ -14,6 +14,8 @@ pub struct TickResult {
     pub needs_redraw: bool,
     /// Is the page loaded (but not yet rendered, we could extract title/favicon etc)
     pub page_loaded: bool,
+    /// 
+    pub commited_url: Option<url::Url>,
 }
 
 // Dirty flags define what needs to be processed in the render pipeline
