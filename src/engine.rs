@@ -1,24 +1,22 @@
-#[derive(Default)]
-pub struct Engine {
-    pub url: Option<String>,
-    pub tick_count: usize,
-}
+//! Engine API surface.
+//!
+//! Most users should start with [`GosubEngine`].
 
-impl Engine {
-    pub fn new() -> Self {
-        Self::default()
-    }
+mod config;
+mod instance;
+mod event;
+mod errors;
+mod tick;
+pub mod zone;
+pub mod tab;
+mod engine;
+pub mod cookies;
+#[allow(unused)]
+pub mod storage;
+mod zone_builder;
 
-    pub fn load_url(&mut self, url: &str) {
-        self.url = Some(url.to_string());
-    }
-
-    pub fn tick(&mut self) -> bool {
-        self.tick_count += 1;
-        true
-    }
-
-    pub fn render(&self) -> Vec<u8> {
-        vec![0xFF, 0xFF, 0xFF, 0xFF]
-    }
-}
+pub use config::{EngineConfig, ZoneConfig};
+pub use event::{EngineCommand, EngineEvent, MouseButton};
+pub use instance::EngineInstance;
+pub use errors::EngineError;
+pub use engine::GosubEngine;
