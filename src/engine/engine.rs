@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use gtk4::cairo;
 use tokio::runtime::Runtime;
-use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent, ZoneConfig};
+use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent};
 use crate::engine::storage::StorageService;
 use crate::engine::tab::{Tab, TabId};
 use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
 use crate::engine::zone::ZoneManager;
-use crate::engine::zone::{ZoneId, Zone};
+use crate::zone::{ZoneId, Zone};
+use crate::zone::ZoneConfig;
 
 /// Entry point to the Gosub engine.
 ///
@@ -30,7 +31,6 @@ impl GosubEngine {
     /// If `config` is `None`, defaults are used.
     ///
     /// ```
-    /// # use gosub_engine::prelude::*;
     /// let engine = GosubEngine::new(None);
     /// ```
     pub fn new(config: Option<EngineConfig>) -> Self {
@@ -81,7 +81,6 @@ impl GosubEngine {
     /// Open a new tab in a zone and return its [`TabId`].
     ///
     /// ```
-    /// # use gosub_engine::prelude::*;
     /// # use gosub_engine::Viewport;
     /// # let mut engine = GosubEngine::new(None);
     /// # let zone_id = engine.create_zone(None, None, None).unwrap();

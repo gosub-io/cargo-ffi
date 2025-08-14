@@ -1,12 +1,12 @@
 // src/engine/zone.rs
-//! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
+//! Zone system: [`Zone`], and [`ZoneId`].
 //!
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use crate::{EngineConfig, EngineError, ZoneConfig};
+use crate::{EngineConfig, EngineError};
 use crate::engine::storage::local::in_memory::InMemoryLocalStore;
 use crate::engine::storage::StorageService;
-use crate::engine::zone::{Zone, ZoneId};
+use crate::engine::zone::{Zone, ZoneId, ZoneConfig};
 use crate::storage::InMemorySessionStore;
 
 pub struct ZoneManager {

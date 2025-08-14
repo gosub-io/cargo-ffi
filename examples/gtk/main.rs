@@ -1,6 +1,6 @@
 use gosub_engine::{GosubEngine, EngineCommand, EngineEvent, Viewport};
 use gosub_engine::cookies::{CookieStore, SqliteCookieStore};
-use gosub_engine::ZoneId;
+use gosub_engine::zone::ZoneId;
 use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
 use gtk4::prelude::*;
 use gtk4::{glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, Orientation};
@@ -16,7 +16,7 @@ mod tiling;
 
 const DEFAULT_MAIN_ZONE : &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
 
-fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::TabId) -> Option<Url> {
+fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
     eng.get_tab(tab_id).unwrap().lock().unwrap().current_url.clone()
 }
 

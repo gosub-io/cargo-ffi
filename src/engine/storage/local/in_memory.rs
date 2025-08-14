@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
-
-use crate::ZoneId;
+use crate::zone::ZoneId;
 use crate::engine::storage::area::{LocalStore, StorageArea};
 use crate::engine::storage::types::PartitionKey;
 
@@ -76,9 +75,12 @@ impl StorageArea for InMemoryLocalArea {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ZoneId;
+    use crate::zone::ZoneId;
 
-    fn o(s: &str) -> Origin { Origin(s.to_string()) }
+    fn o(s: &str) -> url::Origin {
+        let url = url::Url::parse(s).expect("valid URL");
+        url.origin()
+    }
 
     #[test]
     fn area_contract() {

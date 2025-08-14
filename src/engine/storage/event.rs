@@ -1,4 +1,5 @@
-use crate::{TabId, ZoneId};
+use crate::tab::TabId;
+use crate::zone::ZoneId;
 use super::types::{PartitionKey};
 
 #[derive(Copy, Clone, Debug)]
@@ -22,7 +23,10 @@ mod tests {
 
     fn z() -> ZoneId { ZoneId::new() }
     fn t() -> TabId { TabId::new() }
-    fn o(s: &str) -> Origin { Origin(s.to_string()) }
+    fn o(s: &str) -> url::Origin {
+        let url = url::Url::parse(s).expect("valid URL");
+        url.origin()
+    }
 
     #[test]
     fn construct_local_event_without_source_tab() {
@@ -38,7 +42,7 @@ mod tests {
         };
 
         assert!(matches!(ev.partition, PartitionKey::None));
-        assert_eq!(ev.origin.0, "https://example.com");
+        assert_eq!(ev.origin.ascii_serialization(), "https://example.com");
         assert_eq!(ev.key.as_deref(), Some("greeting"));
         assert_eq!(ev.old_value, None);
         assert_eq!(ev.new_value.as_deref(), Some("hello"));
@@ -64,10 +68,10 @@ mod tests {
 
         // Basic checks
         match &ev.partition {
-            PartitionKey::TopLevel(orig) => assert_eq!(orig.0, "https://site.test"),
+            PartitionKey::TopLevel(orig) => assert_eq!(orig.ascii_serialization(), "https://site.test"),
             _ => panic!("expected TopLevel partition"),
         }
-        assert_eq!(ev.origin.0, "https://site.test");
+        assert_eq!(ev.origin.ascii_serialization(), "https://site.test");
         assert_eq!(ev.key.as_deref(), Some("count"));
         assert_eq!(ev.old_value.as_deref(), Some("1"));
         assert_eq!(ev.new_value.as_deref(), Some("2"));
@@ -112,21 +116,33 @@ mod tests {
 
     #[test]
     fn debug_includes_scope_and_origin() {
+        let origin_url = o("https://debug.test");
+
         let ev = StorageEvent {
             zone: z(),
             partition: PartitionKey::None,
-            origin: o("https://debug.test"),
+            origin: origin_url.clone(),
             key: Some("x".into()),
             old_value: Some("1".into()),
             new_value: Some("2".into()),
             source_tab: None,
             scope: StorageScope::Local,
         };
-        let s = format!("{:?}", ev);
-        // Spot-check some important bits are present
-        assert!(s.contains("StorageEvent"));
-        assert!(s.contains("Local"));
-        assert!(s.contains("https://debug.test"));
-        assert!(s.contains("key: Some(\"x\")"));
+
+        let s = format!("{ev:?}");
+
+        let expected_substrings = [
+            "StorageEvent",
+            "Local",
+            &format!("{origin_url:?}"), // Use the same Debug format as the struct
+            "key: Some(\"x\")",
+        ];
+
+        for &needle in &expected_substrings {
+            assert!(
+                s.contains(needle),
+                "Expected debug output to contain `{needle}`, but got:\n{s}"
+            );
+        }
     }
 }
