@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use anyhow::Result;
-use crate::{TabId, ZoneId};
+use crate::tab::TabId;
+use crate::zone::ZoneId;
 use super::types::PartitionKey;
 
 /// Object-safe key/value storage area (DOM’s Storage).
@@ -36,12 +37,17 @@ mod tests {
         area.set_item(k, v).unwrap();
     }
 
+    fn o(s: &str) -> url::Origin {
+        let url = url::Url::parse(s).expect("valid URL");
+        url.origin()
+    }
+
     #[test]
     fn storagearea_basic_contract() {
         let zone = ZoneId::new();
         let tab = TabId::new();
         let part = PartitionKey::None;
-        let origin = Origin("https://example.com".into());
+        let origin = o("https://example.com");
 
         let store = InMemorySessionStore::new();
         let area = store.area(zone, tab, &part, &origin);

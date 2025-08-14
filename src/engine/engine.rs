@@ -2,13 +2,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use gtk4::cairo;
 use tokio::runtime::Runtime;
-use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent, ZoneConfig};
+use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent};
+use crate::cookies::CookieJarHandle;
 use crate::engine::storage::StorageService;
 use crate::engine::tab::{Tab, TabId};
 use crate::engine::tick::TickResult;
 use crate::viewport::Viewport;
 use crate::engine::zone::ZoneManager;
-use crate::engine::zone::{ZoneId, Zone};
+use crate::zone::{ZoneId, Zone};
+use crate::zone::ZoneConfig;
 
 /// Entry point to the Gosub engine.
 ///
@@ -30,8 +32,7 @@ impl GosubEngine {
     /// If `config` is `None`, defaults are used.
     ///
     /// ```
-    /// # use gosub_engine::prelude::*;
-    /// let engine = GosubEngine::new(None);
+    /// let engine = gosub_engine::GosubEngine::new(None);
     /// ```
     pub fn new(config: Option<EngineConfig>) -> Self {
         let runtime = Arc::new(
@@ -51,10 +52,15 @@ impl GosubEngine {
         }
     }
 
-
     /// Create a new zone and return its [`ZoneId`].
-    pub(crate) fn create_zone(&mut self, zone_id: Option<ZoneId>, config: Option<ZoneConfig>, storage_service: Option<Arc<StorageService>>) -> Result<ZoneId, EngineError> {
-        self.zone_manager.create_zone(zone_id, config, storage_service)
+    pub(crate) fn create_zone(
+        &mut self,
+        zone_id: Option<ZoneId>,
+        config: Option<ZoneConfig>,
+        storage_service: Option<Arc<StorageService>>,
+        cookie_jar: Option<CookieJarHandle>
+    ) -> Result<ZoneId, EngineError> {
+        self.zone_manager.create_zone(zone_id, config, storage_service, cookie_jar)
     }
 
     /// Get a mutable handle to a zone.
@@ -81,10 +87,9 @@ impl GosubEngine {
     /// Open a new tab in a zone and return its [`TabId`].
     ///
     /// ```
-    /// # use gosub_engine::prelude::*;
     /// # use gosub_engine::Viewport;
-    /// # let mut engine = GosubEngine::new(None);
-    /// # let zone_id = engine.create_zone(None, None, None).unwrap();
+    /// # let mut engine = gosub_engine::GosubEngine::new(None);
+    /// # let zone_id = engine.zone_builder().create().unwrap();
     /// # let vp = Viewport::new(0, 0, 800, 600);
     /// let tab_id = engine.open_tab(zone_id, &vp).unwrap();
     /// ```

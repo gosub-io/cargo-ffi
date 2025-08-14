@@ -4,7 +4,8 @@ use anyhow::Result;
 
 use crate::engine::storage::area::{SessionStore, StorageArea};
 use crate::engine::storage::types::PartitionKey;
-use crate::{TabId, ZoneId};
+use crate::tab::TabId;
+use crate::zone::ZoneId;
 
 // In memory storage
 #[derive(Default)]

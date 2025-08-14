@@ -11,6 +11,17 @@ impl Default for PartitionKey {
     fn default() -> Self { PartitionKey::None }
 }
 
+impl PartitionKey {
+    pub fn from_str(s: &str) -> Self {
+        if s.is_empty() {
+            PartitionKey::None
+        } else {
+            let url = Url::parse(s).expect("valid URL for PartitionKey");
+            PartitionKey::TopLevel(url.origin())
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum PartitionPolicy { None, TopLevelOrigin }
 
@@ -25,6 +36,11 @@ pub fn compute_partition_key(u: &Url, p: PartitionPolicy) -> PartitionKey {
 mod tests {
     use super::*;
     use url::Url;
+
+    fn o(s: &str) -> Origin {
+        let url = Url::parse(s).expect("valid URL");
+        url.origin()
+    }
 
     #[test]
     fn partitionkey_default_is_none() {
@@ -43,8 +59,8 @@ mod tests {
         let u = Url::parse("https://sub.example.com:8443/path?q=1#f").unwrap();
         let pk = compute_partition_key(&u, PartitionPolicy::TopLevelOrigin);
         match pk {
-            PartitionKey::TopLevel(Origin(s)) => {
-                assert_eq!(s, "https://sub.example.com:8443");
+            PartitionKey::TopLevel(o) => {
+                assert_eq!(o.ascii_serialization(), "https://sub.example.com:8443");
             }
             _ => panic!("expected TopLevel origin"),
         }
@@ -55,23 +71,24 @@ mod tests {
         // For HTTPS default port (443), ascii_serialization omits the port.
         let u = Url::parse("https://example.com/anything").unwrap();
         let pk = compute_partition_key(&u, PartitionPolicy::TopLevelOrigin);
-        assert_eq!(pk, PartitionKey::TopLevel(Origin("https://example.com".into())));
+        assert_eq!(pk, PartitionKey::TopLevel(o("https://example.com")));
     }
 
     #[test]
     fn compute_toplevel_ipv6_with_port() {
         let u = Url::parse("http://[2001:db8::1]:8080/").unwrap();
         let pk = compute_partition_key(&u, PartitionPolicy::TopLevelOrigin);
-        assert_eq!(pk, PartitionKey::TopLevel(Origin("http://[2001:db8::1]:8080".into())));
+
+        assert_eq!(pk, PartitionKey::from_str("http://[2001:db8::1]:8080"));
     }
 
     #[test]
     fn partitionkey_equality_and_hash_semantics() {
         use std::collections::HashSet;
 
-        let a = PartitionKey::TopLevel(Origin("https://a.example".into()));
-        let b = PartitionKey::TopLevel(Origin("https://a.example".into()));
-        let c = PartitionKey::TopLevel(Origin("https://b.example".into()));
+        let a = PartitionKey::from_str("https://a.example");
+        let b = PartitionKey::from_str("https://a.example");
+        let c = PartitionKey::from_str("https://b.example");
         let none = PartitionKey::None;
 
         assert_eq!(a, b);

@@ -6,7 +6,7 @@ use r2d2_sqlite::rusqlite::{params, OpenFlags};
 
 use crate::engine::storage::area::{LocalStore, StorageArea};
 use crate::engine::storage::types::PartitionKey;
-use crate::ZoneId;
+use crate::zone::ZoneId;
 
 /// SQLite-based local storage implementation
 pub struct SqliteLocalStore {

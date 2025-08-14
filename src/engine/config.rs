@@ -1,11 +1,8 @@
+use crate::engine::zone::ZoneConfig;
+
 const DEFAULT_USER_AGENT: &str = "Gosub/1.0 (X11; Linux x86_64) Gecko/20250802 GosubBrowser/1.0";
 
-/// Zone configuration that defines the properties of a zone
-#[derive(Debug, Clone)]
-pub struct ZoneConfig {
-    /// How many tabs might be opened in the zone
-    pub max_tabs: usize,
-}
+
 
 /// Main engine configuration. Also contains default configuration for other components like zones.
 #[derive(Debug, Clone)]

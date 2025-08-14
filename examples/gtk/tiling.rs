@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use gosub_engine::tab::TabId;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Rect {
@@ -11,7 +12,7 @@ pub(crate) struct Rect {
 
 #[derive(Clone, Debug)]
 pub(crate) enum LayoutNode {
-    Leaf(gosub_engine::TabId),
+    Leaf(TabId),
     Rows(Vec<LayoutNode>),
     Cols(Vec<LayoutNode>),
 }
@@ -19,7 +20,7 @@ pub(crate) enum LayoutNode {
 pub(crate) type LayoutHandle = Rc<RefCell<LayoutNode>>;
 
 // Compute (tab, rect) pairs for all visible leaves
-pub(crate) fn compute_layout(node: &LayoutNode, rect: Rect, out: &mut Vec<(gosub_engine::TabId, Rect)>) {
+pub(crate) fn compute_layout(node: &LayoutNode, rect: Rect, out: &mut Vec<(TabId, Rect)>) {
     match node {
         LayoutNode::Leaf(tid) => out.push((*tid, rect)),
         LayoutNode::Rows(children) => {
@@ -46,7 +47,7 @@ pub(crate) fn compute_layout(node: &LayoutNode, rect: Rect, out: &mut Vec<(gosub
 }
 
 // Find the leaf at a point (window coords)
-pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> Option<gosub_engine::TabId> {
+pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> Option<TabId> {
     match node {
         LayoutNode::Leaf(tid) => {
             let pxi = px as i32;
@@ -86,8 +87,8 @@ pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> O
 }
 
 // Replace a leaf with Cols(leaf + new tabs)
-pub(crate) fn split_leaf_into_cols(root: &LayoutHandle, target: gosub_engine::TabId, new_tabs: Vec<gosub_engine::TabId>) -> bool {
-    fn rec(n: &mut LayoutNode, target: gosub_engine::TabId, new_tabs: &[gosub_engine::TabId]) -> bool {
+pub(crate) fn split_leaf_into_cols(root: &LayoutHandle, target: TabId, new_tabs: Vec<TabId>) -> bool {
+    fn rec(n: &mut LayoutNode, target: TabId, new_tabs: &[TabId]) -> bool {
         match n {
             LayoutNode::Leaf(t) if *t == target => {
                 let mut children = Vec::with_capacity(1 + new_tabs.len());
@@ -107,8 +108,8 @@ pub(crate) fn split_leaf_into_cols(root: &LayoutHandle, target: gosub_engine::Ta
 }
 
 // Replace a leaf with Rows(leaf + new tabs)
-pub(crate) fn split_leaf_into_rows(root: &LayoutHandle, target: gosub_engine::TabId, new_tabs: Vec<gosub_engine::TabId>) -> bool {
-    fn rec(n: &mut LayoutNode, target: gosub_engine::TabId, new_tabs: &[gosub_engine::TabId]) -> bool {
+pub(crate) fn split_leaf_into_rows(root: &LayoutHandle, target: TabId, new_tabs: Vec<TabId>) -> bool {
+    fn rec(n: &mut LayoutNode, target: TabId, new_tabs: &[TabId]) -> bool {
         match n {
             LayoutNode::Leaf(t) if *t == target => {
                 let mut children = Vec::with_capacity(1 + new_tabs.len());
@@ -128,8 +129,8 @@ pub(crate) fn split_leaf_into_rows(root: &LayoutHandle, target: gosub_engine::Ta
 }
 
 // Close a leaf; collapse single-child containers
-pub(crate) fn close_leaf(root: &LayoutHandle, target: gosub_engine::TabId) -> bool {
-    fn rec(n: &mut LayoutNode, target: gosub_engine::TabId) -> bool {
+pub(crate) fn close_leaf(root: &LayoutHandle, target: TabId) -> bool {
+    fn rec(n: &mut LayoutNode, target: TabId) -> bool {
         match n {
             LayoutNode::Leaf(t) => *t == target,
             LayoutNode::Rows(v) => {
@@ -153,7 +154,7 @@ pub(crate) fn close_leaf(root: &LayoutHandle, target: gosub_engine::TabId) -> bo
 }
 
 // Collect all leaves (TabIds)
-pub(crate) fn collect_leaves(node: &LayoutNode, out: &mut Vec<gosub_engine::TabId>) {
+pub(crate) fn collect_leaves(node: &LayoutNode, out: &mut Vec<TabId>) {
     match node {
         LayoutNode::Leaf(t) => out.push(*t),
         LayoutNode::Rows(v) | LayoutNode::Cols(v) => v.iter().for_each(|c| collect_leaves(c, out)),

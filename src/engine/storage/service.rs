@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex, mpsc};
 use anyhow::Result;
-use crate::{TabId, ZoneId};
+use crate::tab::TabId;
+use crate::zone::ZoneId;
 use super::area::{LocalStore, SessionStore, StorageArea};
 use super::event::{StorageEvent, StorageScope};
 use super::types::PartitionKey;
@@ -148,7 +149,8 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
-    use crate::{ZoneId, TabId};
+    use crate::zone::ZoneId;
+    use crate::tab::TabId;
     use crate::storage::InMemorySessionStore;
 
     // --- Tiny in-memory StorageArea for tests ---
@@ -184,7 +186,7 @@ mod tests {
     // --- In-memory LocalStore keyed by (zone, partition, origin) that shares areas ---
     #[derive(Default)]
     struct TestLocalStore {
-        areas: Mutex<HashMap<(ZoneId, PartitionKey, Origin), Arc<dyn StorageArea>>>,
+        areas: Mutex<HashMap<(ZoneId, PartitionKey, url::Origin), Arc<dyn StorageArea>>>,
     }
 
     impl LocalStore for TestLocalStore {
@@ -192,7 +194,7 @@ mod tests {
             &self,
             zone: ZoneId,
             part: &PartitionKey,
-            origin: &Origin
+            origin: &url::Origin
         ) -> Result<Arc<dyn StorageArea>> {
             let key = (zone, part.clone(), origin.clone());
             let mut g = self.areas.lock().unwrap();
@@ -203,10 +205,12 @@ mod tests {
     }
 
     // --- helpers ---
-    fn z() -> ZoneId { ZoneId::new() } // adjust if your API differs
-    fn t() -> TabId { TabId::new() }   // adjust if your API differs
-    fn o(s: &str) -> Origin { Origin(s.to_string()) }
-
+    fn z() -> ZoneId { ZoneId::new() }
+    fn t() -> TabId { TabId::new() }
+    fn o(s: &str) -> url::Origin {
+        let url = url::Url::parse(s).expect("valid URL");
+        url.origin()
+    }
     fn recv_ok(rx: &Subscription) -> StorageEvent {
         rx.recv_timeout(Duration::from_millis(200)).expect("expected event within 200ms")
     }

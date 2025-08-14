@@ -43,4 +43,8 @@ pub enum EngineError {
     /// The zone id already exists
     #[error("Zone already exists")]
     ZoneAlreadyExists,
+
+    /// An invalid configuration was provided for the engine or zone
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
 }
