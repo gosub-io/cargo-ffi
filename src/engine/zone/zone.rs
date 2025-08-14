@@ -54,7 +54,7 @@ use crate::zone::ZoneConfig;
 ///
 /// let mut engine = GosubEngine::new(None);
 /// let fixed_id = ZoneId::from("123e4567-e89b-12d3-a456-426614174000");
-/// let zone_id = engine.zone()
+/// let zone_id = engine.zone_builder()
 ///     .id(fixed_id)
 ///     .create()
 ///     .unwrap();
@@ -138,7 +138,7 @@ impl Display for ZoneId {
 /// ));
 ///
 /// // Create a zone with custom config and storage
-/// let zone_id = engine.zone()
+/// let zone_id = engine.zone_builder()
 ///     .id(ZoneId::new())
 ///     .storage(storage.clone())
 ///     .create()
@@ -212,6 +212,7 @@ impl Zone {
         zone_id: ZoneId,
         config: ZoneConfig,
         storage: Arc<StorageService>,
+        cookie_jar: Option<CookieJarHandle>,
     ) -> Self {
 
         // We generate the color by using the zone id as a seed
@@ -225,6 +226,8 @@ impl Zone {
 
         let storage_rx = storage.subscribe();
 
+        let cookie_jar = cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
+
         Self {
             id: zone_id,
             title: "Untitled Zone".to_string(),
@@ -237,7 +240,7 @@ impl Zone {
             storage,
             storage_rx,
 
-            cookie_jar: Arc::new(RwLock::new(DefaultCookieJar::new())),
+            cookie_jar,
             password_store: PasswordStore::new(),
             shared_flags: SharedFlags {
                 share_autocomplete: false,
@@ -249,9 +252,9 @@ impl Zone {
     }
 
     // Creates a new zone with a random ID and the provided configuration
-    pub fn new(config: ZoneConfig, storage: Arc<StorageService>) -> Self {
+    pub fn new(config: ZoneConfig, storage: Arc<StorageService>, cookie_jar: Option<CookieJarHandle>) -> Self {
         let zone_id = ZoneId::new();
-        Zone::new_with_id(zone_id, config, storage)
+        Zone::new_with_id(zone_id, config, storage, cookie_jar)
     }
 
     pub fn set_title(&mut self, title: &str) {

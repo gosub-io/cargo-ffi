@@ -24,7 +24,7 @@
 //! use url::Url;
 //!
 //! let mut engine = GosubEngine::new(None);
-//! let zone_id = engine.zone().create().unwrap();
+//! let zone_id = engine.zone_builder().create().unwrap();
 //!
 //! // Create a tab
 //! let tab_id = engine.open_tab(zone_id, &Viewport::new(0, 0, 800, 600)).unwrap();

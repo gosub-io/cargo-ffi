@@ -1,5 +1,5 @@
 use gosub_engine::{GosubEngine, EngineCommand, EngineEvent, Viewport};
-use gosub_engine::cookies::{CookieStore, SqliteCookieStore};
+use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::zone::ZoneId;
 use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
 use gtk4::prelude::*;
@@ -35,17 +35,11 @@ fn main() {
         let viewport = Viewport::new(0, 0, 800, 600);
 
         // Let's create our default zone
-        let zone_id = engine.borrow_mut().zone()
+        let zone_id = engine.borrow_mut().zone_builder()
             .id(ZoneId::from(DEFAULT_MAIN_ZONE))
             .storage(storage.clone())
+            .cookie_store(cookie_store.clone())
             .create().expect("zone creation failed");
-
-        // Add sqlite cookie jar to the zone
-        let zone_arc = engine.borrow_mut().get_zone_mut(zone_id).expect("get_zone_mut failed");
-        let mut zone = zone_arc.lock().expect("lock zone failed");
-        let cookie_jar = cookie_store.get_jar(zone_id).expect("get cookie jar failed");
-        zone.set_cookie_jar(cookie_jar);
-        drop(zone);
 
         // Start with 1 tab
         let tab0 = engine.borrow_mut().open_tab(zone_id, &viewport).expect("open_tab failed");

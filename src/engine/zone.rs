@@ -28,7 +28,7 @@
 //! use gosub_engine::GosubEngine;
 //!
 //! let mut engine = GosubEngine::new(None);
-//! let zone_id = engine.zone().create().unwrap();
+//! let zone_id = engine.zone_builder().create().unwrap();
 //! println!("Created zone: {:?}", zone_id);
 //! ```
 //!
@@ -40,7 +40,7 @@
 //!
 //! let mut engine = GosubEngine::new(None);
 //!
-//! let zone_id = engine.zone()
+//! let zone_id = engine.zone_builder()
 //!     .id(ZoneId::new())
 //!     .create()
 //!     .unwrap();
@@ -49,17 +49,19 @@
 //! Attaching a persistent cookie jar to a zone:
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//! use gosub_engine::cookies::{SqliteCookieStore, PersistentCookieJar};
+//! use std::sync::{Arc, RwLock};
+//! use gosub_engine::cookies::{SqliteCookieStore, PersistentCookieJar, DefaultCookieJar};
 //! use gosub_engine::GosubEngine;
 //! use gosub_engine::zone::ZoneId;
 //!
-//! let mut engine = GosubEngine::new(None);
-//! let zone_id = engine.zone().id(ZoneId::new()).create().unwrap();
+//! let jar = DefaultCookieJar::new();
 //!
-//! let jar = PersistentCookieJar::new(Arc::new(SqliteCookieStore::new("cookies.db".into())));
-//! let zone_arc = engine.get_zone_mut(zone_id).unwrap();
-//! zone_arc.lock().unwrap().set_cookie_jar(jar);
+//! let mut engine = GosubEngine::new(None);
+//! let zone_id = engine.zone_builder()
+//!     .cookie_jar(Arc::new(RwLock::new(jar)))
+//!     .create()
+//!     .unwrap();
+//!
 //! ```
 //!
 //! See [`Zone`] docs for field-level details.

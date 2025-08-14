@@ -35,27 +35,12 @@
 //!
 //! let mut engine = GosubEngine::new(None);
 //!
-//! // Create the zone
-//! let zone_id = engine.zone().id(ZoneId::new()).create().unwrap();
-//!
 //! // Open or create the SQLite cookie store
-//! let store = SqliteCookieStore::new("cookies.db".into());
-//! let inner_jar = DefaultCookieJar::new();
-//! let arc_jar: CookieJarHandle = Arc::new(RwLock::new(inner_jar));
+//! let cookie_store = SqliteCookieStore::new("cookies.db".into());
 //!
-//! // Wrap it in a persistent cookie jar
-//! let jar = PersistentCookieJar::new(zone_id, arc_jar.clone(), store.clone());
+//! // Create the zone with a persistent cookie jar taken from the sqlite cookie store
+//! let zone_id = engine.zone_builder().cookie_store(cookie_store).create().unwrap();
 //!
-//! // Attach to the zone
-//! let zone = engine.get_zone_mut(zone_id).unwrap();
-//! zone.lock().unwrap().set_cookie_jar(jar);
-//! ```
-//!
-//! For ephemeral sessions:
-//!
-//! ```no_run
-//! use gosub_engine::cookies::DefaultCookieJar;
-//! let jar = DefaultCookieJar::new();
 //! ```
 //!
 //! # Choosing a backend

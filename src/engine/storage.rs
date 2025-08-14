@@ -54,22 +54,10 @@
 //! let mut engine = gosub_engine::GosubEngine::new(None);
 //!
 //! // Create a zone and attach the storage service
-//! let zone_id = engine.zone()
+//! let zone_id = engine.zone_builder()
 //!     .storage(storage.clone())
 //!     .create()
 //!     .unwrap();
-//! ```
-//!
-//! # Example: Listening for storage events
-//!
-//! ```no_run
-//! use gosub_engine::storage::{StorageEvent, Subscription};
-//! use std::sync::Arc;
-//!
-//! let subscription: Subscription = /* obtain from StorageService */;
-//! subscription.on_change(|event: StorageEvent| {
-//!     println!("Storage changed: {:?}", event);
-//! });
 //! ```
 //!
 //! # See also
