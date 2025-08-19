@@ -435,9 +435,7 @@ fn main() {
             // Which pane is under the pointer?
             let (w, h) = *last_size_scroll.borrow();
             if let Some(tab_id) = find_leaf_at(&root_scroll.borrow(), Rect { x:0, y:0, w, h }, px, py) {
-                // Scale deltas: touchpads give smooth deltas; mouse wheel often ~±1 step.
-                // Tweak this multiplier for your content’s line/px semantics.
-                let line_h = 20.0_f64; // about 40 px per "wheel step"
+                let line_h = 20.0_f64;
                 let dx_px = (dx * line_h) as f32;
                 let dy_px = (dy * line_h) as f32;
 

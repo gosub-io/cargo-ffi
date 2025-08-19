@@ -429,8 +429,9 @@ impl Tab {
             EngineEvent::Scroll { dx, dy } => {
                 let cur_vp = self.context.viewport();
                 self.set_viewport(Viewport::new(
-                    cur_vp.x + dx as i32,
-                    cur_vp.y + dy as i32,
+                    /// We should do clamp(), but we don't know the max x/y sizes of the rendered document
+                    (cur_vp.x + dx as i32).max(0),
+                    (cur_vp.y + dy as i32).max(0),
                     cur_vp.width,
                     cur_vp.height
                 ));

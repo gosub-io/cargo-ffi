@@ -36,9 +36,22 @@ impl RenderBackend for CairoBackend {
             .downcast_mut::<CairoSurface>()
             .expect("CairoBackend used with non-Cairo surface");
 
+        /// Viewport offset. We must take this into account when rendering items.
+        let vp = ctx.viewport();
+        let offset_x = vp.x as f64;
+        let offset_y = vp.y as f64;
+
         {
             // Get the cairo context (CR) from the surface.
             let cr = s.ctx()?;
+
+            let size = s.size();
+            cr.rectangle(0.0, 0.0, size.width as f64, size.height as f64);
+            cr.clip();
+
+
+            let _ = cr.save();
+            cr.translate(-offset_x, -offset_y);
 
             for item in ctx.render_list().items.iter() {
                 match item {
@@ -66,7 +79,10 @@ impl RenderBackend for CairoBackend {
                     }
                 }
             }
+
+            let _ = cr.restore();
         }
+
 
         s.frame_id = s.frame_id.wrapping_add(1);
         Ok(())
