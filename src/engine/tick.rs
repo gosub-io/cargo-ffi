@@ -87,10 +87,3 @@ pub struct DirtyFlags {
     /// Viewport size or position has changed.
     pub viewport: bool,
 }
-
-impl DirtyFlags {
-    // /// Returns `true` if any dirty flag is set.
-    // pub fn any(&self) -> bool {
-    //     self.render_tree || self.layout || self.paint || self.tiles || self.layers || self.scroll || self.viewport
-    // }
-}

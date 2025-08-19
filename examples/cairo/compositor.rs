@@ -39,6 +39,7 @@ impl GtkCompositor {
     /// Requests a redraw by invoking the stored callback.
     /// This is typically triggered when new frames arrive.
     fn request_redraw(&self) {
+        println!("GtkCompositor: Requesting redraw");
         (self.redraw_cb)();
     }
 
@@ -63,7 +64,6 @@ impl GtkCompositor {
     ///
     /// This can be used to update or replace the handle in place.
     pub fn frame_for_mut(&mut self, tab_id: TabId) -> Option<&mut ExternalHandle> {
-        println!("GtkCompositor: Getting mutable frame for tab {:?}", tab_id);
         self.frames.get_mut(&tab_id)
     }
 }

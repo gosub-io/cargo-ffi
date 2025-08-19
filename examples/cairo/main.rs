@@ -35,10 +35,9 @@ fn main() {
     ));
 
     app.connect_activate(move |app| {
-        // Here we define a callback to the renderer..   We need to fix that..  useragent should not be aware of the rendering on its surface.
         let backend = gosub_engine::render::backends::cairo::CairoBackend::new();
         let engine = Rc::new(RefCell::new(GosubEngine::new(None, Box::new(backend))));
-        let viewport = gosub_engine::render::Viewport::new(0, 0, 800, 600);
+        let viewport = Viewport::new(0, 0, 800, 600);
 
         // Let's create our default zone
         let zone_id = engine.borrow_mut().zone_builder()
@@ -192,7 +191,7 @@ fn main() {
             let mut pairs = Vec::new();
             compute_layout(&root_split.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
             let mut eng = eng_split.borrow_mut();
-            for (tid, r) in pairs { let _ = eng.handle_event(tid, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
+            for (tab_id, r) in pairs { let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
             drawing_split.queue_draw();
         }));
 
@@ -210,7 +209,7 @@ fn main() {
             let mut pairs = Vec::new();
             compute_layout(&root_split2.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
             let mut eng = eng_split2.borrow_mut();
-            for (tid, r) in pairs { let _ = eng.handle_event(tid, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
+            for (tab_id, r) in pairs { let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
             drawing_split2.queue_draw();
         }));
 
@@ -230,7 +229,7 @@ fn main() {
                 let mut pairs = Vec::new();
                 compute_layout(&root_close.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
                 let mut eng = eng_close.borrow_mut();
-                for (tid, r) in pairs { let _ = eng.handle_event(tid, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
+                for (tab_id, r) in pairs { let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
                 drawing_close.queue_draw();
             }
         }));
@@ -240,7 +239,7 @@ fn main() {
         let active_draw = active_tab.clone();
         let compositor_draw = compositor.clone();
         drawing_area.set_draw_func(move |_area, cr, w, h| {
-            let active = *active_draw.borrow();
+            let active_tab_id = *active_draw.borrow();
 
             // Compute the tab layouts and store in pairs
             let mut pairs = Vec::new();
@@ -281,11 +280,6 @@ fn main() {
                             st
                         ).expect("cairo surface over pixels");
                         surface.flush();
-
-                        cr.save().unwrap();
-                        cr.set_source_rgb(0.58, 0.02, 0.40);
-                        cr.paint().unwrap();
-                        cr.restore().unwrap();
 
                         cr.save().unwrap();
                         cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
@@ -353,8 +347,8 @@ fn main() {
             }
 
             // Draw an outline around the active pane
-            for (tid, r) in &pairs {
-                if *tid == active {
+            for (tab_id, r) in &pairs {
+                if *tab_id == active_tab_id {
                     cr.save().unwrap();
                     cr.set_source_rgba(0.2, 0.6, 1.0, 1.0);
                     cr.set_line_width(2.0);
@@ -374,8 +368,8 @@ fn main() {
             let mut pairs = Vec::new();
             compute_layout(&root_resize.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
             let mut eng = eng_resize.borrow_mut();
-            for (tid, r) in pairs {
-                let _ = eng.handle_event(tid, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 });
+            for (tab_id, r) in pairs {
+                let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 });
             }
         }));
 
@@ -387,8 +381,8 @@ fn main() {
         let last_size_pick = last_size.clone();
         click.connect_pressed(move |_gest, _n_press, x, y| {
             let (w, h) = *last_size_pick.borrow();
-            if let Some(tid) = find_leaf_at(&root_pick.borrow(), Rect { x:0, y:0, w, h }, x, y) {
-                *active_pick.borrow_mut() = tid;
+            if let Some(tab_id) = find_leaf_at(&root_pick.borrow(), Rect { x:0, y:0, w, h }, x, y) {
+                *active_pick.borrow_mut() = tab_id;
                 drawing_pick.queue_draw();
             }
         });
@@ -399,6 +393,14 @@ fn main() {
         let active_entry = active_tab.clone();
         let draw_entry = drawing_area.clone();
         address_entry.connect_activate(clone!(@strong eng_entry, @strong active_entry, @strong draw_entry => move |entry| {
+            let composed_url = entry.text();
+
+            // Check if composed_url starts with a scheme like http:// or https://
+            if !composed_url.starts_with("http://") && !composed_url.starts_with("https://") {
+                // If not, prepend https://
+                entry.set_text(&format!("https://{}", composed_url));
+            }
+
             let Ok(url) = Url::parse(&entry.text()) else {
                 return;
             };
@@ -432,7 +434,7 @@ fn main() {
 
             // Which pane is under the pointer?
             let (w, h) = *last_size_scroll.borrow();
-            if let Some(tid) = find_leaf_at(&root_scroll.borrow(), Rect { x:0, y:0, w, h }, px, py) {
+            if let Some(tab_id) = find_leaf_at(&root_scroll.borrow(), Rect { x:0, y:0, w, h }, px, py) {
                 // Scale deltas: touchpads give smooth deltas; mouse wheel often ~±1 step.
                 // Tweak this multiplier for your content’s line/px semantics.
                 let line_h = 20.0_f64; // about 40 px per "wheel step"
@@ -440,7 +442,7 @@ fn main() {
                 let dy_px = (dy * line_h) as f32;
 
                 // Send to the engine (you implement what Scroll does per tab)
-                let _ = eng_scroll.borrow_mut().handle_event(tid, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
+                let _ = eng_scroll.borrow_mut().handle_event(tab_id, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
 
                 // Ask GTK to redraw
                 drawing_scroll.queue_draw();
@@ -461,11 +463,11 @@ fn main() {
         toolbar.append(&btn_set_ss);
         toolbar.append(&btn_get_ss);
 
-        let urlbar = GtkBox::new(Orientation::Horizontal, 1);
-        urlbar.append(&address_entry);
+        let url_bar = GtkBox::new(Orientation::Horizontal, 1);
+        url_bar.append(&address_entry);
 
         let vbox = GtkBox::new(Orientation::Vertical, 6);
-        vbox.append(&urlbar);
+        vbox.append(&url_bar);
         vbox.append(&toolbar);
         vbox.append(&drawing_area);
 
@@ -497,12 +499,15 @@ fn main() {
             compute_layout(&root_fc.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
             let mut redraw = false;
-            for (tid, _r) in pairs {
-                if let Some(res) = results.get(&tid) {
+            for (tab_id, _r) in pairs {
+                if let Some(res) = results.get(&tab_id) {
                     if res.page_loaded {
-                        println!("Page loaded for tab {:?}", tid);
+                        println!("Tab {:?} page loaded", tab_id);
                     }
-                    if res.needs_redraw { redraw = true; }
+                    if res.needs_redraw {
+                        println!("Tab {:?} needs redraw", tab_id);
+                        redraw = true;
+                    }
                 }
             }
 

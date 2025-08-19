@@ -40,7 +40,7 @@
 use crate::render::backend::SurfaceSize;
 
 /// Represents the viewport for rendering.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Copy)]
 pub struct Viewport {
     /// Horizontal offset in pixels from the origin.
     pub x: i32,

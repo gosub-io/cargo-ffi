@@ -148,19 +148,10 @@ impl BrowsingContext {
         let mut rl = RenderList::default();
 
         // Example scene: clear + show raw HTML as text
-        rl.items.push(DisplayItem::Clear { color: Color::new(0.16, 0.27, 0.5, 1.0) });
+        rl.items.push(DisplayItem::Clear { color: Color::new(0.75, 0.75, 0.75, 1.0) });
 
-        // Display a dummy rect in the background
-        rl.items.push(DisplayItem::Rect {
-            x: 50.0,
-            y: 50.0,
-            w: 200.0,
-            h: 100.0,
-            color: Color::new(0.1, 0.2, 1.0, 1.0),
-        });
-
-        // Text color: white
-        let c = Color::new(1.0, 1.0, 1.0, 1.0);
+        // Text color: black
+        let c = Color::new(0.0, 0.0, 0.0, 1.0);
         let mut y = 24.0;
         for line in self.raw_html.lines().take(600) {
             rl.items.push(DisplayItem::TextRun { x: 14.0, y, text: line.to_string(), size: 13.0, color: c });

@@ -156,10 +156,6 @@ pub struct Tab {
     /// State of the tab (idle, loading, loaded, etc.)
     pub state: TabState,
 
-
-    // /// Current (or wanted) viewport for rendering
-    // pub viewport: Viewport,
-
     /// Current tab mode (idle, live, background)
     pub mode: TabMode,
     /// When was the last tick?
@@ -189,12 +185,17 @@ pub struct Tab {
 
 
     /// Backend rendering
-    // surface_provider: Arc<dyn SurfaceProvider>, // Provider for surfaces
     pub thumbnail: Option<RgbaImage>,           // Thumbnail image of the tab in case the tab is not visible
     surface: Option<Box<dyn ErasedSurface>>,    // Surface on which the browsing context can render the tab
     surface_size: SurfaceSize,                  // Size of the surface (does not have to match viewport)
     present_mode: PresentMode,                  // Present mode for the surface?
-    // is_visible: bool,                           // Is the tab visible? (e.g., in a tab switcher)
+
+    /// The viewport that was committed for the in-flight/last render
+    committed_viewport: Viewport,
+    /// The newest viewport requested by the tab, which may differ from the committed one.
+    desired_viewport: Viewport,
+    /// Set when a resize arrives while rendering. Causes an immediate re-render after finihsing the current rendering.
+    dirty_after_inflight: bool
 }
 
 impl Tab {
@@ -231,15 +232,18 @@ impl Tab {
             partition_key: PartitionKey::None,      // Start with no partition key
             partition_policy: PartitionPolicy::TopLevelOrigin,
 
-            // surface_provider,
             surface: None,                 // No surface initially
             surface_size: SurfaceSize { width: 1, height: 1 },
             present_mode: PresentMode::Fifo,
             thumbnail: None,               // No thumbnail initially
-            // is_visible: true,                  // Tab is visible by default
+
+            committed_viewport: viewport,
+            desired_viewport: viewport,
+            dirty_after_inflight: false,
         };
 
-        tab.context.set_viewport(viewport.clone());
+        tab.context.set_viewport(viewport);
+
 
         tab
     }
@@ -274,8 +278,15 @@ impl Tab {
             height: viewport.height,
         };
 
-        self.context.set_viewport(viewport.clone());
-        self.state = TabState::PendingRendering(viewport);
+        self.context.set_viewport(viewport);
+        self.desired_viewport = viewport;
+
+        if let TabState::Rendering(_) = self.state {
+            // Mark the fact that we have triggered a resize during the rendering of the tab
+            self.dirty_after_inflight = true;
+        } else {
+            self.state = TabState::PendingRendering(self.desired_viewport);
+        }
     }
 
     /// Advance the tab’s state machine once and return a [`TickResult`]
@@ -290,6 +301,10 @@ impl Tab {
         host: &mut impl CompositorSink,
     ) -> anyhow::Result<TickResult> {
         let mut result = TickResult::default();
+
+        if self.state != TabState::Idle {
+            println!("Tab tick: {:?} State: {:?}", self.id, self.state.clone());
+        }
 
         match self.state.clone() {
             TabState::Idle => {
@@ -345,43 +360,52 @@ impl Tab {
             // Start rendering after we finished loading
             TabState::Loaded => {
                 // println!("Tabstate loaded, starting rendering");
-                self.state = TabState::PendingRendering(self.context.viewport().clone());
+                self.state = TabState::PendingRendering(*self.context.viewport());
             }
 
-            TabState::PendingRendering(viewport) => {
-                // Make sure we have a surface to render on
-                self.ensure_surface(backend, viewport.as_size())?;
-
-                self.state = TabState::Rendering(viewport);
+            TabState::PendingRendering(_viewport) => {
+                if self.committed_viewport != self.desired_viewport {
+                    self.committed_viewport = self.desired_viewport;
+                    self.surface_size = self.committed_viewport.as_size();
+                }
+                self.state = TabState::Rendering(self.committed_viewport);
             }
 
             // Normally, rendering will take a while (async). Currently, it doesn't so we move directly
             // to a Rendered state.
             TabState::Rendering(viewport) => {
+                // Make sure we have a surface to render on
+                self.ensure_surface(backend, viewport.as_size())?;
 
                 // Rebuild the render list if needed
                 self.context.rebuild_render_list_if_needed();
+
                 if let Some(ref mut surf) = self.surface {
                     backend.render(&mut self.context, surf.as_mut())?;
-                }
 
-                // Submit the frame to the compositor
-                if let Some(ref mut surf) = self.surface {
                     if let Some(handle) = backend.external_handle(surf.as_mut()) {
                         host.submit_frame(self.id, handle);
                     }
                 }
 
-                self.state = TabState::Rendered(viewport.clone());
-                // println!("Tab[{:?}]: VP: {:?} State: {:?}\n", self.id, viewport, self.state.clone());
+                self.state = TabState::Rendered(viewport);
             }
 
             // Notify the outside world that we have something to paint, and we can go back to idle state.
             TabState::Rendered(_viewport) => {
-                self.state = TabState::Idle;
-                // println!("Tab[{:?}]: Viewport rendered: {:?} State: {:?}\n", self.id, viewport, self.state.clone());
-                // println!("***** NEEDS REDRAW *****");
+                // Tell the world our surface is ready to paint
                 result.needs_redraw = true;
+
+                if self.dirty_after_inflight || self.committed_viewport != self.desired_viewport {
+                    // If we have a dirty viewport, we need to re-render it
+                    self.dirty_after_inflight = false;
+                    self.state = TabState::PendingRendering(self.desired_viewport);
+                } else {
+                    // If we are not dirty, we can go back to idle state
+                    self.state = TabState::Idle;
+                }
+
+                self.state = TabState::Idle;
             }
 
             TabState::Failed(error_msg) => {
@@ -403,10 +427,8 @@ impl Tab {
     pub(crate) fn handle_event(&mut self, event: EngineEvent) {
         match event {
             EngineEvent::Scroll { dx, dy } => {
-                // println!("Scrolling tab {:?} by dx: {}, dy: {}", self.id, dx, dy);
                 let cur_vp = self.context.viewport();
-
-                self.context.set_viewport(Viewport::new(
+                self.set_viewport(Viewport::new(
                     cur_vp.x + dx as i32,
                     cur_vp.y + dy as i32,
                     cur_vp.width,
@@ -493,8 +515,7 @@ impl Tab {
         // }
     }
 
-
-
+    /// Ensure the tab has a surface of the given size, creating it if necessary.
     fn ensure_surface(&mut self, backend: &dyn RenderBackend, size: SurfaceSize) -> anyhow::Result<()> {
         if let Some(ref surf) = self.surface {
             if surf.size() == size {
@@ -504,9 +525,4 @@ impl Tab {
         self.surface = Some(backend.create_surface(size, self.present_mode)?);
         Ok(())
     }
-
-    // /// Get the current surface for rendering. Returns `None` if no surface is set.
-    // pub fn surface(&self) -> Option<&Box<dyn ErasedSurface>> {
-    //     self.surface.as_ref()
-    // }
 }

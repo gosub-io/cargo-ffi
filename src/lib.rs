@@ -14,14 +14,13 @@
 //! # fn main() -> Result<(), gosub_engine::EngineError> {
 //! use std::str::FromStr;
 //! use url::Url;
-//! use gosub_engine::{EngineError, MouseButton, Viewport};
+//! use gosub_engine::{EngineError, MouseButton};
 //!
 //! let mut engine = gosub_engine::GosubEngine::new(None);
 //! let zone_id = engine.zone_builder().create()?;
 //!
 //! // Set up your viewport however your app does it
-//! let viewport = Viewport::new(0, 0, 800, 600);
-//! let tab_id = engine.open_tab_in_zone(zone_id, &viewport)?;
+//! let tab_id = engine.open_tab_in_zone(zone_id)?;
 //!
 //! // Drive the engine
 //! let _results = engine.tick();
