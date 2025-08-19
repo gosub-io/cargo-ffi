@@ -1,6 +1,7 @@
 // src/engine/zone.rs
 //! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
 //!
+use crate::render::backend::CompositorSink;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex, RwLock};
@@ -8,7 +9,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 use crate::engine::tab::{Tab, TabId, TabMode};
-use crate::viewport::Viewport;
 use crate::EngineError;
 use crate::engine::tick::TickResult;
 use uuid::Uuid;
@@ -20,6 +20,8 @@ use crate::engine::zone::password_store::PasswordStore;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 use crate::engine::storage::types::compute_partition_key;
+use crate::render::backend::RenderBackend;
+use crate::render::Viewport;
 use crate::zone::ZoneConfig;
 
 /// A unique identifier for a [`Zone`](crate::zone::Zone) within a [`GosubEngine`](crate::GosubEngine).
@@ -252,7 +254,11 @@ impl Zone {
     }
 
     // Creates a new zone with a random ID and the provided configuration
-    pub fn new(config: ZoneConfig, storage: Arc<StorageService>, cookie_jar: Option<CookieJarHandle>) -> Self {
+    pub fn new(
+        config: ZoneConfig,
+        storage: Arc<StorageService>,
+        cookie_jar: Option<CookieJarHandle>,
+    ) -> Self {
         let zone_id = ZoneId::new();
         Zone::new_with_id(zone_id, config, storage, cookie_jar)
     }
@@ -278,13 +284,19 @@ impl Zone {
     }
 
     // Open a new tab into the zone
-    pub fn open_tab(&mut self, runtime: Arc<Runtime>, viewport: &Viewport) -> Result<TabId, EngineError> {
+    pub(crate) fn open_tab(&mut self, runtime: Arc<Runtime>, viewport: Viewport) -> Result<TabId, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
         let tab_id = TabId::new();
-        self.tabs.insert(tab_id, Arc::new(Mutex::new(Tab::new(self.id, runtime, viewport, Some(self.cookie_jar.clone())))));
+        self.tabs.  insert(tab_id, Arc::new(Mutex::new(Tab::new(
+            self.id,
+            runtime,
+            // self.surface_provider.clone(),
+            viewport,
+            Some(self.cookie_jar.clone()),
+        ))));
         Ok(tab_id)
     }
 
@@ -297,7 +309,11 @@ impl Zone {
     }
 
     // Ticks all tabs in the zone, returning a map of TabId to TickResult
-    pub fn tick_all_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
+    pub fn tick_all_tabs(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        host: &mut impl CompositorSink,
+    ) -> BTreeMap<TabId, TickResult> {
         let now = Instant::now();
         let mut results = BTreeMap::new();
 
@@ -317,8 +333,17 @@ impl Zone {
             }
             tab.last_tick = now;
 
-            let result = tab.tick();
-            results.insert(*tab_id, result);
+            match tab.tick(backend, host) {
+                Ok(result) => {
+                    // If tick was successful, update the tab's last successful tick time
+                    tab.last_tick = now;
+                    results.insert(*tab_id, result);
+                }
+                Err(e) => {
+                    // Log or handle the error as needed
+                    log::error!("Error ticking tab {:?}: {}", tab_id, e);
+                }
+            }
         }
 
         results
@@ -386,7 +411,7 @@ impl Zone {
         let origin = final_url.origin().clone();
         let local   = self.local_area(&tab.partition_key, &origin)?;
         let session = self.session_area(tab.id, &tab.partition_key, &origin);
-        tab.bind_storage(StorageHandles{ local, session }); // add on EngineInstance
+        tab.bind_storage(StorageHandles{ local, session });
         Ok(())
     }
 }

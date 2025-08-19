@@ -32,6 +32,7 @@ pub enum EngineEvent {
 }
 
 /// Commands that the engine need to execute
+#[derive(Debug, Clone)]
 pub enum EngineCommand {
     /// An url must be loaded inside the tab
     Navigate(Url),

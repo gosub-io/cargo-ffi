@@ -21,7 +21,7 @@ impl Default for EngineConfig {
             user_agent: DEFAULT_USER_AGENT.to_string(),
             max_zones: 10,
             default_zone_config: ZoneConfig {
-                max_tabs: 5,        // Default max tabs per group
+                max_tabs: 5,
             },
         }
     }

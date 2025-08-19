@@ -1,7 +1,7 @@
 //! Tab system: [`Tab`], [`Tick`](crate::engine::tick::TickResult), and [`TabId`].
 //!
 //! A **tab** is a single browsing context within a [`Zone`](crate::engine::zone::Zone):
-//! it owns an [`EngineInstance`](crate::EngineInstance), a [`Viewport`], and state
+//! it owns an [`BrowsingContext`](crate::BrowsingContext), a [`Viewport`], and state
 //! for loading+rendering a page. Tabs share zone resources such as cookies and storage.
 //!
 //! # Lifecycle
@@ -20,14 +20,14 @@
 //! # Example
 //!
 //! ```no_run
-//! use gosub_engine::{GosubEngine, Viewport, EngineCommand};
+//! use gosub_engine::{GosubEngine, EngineCommand};
 //! use url::Url;
 //!
 //! let mut engine = GosubEngine::new(None);
 //! let zone_id = engine.zone_builder().create().unwrap();
 //!
 //! // Create a tab
-//! let tab_id = engine.open_tab(zone_id, &Viewport::new(0, 0, 800, 600)).unwrap();
+//! let tab_id = engine.open_tab_in_zone(zone_id).unwrap();
 //!
 //! // Navigate
 //! engine.execute_command(tab_id, EngineCommand::Navigate(Url::parse("https://example.com").unwrap())).unwrap();
@@ -42,18 +42,19 @@
 
 use std::sync::Arc;
 use std::time::Instant;
-use gtk4::cairo;
 use serde::__private::from_utf8_lossy;
 use tokio::runtime::Runtime;
 use url::Url;
 use uuid::Uuid;
-use crate::{EngineCommand, EngineEvent, EngineInstance};
+use crate::{EngineCommand, EngineEvent};
+use crate::engine::BrowsingContext;
 use crate::engine::tick::TickResult;
-use crate::viewport::Viewport;
+use crate::render::Viewport;
 use crate::engine::cookies::CookieJarHandle;
 use crate::engine::storage::{PartitionKey, StorageEvent, StorageHandles};
 use crate::engine::storage::types::PartitionPolicy;
 use crate::engine::zone::ZoneId;
+use crate::render::backend::{CompositorSink, ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 
 /// A unique identifier for a browser tab within a [`GosubEngine`](crate::engine::GosubEngine).
 ///
@@ -105,11 +106,11 @@ pub enum TabState {
     PendingRendering(Viewport),
 
     /// The engine is producing a new surface for the current content.
-    Rendering,
+    Rendering(Viewport),
 
     /// A new surface is ready for painting. The next `tick()` typically
     /// returns to [`TabState::Idle`] and sets `needs_redraw = true` in [`TickResult`].
-    Rendered,
+    Rendered(Viewport),
 
     /// A fatal error occurred while loading or rendering.
     Failed(String),
@@ -134,7 +135,7 @@ pub enum TabMode {
 
 /// A single browsing context inside a [`Zone`](crate::engine::zone::Zone).
 ///
-/// A [`Tab`] owns an [`EngineInstance`](crate::EngineInstance) and tracks its
+/// A [`Tab`] owns an [`BrowsingContext`](crate::BrowsingContext) and tracks its
 /// viewport, loading/rendering state, current/pending URL, favicon/title, and
 /// per-tab storage partitioning. Tabs share the zone's cookie jar and storage.
 ///
@@ -149,13 +150,14 @@ pub struct Tab {
     pub id: TabId,
     /// ID of the zone in which this tab resides
     pub zone_id: ZoneId,
-    /// Engine instance running for this tab
-    pub instance: EngineInstance,
+    /// Browsing context running for this tab
+    pub context: BrowsingContext,
     /// State of the tab (idle, loading, loaded, etc.)
     pub state: TabState,
 
-    /// Current (or wanted) viewport for rendering
-    pub viewport: Viewport,
+
+    // /// Current (or wanted) viewport for rendering
+    // pub viewport: Viewport,
 
     /// Current tab mode (idle, live, background)
     pub mode: TabMode,
@@ -183,6 +185,15 @@ pub struct Tab {
     pub partition_key: PartitionKey,
     /// Storage partition policy
     pub partition_policy: PartitionPolicy,
+
+
+    /// Backend rendering
+    // surface_provider: Arc<dyn SurfaceProvider>, // Provider for surfaces
+    pub thumbnail: Option<RgbaImage>,           // Thumbnail image of the tab in case the tab is not visible
+    surface: Option<Box<dyn ErasedSurface>>,    // Surface on which the browsing context can render the tab
+    surface_size: SurfaceSize,                  // Size of the surface (does not have to match viewport)
+    present_mode: PresentMode,                  // Present mode for the surface?
+    // is_visible: bool,                           // Is the tab visible? (e.g., in a tab switcher)
 }
 
 impl Tab {
@@ -194,15 +205,15 @@ impl Tab {
     pub fn new(
         zone_id: ZoneId,
         runtime: Arc<Runtime>,
-        viewport: &Viewport,
+        // surface_provider: Arc<dyn SurfaceProvider>,
+        viewport: Viewport,
         cookie_jar: Option<CookieJarHandle>,
     ) -> Self {
-        Self {
+        let mut tab = Self {
             id: TabId::new(),
             zone_id,
             state: TabState::Idle,
-            instance: EngineInstance::new(runtime),
-            viewport: viewport.clone(),
+            context: BrowsingContext::new(runtime),
 
             favicon: vec![],                    // Placeholder for favicon data
             title: "New Tab".to_string(),       // Title of the new tab
@@ -218,7 +229,18 @@ impl Tab {
             cookie_jar,
             partition_key: PartitionKey::None,      // Start with no partition key
             partition_policy: PartitionPolicy::TopLevelOrigin,
-        }
+
+            // surface_provider,
+            surface: None,                 // No surface initially
+            surface_size: SurfaceSize { width: 1, height: 1 },
+            present_mode: PresentMode::Fifo,
+            thumbnail: None,               // No thumbnail initially
+            // is_visible: true,                  // Tab is visible by default
+        };
+
+        tab.context.set_viewport(viewport.clone());
+
+        tab
     }
 
     /// Navigate to a URL (string is parsed into a `Url`). On success, moves the
@@ -228,7 +250,7 @@ impl Tab {
             Ok(url) => url,
             Err(e) => {
                 // Can't parse string to a URL to load
-                eprintln!("Cannot parse URL: {}", e);
+                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.id, e);
                 return
             }
         };
@@ -237,17 +259,22 @@ impl Tab {
         self.is_loading = true;
     }
 
-    /// Bind local+session storage handles into the underlying engine instance.
+    /// Bind local+session storage handles into the underlying browsing context.
     /// Call this after creating the tab or when the zone’s storage changes.
     pub fn bind_storage(&mut self, storage: StorageHandles) {
-        self.instance.bind_storage(storage.local, storage.session);
+        self.context.bind_storage(storage.local, storage.session);
     }
 
     /// Set a new viewport and schedule a re-render
     /// by transitioning to [`TabState::PendingRendering`].
     pub fn set_viewport(&mut self, viewport: Viewport) {
-        self.viewport = viewport;
-        self.state = TabState::PendingRendering(self.viewport.clone())
+        self.surface_size = SurfaceSize {
+            width: viewport.width,
+            height: viewport.height,
+        };
+
+        self.context.set_viewport(viewport.clone());
+        self.state = TabState::PendingRendering(viewport);
     }
 
     /// Advance the tab’s state machine once and return a [`TickResult`]
@@ -256,7 +283,11 @@ impl Tab {
     /// **Returns**
     /// - `needs_redraw = true` when a new surface is ready to paint
     /// - `page_loaded = true` when a navigation commits
-    pub fn tick(&mut self) -> TickResult {
+    pub(crate) fn tick(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        host: &mut impl CompositorSink,
+    ) -> anyhow::Result<TickResult> {
         let mut result = TickResult::default();
 
         match self.state.clone() {
@@ -268,16 +299,16 @@ impl Tab {
             TabState::PendingLoad(url) => {
                 self.state = TabState::Loading;
                 self.is_loading = true;
-                self.instance.start_loading(url.clone());
                 self.pending_url = Some(url.clone());
+                self.context.start_loading(url.clone());
             }
 
             // Poll the loading task until it's completed (or failed)
             TabState::Loading => {
-                if let Some(done) = self.instance.poll_loading() {
+                if let Some(done) = self.context.poll_loading() {
                     match done {
                         Ok(resp) => {
-                            println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+                            // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
 
                             // Store cookies from the response in the cookie jar
                             if let Some(cookie_jar) = &self.cookie_jar {
@@ -290,16 +321,16 @@ impl Tab {
                             // Set tab state
                             self.state = TabState::Loaded;
                             self.is_loading = false;
-                            self.instance.set_raw_html(from_utf8_lossy(resp.body.as_slice()).to_string());
                             self.pending_url = None;
                             self.current_url = Some(resp.url.clone());
+                            self.context.set_raw_html(from_utf8_lossy(resp.body.as_slice()).as_ref());
 
                             // Set result
                             result.page_loaded = true;
                             result.commited_url = Some(resp.url.clone());
                         }
                         Err(e) => {
-                            println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+                            // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
 
                             self.state = TabState::Failed(e);
                             self.is_loading = false;
@@ -312,41 +343,57 @@ impl Tab {
 
             // Start rendering after we finished loading
             TabState::Loaded => {
-                println!("Tabstate loaded, starting rendering");
-                self.state = TabState::PendingRendering(self.viewport.clone());
+                // println!("Tabstate loaded, starting rendering");
+                self.state = TabState::PendingRendering(self.context.viewport().clone());
             }
 
             TabState::PendingRendering(viewport) => {
-                self.instance.start_rendering(viewport);
-                self.state = TabState::Rendering;
-            }
+                // Make sure we have a surface to render on
+                self.ensure_surface(backend, viewport.as_size())?;
 
-            // Notify the outside world that we have something to paint, and we can go back to idle state.
-            TabState::Rendered => {
-                self.state = TabState::Idle;
-                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
-
-                result.needs_redraw = true;
-            }
-
-            TabState::Failed(msg) => {
-                self.instance.render_error(&msg, self.viewport.clone());
-                self.state = TabState::Rendered;
-                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
-
-                result.needs_redraw = true;
+                self.state = TabState::Rendering(viewport);
             }
 
             // Normally, rendering will take a while (async). Currently, it doesn't so we move directly
             // to a Rendered state.
-            TabState::Rendering => {
-                self.state = TabState::Rendered;
-                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+            TabState::Rendering(viewport) => {
 
+                // Rebuild the render list if needed
+                self.context.rebuild_render_list_if_needed();
+                if let Some(ref mut surf) = self.surface {
+                    backend.render(&mut self.context, surf.as_mut())?;
+                }
+
+                // Submit the frame to the compositor
+                if let Some(ref mut surf) = self.surface {
+                    if let Some(handle) = backend.external_handle(surf.as_mut()) {
+                        host.submit_frame(self.id, handle);
+                    }
+                }
+
+                self.state = TabState::Rendered(viewport.clone());
+                // println!("Tab[{:?}]: VP: {:?} State: {:?}\n", self.id, viewport, self.state.clone());
+            }
+
+            // Notify the outside world that we have something to paint, and we can go back to idle state.
+            TabState::Rendered(_viewport) => {
+                self.state = TabState::Idle;
+                // println!("Tab[{:?}]: Viewport rendered: {:?} State: {:?}\n", self.id, viewport, self.state.clone());
+                // println!("***** NEEDS REDRAW *****");
+                result.needs_redraw = true;
+            }
+
+            TabState::Failed(error_msg) => {
+                // Something has failed. We need to show the error message so we set the raw HTML
+                // to the error message and trigger a redraw.
+                self.context.set_raw_html(error_msg.as_str());
+                self.state = TabState::Loaded;
+
+                result.needs_redraw = true;
             }
         }
 
-        result
+        Ok(result)
     }
 
 
@@ -355,14 +402,15 @@ impl Tab {
     pub(crate) fn handle_event(&mut self, event: EngineEvent) {
         match event {
             EngineEvent::Scroll { dx, dy } => {
-                println!("Scrolling tab {:?} by dx: {}, dy: {}", self.id, dx, dy);
+                // println!("Scrolling tab {:?} by dx: {}, dy: {}", self.id, dx, dy);
+                let cur_vp = self.context.viewport();
 
-                self.set_viewport(Viewport::new(
-                    self.viewport.x + dx as i32,
-                    self.viewport.y + dy as i32,
-                    self.viewport.width,
-                    self.viewport.height
-                ))
+                self.context.set_viewport(Viewport::new(
+                    cur_vp.x + dx as i32,
+                    cur_vp.y + dy as i32,
+                    cur_vp.width,
+                    cur_vp.height
+                ));
             }
             EngineEvent::MouseMove { x, y } => {
                 println!("Mouse moved on tab {:?} to position ({}, {})", self.id, x, y);
@@ -384,43 +432,43 @@ impl Tab {
             }
             EngineEvent::Resize { width, height } => {
                 println!("Resize event on tab {:?}: new size {}x{}", self.id, width, height);
-                self.set_viewport(Viewport::new(self.viewport.x, self.viewport.y, width, height))
+                let cur_vp = self.context.viewport();
+                self.set_viewport(Viewport::new(cur_vp.x, cur_vp.y, width, height))
             }
         }
     }
 
     /// Execute a high-level engine command (navigate, reload).
-    pub fn execute_command(&mut self, command: EngineCommand) {
+    pub(crate) fn execute_command(&mut self, command: EngineCommand) {
+        println!("Executing command in tab: {:?} {:?}", self.id, command);
         match command {
             EngineCommand::Navigate(url) => {
                 println!("Loading URL '{}' in tab {:?}", url, self.id);
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
-                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+                // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
             }
             EngineCommand::Reload() => {
                 let Some(url) = self.current_url.clone() else {
                     return;
                 };
 
-                println!("Reloading URL '{}' in tab {:?}", url, self.id);
+                // println!("Reloading URL '{}' in tab {:?}", url, self.id);
                 // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
-                println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
+                // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
             }
         }
     }
 
-    /// Borrow the current rendered surface, if any.
-    /// Paint this inside your toolkit’s draw callback.
-    pub fn get_surface(&self) -> Option<&cairo::ImageSurface> {
-        self.instance.surface()
-    }
+
+    /// Get the current snapshotted image of the tab.
+    pub fn thumbnail(&self) -> Option<&RgbaImage> { self.thumbnail.as_ref() }
 
 
     /// Dispatch a storage event to same-origin documents in this tab (placeholder).
     /// Intended for HTML5 storage event semantics.
-    pub fn dispatch_storage_event_to_same_origin_docs(
+    pub(crate) fn dispatch_storage_event_to_same_origin_docs(
         &mut self,
         _origin: &url::Origin,
         _include_iframes: bool,
@@ -443,4 +491,30 @@ impl Tab {
         //     }
         // }
     }
+
+
+
+    fn ensure_surface(&mut self, backend: &dyn RenderBackend, size: SurfaceSize) -> anyhow::Result<()> {
+        if let Some(ref surf) = self.surface {
+            if surf.size() == size {
+                return Ok(());
+            }
+        }
+        self.surface = Some(backend.create_surface(size, self.present_mode)?);
+        Ok(())
+    }
+
+    pub fn surface(&self) -> Option<&Box<dyn ErasedSurface>> {
+        self.surface.as_ref()
+    }
+
+    // fn render(&mut self, backend: &mut dyn RenderBackend, ctx: &mut BrowsingContext) -> anyhow::Result<()> {
+    //     self.ensure_surface(backend, ctx.viewport().as_size())?;
+    //     ctx.rebuild_render_list_if_needed();
+    //
+    //     if let Some(ref mut surf) = self.surface {
+    //         backend.render(ctx, surf.as_mut())?;
+    //     }
+    //     Ok(())
+    // }
 }

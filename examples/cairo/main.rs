@@ -1,4 +1,4 @@
-use gosub_engine::{GosubEngine, EngineCommand, EngineEvent, Viewport};
+use gosub_engine::{GosubEngine, EngineCommand, EngineEvent};
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::zone::ZoneId;
 use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
@@ -10,9 +10,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use url::Url;
+use gosub_engine::render::backend::ExternalHandle;
+use gosub_engine::render::Viewport;
+use crate::compositor::GtkCompositor;
 use crate::tiling::{close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle, LayoutNode, Rect};
 
 mod tiling;
+mod compositor;
 
 const DEFAULT_MAIN_ZONE : &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
 
@@ -31,8 +35,10 @@ fn main() {
     ));
 
     app.connect_activate(move |app| {
-        let engine = Rc::new(RefCell::new(GosubEngine::new(None)));
-        let viewport = Viewport::new(0, 0, 800, 600);
+        // Here we define a callback to the renderer..   We need to fix that..  useragent should not be aware of the rendering on its surface.
+        let backend = gosub_engine::render::backends::cairo::CairoBackend::new();
+        let engine = Rc::new(RefCell::new(GosubEngine::new(None, Box::new(backend))));
+        let viewport = gosub_engine::render::Viewport::new(0, 0, 800, 600);
 
         // Let's create our default zone
         let zone_id = engine.borrow_mut().zone_builder()
@@ -42,7 +48,7 @@ fn main() {
             .create().expect("zone creation failed");
 
         // Start with 1 tab
-        let tab0 = engine.borrow_mut().open_tab(zone_id, &viewport).expect("open_tab failed");
+        let tab0 = engine.borrow_mut().open_tab_in_zone(zone_id, viewport).expect("open_tab failed");
 
         let root: LayoutHandle = Rc::new(RefCell::new(LayoutNode::Leaf(tab0)));
         let active_tab = Rc::new(RefCell::new(tab0));
@@ -57,6 +63,14 @@ fn main() {
         drawing_area.set_content_width(800);
         drawing_area.set_content_height(600);
         drawing_area.set_focusable(true);
+
+        // The compositor will call `queue_draw` on the drawing area after a frame is submitted (do we want this?)
+        let compositor = Rc::new(RefCell::new(
+            GtkCompositor::new({
+                let da = drawing_area.clone();
+                move || da.queue_draw()
+            })
+        ));
 
         // Toolbar: Split Col, Split Row, Close Pane
         let btn_split_col = Button::with_label("Split Col");
@@ -170,7 +184,7 @@ fn main() {
         btn_split_col.connect_clicked(clone!(@strong eng_split, @strong root_split, @strong last_size_split, @strong drawing_split, @strong active_split => move |_| {
             // Open a new tab sized like the active pane
             let (w, h) = *last_size_split.borrow();
-            let new_tab = eng_split.borrow_mut().open_tab(zone_id, &Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)).expect("open_tab failed");
+            let new_tab = eng_split.borrow_mut().open_tab_in_zone(zone_id, Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)).expect("open_tab failed");
 
             let target = *active_split.borrow();
             split_leaf_into_cols(&root_split, target, vec![new_tab]);
@@ -189,7 +203,7 @@ fn main() {
         let active_split2 = active_tab.clone();
         btn_split_row.connect_clicked(clone!(@strong eng_split2, @strong root_split2, @strong last_size_split2, @strong drawing_split2, @strong active_split2 => move |_| {
             let (w, h) = *last_size_split2.borrow();
-            let new_tab = eng_split2.borrow_mut().open_tab(zone_id, &Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)).expect("open_tab failed");
+            let new_tab = eng_split2.borrow_mut().open_tab_in_zone(zone_id, Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)).expect("open_tab failed");
 
             let target = *active_split2.borrow();
             split_leaf_into_rows(&root_split2, target, vec![new_tab]);
@@ -222,30 +236,119 @@ fn main() {
         }));
 
         // Drawing area
-        let eng_draw = engine.clone();
         let root_draw = root.clone();
         let active_draw = active_tab.clone();
+        let compositor_draw = compositor.clone();
         drawing_area.set_draw_func(move |_area, cr, w, h| {
-            let mut pairs = Vec::new();
-            compute_layout(&root_draw.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
-            let eng = eng_draw.borrow();
             let active = *active_draw.borrow();
 
-            for (tid, r) in &pairs {
-                if let Some(surface) = eng.get_surface(*tid) {
-                    cr.save().unwrap();
-                    cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
-                    cr.clip();
-                    cr.translate(r.x as f64, r.y as f64);
+            // Compute the tab layouts and store in pairs
+            let mut pairs = Vec::new();
+            compute_layout(&root_draw.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
-                    let sw = surface.width() as f64;
-                    let sh = surface.height() as f64;
-                    if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
-                        cr.scale(r.w as f64 / sw, r.h as f64 / sh);
-                    }
-                    cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
-                    cr.paint().unwrap();
+            // Iterate all the tabs and draw their surfaces
+            for (tab_id, r) in &pairs {
+                let mut binding = compositor_draw.borrow_mut();
+                if binding.frame_for_mut(*tab_id).is_none() {
+                    // draw placeholder
+                    cr.save().unwrap();
+                    cr.set_source_rgb(0.25, 0.25, 0.30);
+                    cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
+                    cr.fill().unwrap();
                     cr.restore().unwrap();
+                    continue;
+                }
+
+                let Some(handle) = binding.frame_for_mut(*tab_id) else {
+                    continue;
+                };
+                match handle {
+                    ExternalHandle::CpuPixelsOwned { width, height, stride, pixels, .. } => {
+                        // ZERO-COPY: build a surface directly over `pixels` (Vec<u8>)
+                        let w = *width as i32;
+                        let h = *height as i32;
+                        let st = *stride as i32;
+
+                        // SAFETY: `pixels` lives until end of this arm; we drop the surface before `pixels` drops.
+                        let slice_static: &'static mut [u8] = unsafe {
+                            std::mem::transmute::<&mut [u8], &'static mut [u8]>(pixels.as_mut_slice())
+                        };
+                        let surface = gtk4::cairo::ImageSurface::create_for_data(
+                            slice_static,
+                            gtk4::cairo::Format::ARgb32,
+                            w,
+                            h,
+                            st
+                        ).expect("cairo surface over pixels");
+                        surface.flush();
+
+                        cr.save().unwrap();
+                        cr.set_source_rgb(0.58, 0.02, 0.40);
+                        cr.paint().unwrap();
+                        cr.restore().unwrap();
+
+                        cr.save().unwrap();
+                        cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+                        cr.clip();
+                        cr.translate(r.x as f64, r.y as f64);
+
+                        // Fit the frame into tile rect (simple scale-to-fill)
+                        let sw = *width as f64;
+                        let sh = *height as f64;
+                        if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
+                            cr.scale(r.w as f64 / sw, r.h as f64 / sh);
+                        }
+
+                        // If you need HiDPI: cr.scale(1.0/scale_factor, 1.0/scale_factor) before painting
+                        cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+                        cr.paint().unwrap();
+                        cr.restore().unwrap();
+                    },
+                    ExternalHandle::CpuPixelsPtr { width, height, stride, ptr } => {
+                        let w = *width as i32;
+                        let h = *height as i32;
+                        let st = *stride as i32;
+
+                        // ZERO-COPY: build a surface over the external buffer
+                        // SAFETY: `ptr` must be valid & mutable for (height * stride) bytes for the duration of paint.
+                        let data: &mut [u8] = unsafe {
+                            std::slice::from_raw_parts_mut(ptr.as_ptr(), (*height as usize) * (*stride as usize))
+                        };
+                        // SAFETY: same reasoning — surface dropped before `data` goes out of scope in this arm.
+                        let slice_static: &'static mut [u8] =
+                            unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(data) };
+
+                        let surface = gtk4::cairo::ImageSurface::create_for_data(
+                            slice_static,
+                            gtk4::cairo::Format::ARgb32,
+                            w,
+                            h,
+                            st
+                        ).expect("cairo surface over ptr");
+                        surface.flush();
+
+                        cr.save().unwrap();
+                        cr.set_source_rgb(0.58, 0.02, 0.40);
+                        cr.paint().unwrap();
+                        cr.restore().unwrap();
+
+                        cr.save().unwrap();
+                        cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+                        cr.clip();
+                        cr.translate(r.x as f64, r.y as f64);
+
+                        let sw = *width as f64;
+                        let sh = *height as f64;
+                        if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
+                            cr.scale(r.w as f64 / sw, r.h as f64 / sh);
+                        }
+                        cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+                        cr.paint().unwrap();
+                        cr.restore().unwrap();
+                    },
+                    _ => {
+                        eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
+                    }
                 }
             }
 
@@ -380,9 +483,10 @@ fn main() {
         let root_fc = root.clone();
         let drawing_fc = drawing_area.clone();
         let last_size_fc = last_size.clone();
+        let compositor_fc = compositor.clone();
         fc.connect_update(clone!(@strong drawing_fc, @strong eng_fc, @strong root_fc => move |_clk| {
             let mut eng_mut = eng_fc.borrow_mut();
-            let results = eng_mut.tick();
+            let results = eng_mut.tick(&mut *compositor_fc.borrow_mut());
 
             // If any leaf needs redraw, repaint
             let (w, h) = *last_size_fc.borrow();
@@ -398,7 +502,11 @@ fn main() {
                     if res.needs_redraw { redraw = true; }
                 }
             }
-            if redraw { drawing_fc.queue_draw(); }
+
+            if redraw {
+                println!("Requesting redraw in frame tick");
+                drawing_fc.queue_draw();
+            }
         }));
     });
 

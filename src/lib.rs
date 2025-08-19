@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+// #![forbid(unsafe_code)]
 // Optional but nice once docs are filled in:
 // #![deny(missing_docs)]
 // #![deny(rustdoc::broken_intra_doc_links)]
@@ -21,7 +21,7 @@
 //!
 //! // Set up your viewport however your app does it
 //! let viewport = Viewport::new(0, 0, 800, 600);
-//! let tab_id = engine.open_tab(zone_id, &viewport)?;
+//! let tab_id = engine.open_tab_in_zone(zone_id, &viewport)?;
 //!
 //! // Drive the engine
 //! let _results = engine.tick();
@@ -38,7 +38,7 @@
 //! ## Concepts
 //! - [`GosubEngine`] — the main entry point
 //! - [`Zone`](crate::zone::Zone) — user/session context (cookie jar, storage, tabs)
-//! - [`Tab`](crate::tab::Tab) — a single browsing context with an engine instance
+//! - [`Tab`](crate::tab::Tab) — a single tab with a dedicated browsing context
 //! - [`Viewport`] — target surface size/information
 //! - [`EngineEvent`], [`EngineCommand`] — how you drive tabs
 //!
@@ -51,15 +51,12 @@
 
 
 mod engine;
-mod viewport;
 mod net;
+pub mod render;
 
 pub use engine::{
-    EngineConfig, EngineCommand, EngineEvent, MouseButton,
-    EngineInstance, EngineError, GosubEngine,
+    EngineConfig, EngineCommand, EngineEvent, MouseButton, EngineError, GosubEngine,
 };
-
-pub use viewport::Viewport;
 
 #[doc(inline)]
 pub use engine::tab as tab;
