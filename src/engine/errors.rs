@@ -1,3 +1,4 @@
+/// Public engine errors available for the outside world
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     /// An invalid tab ID has been provided.

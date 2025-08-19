@@ -17,7 +17,7 @@
 //!
 //! let mut engine = GosubEngine::new(None);
 //! let zone_id = engine.zone_builder().create().unwrap();
-//! let tab_id = engine.open_tab(zone_id, &Viewport::new(0, 0, 800, 600)).unwrap();
+//! let tab_id = engine.open_tab_in_zone(zone_id, &Viewport::new(0, 0, 800, 600)).unwrap();
 //!
 //! // Drive the engine
 //! let results = engine.tick();
@@ -64,6 +64,7 @@ pub struct TickResult {
 /// Each flag corresponds to a stage in the pipeline that needs to be rebuilt,
 /// recalculated, or repainted.
 #[derive(Default, Debug)]
+#[allow(unused)]
 pub struct DirtyFlags {
     /// Render tree needs to be rebuilt.
     pub render_tree: bool,
@@ -85,11 +86,4 @@ pub struct DirtyFlags {
 
     /// Viewport size or position has changed.
     pub viewport: bool,
-}
-
-impl DirtyFlags {
-    /// Returns `true` if any dirty flag is set.
-    pub fn any(&self) -> bool {
-        self.render_tree || self.layout || self.paint || self.tiles || self.layers || self.scroll || self.viewport
-    }
 }

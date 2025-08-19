@@ -1,6 +1,40 @@
 // src/engine/zone.rs
 //! Zone system: [`Zone`], and [`ZoneId`].
 //!
+//! Zone manager.
+//!
+//! The [`ZoneManager`] is responsible for creating, tracking, and
+//! managing all [`Zone`](crate::engine::zone::Zone) instances in the
+//! engine. It enforces global limits defined by the [`EngineConfig`]
+//! (such as maximum number of zones) and provides accessors to retrieve,
+//! iterate, and remove zones.
+//!
+//! Zones are stored in a thread-safe [`Arc<Mutex<_>>`] container and
+//! can be accessed concurrently from multiple parts of the engine.
+//!
+//! # Responsibilities
+//!
+//! - Enforce engine-wide constraints (e.g., `max_zones`).
+//! - Create zones with either caller-supplied or default configuration.
+//! - Provide default in-memory storage if no storage service is supplied.
+//! - Manage the lifecycle of zones (insert, get, remove, iterate).
+//!
+//! # Example
+//!
+//! ```rust
+//! use gosub_engine::zone::{ZoneManager, ZoneConfig};
+//! use gosub_engine::{EngineConfig, EngineError};
+//!
+//! let engine_config = EngineConfig::default();
+//! let manager = ZoneManager::new(engine_config);
+//!
+//! // Create a new zone with defaults
+//! let zone_id = manager.create_zone(None, None, None, None).unwrap();
+//!
+//! // Access the zone later
+//! let zone = manager.get_zone(zone_id).unwrap();
+//! ```
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use crate::{EngineConfig, EngineError};
@@ -10,12 +44,20 @@ use crate::engine::storage::StorageService;
 use crate::engine::zone::{Zone, ZoneId, ZoneConfig};
 use crate::storage::InMemorySessionStore;
 
+/// Manages all zones within the engine.
+///
+/// The `ZoneManager` enforces global engine limits (such as maximum
+/// number of zones) and owns a thread-safe registry of all active
+/// zones. Each zone is identified by a unique [`ZoneId`].
 pub struct ZoneManager {
+    /// Global engine configuration, including zone limits and defaults.
     config: EngineConfig,
+    /// Thread-safe map of all active zones, keyed by their IDs.
     zones: Arc<Mutex<HashMap<ZoneId, Arc<Mutex<Zone>>>>>,
 }
 
 impl ZoneManager {
+    /// Creates a new [`ZoneManager`] with the given engine configuration.
     pub fn new(config: EngineConfig) -> Self {
         Self {
             config,
@@ -24,7 +66,17 @@ impl ZoneManager {
     }
 
 
-    /// Create a new zone with the given config
+    /// Creates a new zone with the given configuration and optional services.
+    ///
+    /// # Arguments
+    /// - `zone_id`: Optional ID. If not provided, a new one is generated.
+    /// - `config`: Optional [`ZoneConfig`]. Falls back to engine default if not supplied.
+    /// - `storage_service`: Optional custom storage service. Defaults to in-memory storage.
+    /// - `cookie_jar`: Optional cookie jar handle for the zone.
+    ///
+    /// # Errors
+    /// - Returns [`EngineError::ZoneLimitExceeded`] if the maximum number of zones is reached.
+    /// - Returns [`EngineError::ZoneAlreadyExists`] if a zone with the given ID already exists.
     pub fn create_zone(
         &self,
         zone_id: Option<ZoneId>,
@@ -65,19 +117,24 @@ impl ZoneManager {
         Ok(zone_id)
     }
 
+    /// Retrieves a zone by its [`ZoneId`], if it exists.
     pub fn get_zone(&self, id: ZoneId) -> Option<Arc<Mutex<Zone>>> {
         let zones = self.zones.lock().ok()?;
         zones.get(&id).cloned()
     }
 
 
-    /// Get a mutable reference to a zone
+    /// Retrieves a zone by its [`ZoneId`] for mutation, if it exists.
     pub fn get_zone_mut(&self, id: &ZoneId) -> Option<Arc<Mutex<Zone>>> {
         let zones = self.zones.lock().ok()?;
         zones.get(id).cloned()
     }
 
-    /// Remove a zone
+    /// Removes a zone by its [`ZoneId`].
+    ///
+    /// # Errors
+    /// - Returns [`EngineError::ZoneNotFound`] if the zone does not exist
+    ///   or the lock could not be acquired.
     #[allow(unused)]
     pub fn remove_zone(&self, zone_id: ZoneId) -> Result<(), EngineError> {
         if !self.zones.lock().is_ok() {
@@ -92,6 +149,7 @@ impl ZoneManager {
         Ok(())
     }
 
+    /// Returns a list of all active [`ZoneId`]s.
     pub fn iter(&self) -> Vec<ZoneId> {
         self.zones
             .lock()

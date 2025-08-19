@@ -14,6 +14,7 @@ pub struct SqliteLocalStore {
 }
 
 impl SqliteLocalStore {
+    /// Creates a new SQLite local store with the specified database file path.
     pub fn new(path: &str) -> Result<Self> {
         let manager = SqliteConnectionManager::file(path)
             .with_flags(

@@ -3,7 +3,9 @@ use url::{Origin, Url};
 /// Partitioning key (future-proof for state partitioning).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum PartitionKey {
+    /// No partitioning key, used for global state.
     None,
+    /// Top-level partitioning key based on the origin of the URL.
     TopLevel(Origin),
 }
 
@@ -12,6 +14,7 @@ impl Default for PartitionKey {
 }
 
 impl PartitionKey {
+    /// Creates a new `PartitionKey` from a URL string.
     pub fn from_str(s: &str) -> Self {
         if s.is_empty() {
             PartitionKey::None
@@ -22,9 +25,16 @@ impl PartitionKey {
     }
 }
 
+/// Partitioning policy for determining how to compute the partition key.
 #[derive(Clone, Copy, Debug)]
-pub enum PartitionPolicy { None, TopLevelOrigin }
+pub enum PartitionPolicy {
+    /// No partitioning, uses a global state.
+    None,
+    /// Partitioning based on the top-level origin of the URL.
+    TopLevelOrigin
+}
 
+/// Computes the partition key based on the URL and the specified partition policy.
 pub fn compute_partition_key(u: &Url, p: PartitionPolicy) -> PartitionKey {
     match p {
         PartitionPolicy::None => PartitionKey::None,

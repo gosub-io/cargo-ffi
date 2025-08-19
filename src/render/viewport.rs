@@ -12,7 +12,7 @@
 //!
 //! Creating a viewport and passing it to a new tab:
 //! ```
-//! use gosub_engine::Viewport;
+//! use gosub_engine::render::Viewport;
 //!
 //! // 800x600 at origin
 //! let viewport = Viewport::new(0, 0, 800, 600);
@@ -36,7 +36,11 @@
 //! let vp = Viewport::new(0, 0, 1920, 1080);
 //! assert_eq!(vp.aspect_ratio(), 1920.0 / 1080.0);
 //! ```
-#[derive(Clone, Eq, PartialEq)]
+
+use crate::render::backend::SurfaceSize;
+
+/// Represents the viewport for rendering.
+#[derive(Clone, Eq, PartialEq, Copy)]
 pub struct Viewport {
     /// Horizontal offset in pixels from the origin.
     pub x: i32,
@@ -49,6 +53,17 @@ pub struct Viewport {
 
     /// Height in pixels.
     pub height: u32,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
 }
 
 impl std::fmt::Debug for Viewport {
@@ -87,6 +102,14 @@ impl Viewport {
             0.0
         } else {
             self.width as f32 / self.height as f32
+        }
+    }
+
+    /// Converts this viewport to a [`SurfaceSize`].
+    pub fn as_size(&self) -> SurfaceSize {
+        SurfaceSize {
+            width: self.width,
+            height: self.height,
         }
     }
 }

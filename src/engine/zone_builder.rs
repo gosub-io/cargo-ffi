@@ -10,7 +10,7 @@ use crate::storage::StorageService;
 /// Each zone can have its own storage (cookies, local/session storage, etc.),
 /// configuration, and set of tabs. Zones are useful for separating
 /// different browsing profiles, private/incognito sessions, or even
-/// multi-tenant browsing in the same engine instance.
+/// multi-tenant browsing in the same browsing context.
 ///
 /// This builder allows you to configure optional parameters before creating
 /// the zone. If you omit an option, the engine will use sensible defaults:

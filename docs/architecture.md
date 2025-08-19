@@ -23,15 +23,15 @@ graph TD
     end
     
     subgraph tab1
-        Tab1 --> EngineInstance1["EngineInstance 1"]
-        EngineInstance1 --> Threads1
-        EngineInstance1 --> ProcessRenderer
+        Tab1 --> BrowsingContext1["BrowsingContext 1"]
+        BrowsingContext1 --> Threads1
+        BrowsingContext1 --> ProcessRenderer
     end
     
     subgraph tab2
-        Tab2 --> EngineInstance2["EngineInstance 2"]
-        EngineInstance2 --> ProcessRenderer
-        EngineInstance2 --> Threads2
+        Tab2 --> BrowsingContext2["BrowsingContext 2"]
+        BrowsingContext2 --> ProcessRenderer
+        BrowsingContext2 --> Threads2
     end
     
 ```

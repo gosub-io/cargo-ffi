@@ -1,6 +1,7 @@
 // src/engine/zone.rs
 //! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
 //!
+use crate::render::backend::CompositorSink;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex, RwLock};
@@ -8,7 +9,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 use crate::engine::tab::{Tab, TabId, TabMode};
-use crate::viewport::Viewport;
 use crate::EngineError;
 use crate::engine::tick::TickResult;
 use uuid::Uuid;
@@ -20,6 +20,8 @@ use crate::engine::zone::password_store::PasswordStore;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 use crate::engine::storage::types::compute_partition_key;
+use crate::render::backend::RenderBackend;
+use crate::render::Viewport;
 use crate::zone::ZoneConfig;
 
 /// A unique identifier for a [`Zone`](crate::zone::Zone) within a [`GosubEngine`](crate::GosubEngine).
@@ -74,6 +76,7 @@ use crate::zone::ZoneConfig;
 pub struct ZoneId(Uuid);
 
 impl ZoneId {
+    /// Creates a new `ZoneId` with a random UUID.
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
@@ -200,14 +203,18 @@ pub struct Zone {
 }
 
 pub struct SharedFlags {
-    pub share_autocomplete: bool,       // Other zones are allowed to read this autocomplete elements
-    pub share_bookmarks: bool,          // Other zones are allowed to read bookmarks
-    pub share_passwords: bool,          // Other zones are allowed to read password entries
-    pub share_cookiejar: bool,          // Other zones are allowed to read cookies
+    /// Other zones are allowed to read this autocomplete elements
+    pub share_autocomplete: bool,
+    /// Other zones are allowed to read bookmarks
+    pub share_bookmarks: bool,
+    /// Other zones are allowed to read password entries
+    pub share_passwords: bool,
+    /// Other zones are allowed to read cookies
+    pub share_cookiejar: bool,
 }
 
 impl Zone {
-    // Creates a new zone with a specific zone ID
+    /// Creates a new zone with a specific zone ID
     pub fn new_with_id(
         zone_id: ZoneId,
         config: ZoneConfig,
@@ -251,53 +258,70 @@ impl Zone {
         }
     }
 
-    // Creates a new zone with a random ID and the provided configuration
-    pub fn new(config: ZoneConfig, storage: Arc<StorageService>, cookie_jar: Option<CookieJarHandle>) -> Self {
+    /// Creates a new zone with a random ID and the provided configuration
+    pub fn new(
+        config: ZoneConfig,
+        storage: Arc<StorageService>,
+        cookie_jar: Option<CookieJarHandle>,
+    ) -> Self {
         let zone_id = ZoneId::new();
         Zone::new_with_id(zone_id, config, storage, cookie_jar)
     }
 
+    /// Sets the title of the zone
     pub fn set_title(&mut self, title: &str) {
         self.title = title.to_string();
     }
 
+    /// Sets the icon of the zone
     pub fn set_icon(&mut self, icon: Vec<u8>) {
         self.icon = icon;
     }
 
+    /// Sets the description of the zone
     pub fn set_description(&mut self, description: &str) {
         self.description = description.to_string();
     }
 
+    /// Sets the color of the zone (RGBA)
     pub fn set_color(&mut self, color: [u8; 4]) {
         self.color = color;
     }
 
+    /// Sets the cookie jar for the zone
     pub fn set_cookie_jar(&mut self, cookie_jar: CookieJarHandle) {
         self.cookie_jar = cookie_jar;
     }
 
-    // Open a new tab into the zone
-    pub fn open_tab(&mut self, runtime: Arc<Runtime>, viewport: &Viewport) -> Result<TabId, EngineError> {
+    /// Opens a new tab into the zone
+    pub(crate) fn open_tab(&mut self, runtime: Arc<Runtime>, viewport: Viewport) -> Result<TabId, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
-        let tab_id = TabId::new();
-        self.tabs.insert(tab_id, Arc::new(Mutex::new(Tab::new(self.id, runtime, viewport, Some(self.cookie_jar.clone())))));
+        let tab = Tab::new(self.id, runtime, viewport, Some(self.cookie_jar.clone()));
+        let tab_id = tab.id;
+
+        self.tabs.  insert(tab_id, Arc::new(Mutex::new(tab)));
         Ok(tab_id)
     }
 
+    /// Returns the given tab by its ID, or `None` if it doesn't exist.
     pub fn get_tab(&self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
         self.tabs.get(&tab_id).cloned()
     }
 
+    /// Returns a mutable reference to the given tab by its ID, or `None` if it doesn't exist.
     pub fn get_tab_mut(&mut self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
         self.tabs.get_mut(&tab_id).cloned()
     }
 
-    // Ticks all tabs in the zone, returning a map of TabId to TickResult
-    pub fn tick_all_tabs(&mut self) -> BTreeMap<TabId, TickResult> {
+    /// Ticks all tabs in the zone, returning a map of TabId to TickResult
+    pub fn tick_all_tabs(
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        host: &mut impl CompositorSink,
+    ) -> BTreeMap<TabId, TickResult> {
         let now = Instant::now();
         let mut results = BTreeMap::new();
 
@@ -317,8 +341,17 @@ impl Zone {
             }
             tab.last_tick = now;
 
-            let result = tab.tick();
-            results.insert(*tab_id, result);
+            match tab.tick(backend, host) {
+                Ok(result) => {
+                    // If tick was successful, update the tab's last successful tick time
+                    tab.last_tick = now;
+                    results.insert(*tab_id, result);
+                }
+                Err(e) => {
+                    // Log or handle the error as needed
+                    log::error!("Error ticking tab {:?}: {}", tab_id, e);
+                }
+            }
         }
 
         results
@@ -340,7 +373,7 @@ impl Zone {
         self.storage.drop_tab(self.id, tab);
     }
 
-    // Read the storage channel and process storage events
+    /// Read the storage channel and process storage events
     pub fn pump_storage_events(&mut self) {
         // Drain the queue without blocking.
         while let Ok(ev) = self.storage_rx.try_recv() {
@@ -378,7 +411,7 @@ impl Zone {
         }
     }
 
-
+    /// Called when a tab commits a navigation to a new URL.
     pub fn on_tab_commit(&self, tab: &mut Tab, final_url: &url::Url) -> anyhow::Result<()> {
         tab.partition_key = compute_partition_key(final_url, tab.partition_policy);
 
@@ -386,7 +419,7 @@ impl Zone {
         let origin = final_url.origin().clone();
         let local   = self.local_area(&tab.partition_key, &origin)?;
         let session = self.session_area(tab.id, &tab.partition_key, &origin);
-        tab.bind_storage(StorageHandles{ local, session }); // add on EngineInstance
+        tab.bind_storage(StorageHandles{ local, session });
         Ok(())
     }
 }

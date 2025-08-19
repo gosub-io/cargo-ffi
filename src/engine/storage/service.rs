@@ -34,6 +34,7 @@ pub struct StorageService {
 }
 
 impl StorageService {
+    /// Create a new StorageService with the given local and session stores.
     pub fn new(local: Arc<dyn LocalStore>, session: Arc<dyn SessionStore>) -> Self {
         Self { local, session, bus: Arc::new(StorageBus::default()) }
     }
@@ -55,6 +56,7 @@ impl StorageService {
         self.wrap_notifying(inner, zone, Some(tab), part.clone(), origin.clone(), StorageScope::Session)
     }
 
+    /// Drops a tab from sessionStorage.
     pub fn drop_tab(&self, zone: ZoneId, tab: TabId) {
         self.session.drop_tab(zone, tab);
     }

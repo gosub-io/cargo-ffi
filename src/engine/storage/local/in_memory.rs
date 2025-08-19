@@ -12,6 +12,7 @@ pub struct InMemoryLocalStore {
 }
 
 impl InMemoryLocalStore {
+    /// Creates a new instance of the in-memory local store.
     pub fn new() -> Self {
         Self::default()
     }

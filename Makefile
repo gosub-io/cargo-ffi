@@ -18,7 +18,7 @@ $(HEADER):
 	$(CBINDGEN) --crate $(CRATE_NAME) --output $(HEADER)
 
 run_rust:
-	cargo run --example rust_example
+	cargo run --example gtk_example
 
 run_c:
 	gcc $(C_SRC) -o $(C_BIN) -L$(TARGET_DIR) -l$(LIB_BASE) -I. -ldl
