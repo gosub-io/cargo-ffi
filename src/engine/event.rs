@@ -1,5 +1,6 @@
 use url::Url;
 
+/// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone)]
 pub enum MouseButton {
     /// Left mouse button pressed (or depressed)
@@ -14,21 +15,59 @@ pub enum MouseButton {
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
     /// Move has moved to a new position
-    MouseMove{ x: f32, y: f32 },
+    MouseMove{
+        /// The x coordinate of the mouse position
+        x: f32,
+        /// The y coordinate of the mouse position
+        y: f32
+    },
     /// A mouse button was pressed
-    MouseDown{ button: MouseButton, x: f32, y: f32 },
+    MouseDown{
+        /// The mouse button that was pressed
+        button: MouseButton,
+        /// The x coordinate of the mouse position when the button was pressed
+        x: f32,
+        /// The y coordinate of the mouse position when the button was pressed
+        y: f32
+    },
     /// A mouse button was released
-    MouseUp{ button: MouseButton, x: f32, y: f32 },
+    MouseUp{
+        /// The mouse button that was released
+        button: MouseButton,
+        /// The x coordinate of the mouse position when the button was released
+        x: f32,
+        /// The y coordinate of the mouse position when the button was released
+        y: f32
+    },
     /// Viewport has been scrolled (with delta coordinates)
-    Scroll{ dx: f32, dy: f32 },
+    Scroll{
+        /// The x coordinate of the scroll delta
+        dx: f32,
+        /// The y coordinate of the scroll delta
+        dy: f32
+    },
     /// A key was pressed
-    KeyDown{ key: String },
+    KeyDown{
+        /// The key that was pressed
+        key: String
+    },
     /// A key was released
-    KeyUp{ key: String },
+    KeyUp{
+        /// The key that was released
+        key: String
+    },
     /// A character was input (like a letter in an input box)
-    InputChar{ character: char },
+    InputChar{
+        /// The character that was input
+        character: char
+    },
     /// A resize event occurred
-    Resize{ width: u32, height: u32 },
+    Resize{
+        /// The new width of the viewport
+        width: u32,
+        /// The new height of the viewport
+        height: u32
+    },
 }
 
 /// Commands that the engine need to execute

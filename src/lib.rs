@@ -1,7 +1,7 @@
 // #![forbid(unsafe_code)]
 // Optional but nice once docs are filled in:
-// #![deny(missing_docs)]
-// #![deny(rustdoc::broken_intra_doc_links)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 //! # Gosub Engine
 //!
@@ -52,6 +52,11 @@
 
 mod engine;
 mod net;
+/// Rendering system: backends, surfaces, and display lists.
+///
+/// The [`render`] module contains abstractions for different rendering backends
+/// (e.g. Cairo, Vello, Skia), surface handling, and display items used by the
+/// engine to paint content into host-provided contexts.
 pub mod render;
 
 pub use engine::{

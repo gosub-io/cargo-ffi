@@ -7,13 +7,14 @@ use crate::engine::storage::types::PartitionKey;
 use crate::tab::TabId;
 use crate::zone::ZoneId;
 
-// In memory storage
+/// In memory storage
 #[derive(Default)]
 pub struct InMemorySessionStore {
     data: Arc<RwLock<HashMap<(ZoneId, TabId, String, String), HashMap<String, String>>>>,
 }
 
 impl InMemorySessionStore {
+    /// Creates a new instance of the in-memory session store.
     pub fn new() -> Self {
         Self::default()
     }

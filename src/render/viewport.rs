@@ -39,6 +39,7 @@
 
 use crate::render::backend::SurfaceSize;
 
+/// Represents the viewport for rendering.
 #[derive(Clone, Eq, PartialEq)]
 pub struct Viewport {
     /// Horizontal offset in pixels from the origin.
@@ -104,6 +105,7 @@ impl Viewport {
         }
     }
 
+    /// Converts this viewport to a [`SurfaceSize`].
     pub fn as_size(&self) -> SurfaceSize {
         SurfaceSize {
             width: self.width,

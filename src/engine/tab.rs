@@ -78,6 +78,7 @@ use crate::render::backend::{CompositorSink, ErasedSurface, PresentMode, RenderB
 pub struct TabId(Uuid);
 
 impl TabId {
+    /// Create a new unique `TabId` using a random UUID.
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
@@ -504,17 +505,8 @@ impl Tab {
         Ok(())
     }
 
-    pub fn surface(&self) -> Option<&Box<dyn ErasedSurface>> {
-        self.surface.as_ref()
-    }
-
-    // fn render(&mut self, backend: &mut dyn RenderBackend, ctx: &mut BrowsingContext) -> anyhow::Result<()> {
-    //     self.ensure_surface(backend, ctx.viewport().as_size())?;
-    //     ctx.rebuild_render_list_if_needed();
-    //
-    //     if let Some(ref mut surf) = self.surface {
-    //         backend.render(ctx, surf.as_mut())?;
-    //     }
-    //     Ok(())
+    // /// Get the current surface for rendering. Returns `None` if no surface is set.
+    // pub fn surface(&self) -> Option<&Box<dyn ErasedSurface>> {
+    //     self.surface.as_ref()
     // }
 }

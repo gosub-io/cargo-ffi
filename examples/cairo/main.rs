@@ -455,14 +455,17 @@ fn main() {
         toolbar.append(&btn_split_col);
         toolbar.append(&btn_split_row);
         toolbar.append(&btn_close);
-        toolbar.append(&address_entry);
 
         toolbar.append(&btn_set_ls);
         toolbar.append(&btn_get_ls);
         toolbar.append(&btn_set_ss);
         toolbar.append(&btn_get_ss);
 
+        let urlbar = GtkBox::new(Orientation::Horizontal, 1);
+        urlbar.append(&address_entry);
+
         let vbox = GtkBox::new(Orientation::Vertical, 6);
+        vbox.append(&urlbar);
         vbox.append(&toolbar);
         vbox.append(&drawing_area);
 

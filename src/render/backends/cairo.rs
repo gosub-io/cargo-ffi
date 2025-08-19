@@ -8,6 +8,7 @@ use crate::render::DisplayItem;
 pub struct CairoBackend;
 
 impl CairoBackend {
+    /// Creates a new instance of the Cairo backend.
     pub fn new() -> Self {
         Self {}
     }
@@ -94,14 +95,20 @@ impl RenderBackend for CairoBackend {
 }
 
 
-
+/// A Cairo surface that can be used for rendering.
 pub struct CairoSurface {
-    surface: cairo::ImageSurface,     // This image surface sits on top of the buf below
-    buf: Box<[u8]>,       // Pixels will be written to here (through surface), but we ultimately own them
+    /// This cairo image surface sits on top of the buf below
+    surface: cairo::ImageSurface,
+    /// Pixels will be written to here (through surface), but we ultimately own them
+    buf: Box<[u8]>,
+    /// Size of the surface in pixels.
     size: SurfaceSize,
+    /// Stride of the surface in bytes.
     stride: i32,
+    /// Present mode for the surface.
     #[allow(unused)]
     present: PresentMode,
+    /// Frame ID for the surface, used to track rendering frames.
     frame_id: u64,
 }
 
@@ -136,19 +143,21 @@ impl CairoSurface {
         })
     }
 
+    /// Returns a cairo context for this surface.
     #[inline]
     pub fn ctx(&self) -> Result<cairo::Context> {
         Ok(cairo::Context::new(&self.surface)?)
     }
 
+    /// Returns the stride of the surface in bytes.
     #[inline]
     pub fn stride(&self) -> i32 {
         self.stride
     }
 
+    /// Flushes the surface to ensure all operations are completed.
     #[inline]
     pub fn flush(&self) {
-        // Flush the surface to ensure all operations are completed.
         self.surface.flush();
     }
 

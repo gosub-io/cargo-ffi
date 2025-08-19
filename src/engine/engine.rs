@@ -73,7 +73,7 @@ impl GosubEngine {
         self.zone_manager.get_zone_mut(&zone_id)
     }
 
-    // Retrieves a reference to a tab regardless of its zone
+    /// Retrieves a reference to a tab regardless of its zone
     pub fn get_tab(&self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
         for zone_id in self.zone_manager.iter() {
             let zone = self.zone_manager.get_zone_mut(&zone_id)?;
@@ -101,7 +101,7 @@ impl GosubEngine {
         zone.open_tab(self.runtime.clone(), viewport)
     }
 
-    // Do an engine tick, processing all zones and tabs
+    /// Do an engine tick, processing all zones and tabs
     pub fn tick(&mut self, host: &mut impl CompositorSink) -> BTreeMap<TabId, TickResult> {
         let mut results = BTreeMap::new();
 
@@ -126,7 +126,7 @@ impl GosubEngine {
         results
     }
 
-    // Handle an event for a specific tab
+    /// Handle an event for a specific tab
     pub fn handle_event(&mut self, tab_id: TabId, event: EngineEvent) -> Result<(), EngineError> {
         let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
         let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
@@ -135,7 +135,7 @@ impl GosubEngine {
         Ok(())
     }
 
-    // Executes a command for a specific tab
+    /// Executes a command for a specific tab
     pub fn execute_command(&mut self, tab_id: TabId, command: EngineCommand) -> Result<(), EngineError> {
         let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
         let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
