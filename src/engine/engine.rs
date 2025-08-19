@@ -1,7 +1,3 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
-use tokio::runtime::Runtime;
-use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent};
 use crate::cookies::CookieJarHandle;
 use crate::engine::storage::StorageService;
 use crate::engine::tab::{Tab, TabId};
@@ -9,8 +5,12 @@ use crate::engine::tick::TickResult;
 use crate::engine::zone::ZoneManager;
 use crate::render::backend::{CompositorSink, RenderBackend};
 use crate::render::Viewport;
-use crate::zone::{ZoneId, Zone};
 use crate::zone::ZoneConfig;
+use crate::zone::{Zone, ZoneId};
+use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use tokio::runtime::Runtime;
 
 /// Entry point to the Gosub engine.
 ///
@@ -29,6 +29,10 @@ pub struct GosubEngine {
 }
 
 impl GosubEngine {
+    pub fn update_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend>) {
+        self.backend = new_backend;
+    }
+
     /// Create a new engine.
     ///
     /// If `config` is `None`, defaults are used.
@@ -41,7 +45,7 @@ impl GosubEngine {
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .expect("Failed to create Tokio runtime")
+                .expect("Failed to create Tokio runtime"),
         );
 
         // I don't like that we have to clone the config but we need it in the "engine" and the zone manager as well.
@@ -61,9 +65,10 @@ impl GosubEngine {
         zone_id: Option<ZoneId>,
         config: Option<ZoneConfig>,
         storage_service: Option<Arc<StorageService>>,
-        cookie_jar: Option<CookieJarHandle>
+        cookie_jar: Option<CookieJarHandle>,
     ) -> Result<ZoneId, EngineError> {
-        self.zone_manager.create_zone(zone_id, config, storage_service, cookie_jar)
+        self.zone_manager
+            .create_zone(zone_id, config, storage_service, cookie_jar)
     }
 
     /// Get a mutable handle to a zone.
@@ -94,8 +99,15 @@ impl GosubEngine {
     /// # let zone_id = engine.zone_builder().create().unwrap();
     /// let tab_id = engine.open_tab_in_zone(zone_id).unwrap();
     /// ```
-    pub fn open_tab_in_zone(&mut self, zone_id: ZoneId, viewport: Viewport) -> Result<TabId, EngineError> {
-        let zone_arc = self.zone_manager.get_zone(zone_id).ok_or(EngineError::ZoneNotFound)?;
+    pub fn open_tab_in_zone(
+        &mut self,
+        zone_id: ZoneId,
+        viewport: Viewport,
+    ) -> Result<TabId, EngineError> {
+        let zone_arc = self
+            .zone_manager
+            .get_zone(zone_id)
+            .ok_or(EngineError::ZoneNotFound)?;
         let mut zone = zone_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
 
         zone.open_tab(self.runtime.clone(), viewport)
@@ -136,12 +148,15 @@ impl GosubEngine {
     }
 
     /// Executes a command for a specific tab
-    pub fn execute_command(&mut self, tab_id: TabId, command: EngineCommand) -> Result<(), EngineError> {
+    pub fn execute_command(
+        &mut self,
+        tab_id: TabId,
+        command: EngineCommand,
+    ) -> Result<(), EngineError> {
         let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
         let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
 
         tab.execute_command(command);
         Ok(())
     }
-
 }

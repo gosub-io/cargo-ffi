@@ -58,7 +58,6 @@ pub struct TickResult {
     pub commited_url: Option<url::Url>,
 }
 
-
 /// “Dirty” flags for the render pipeline.
 ///
 /// Each flag corresponds to a stage in the pipeline that needs to be rebuilt,

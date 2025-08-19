@@ -39,22 +39,23 @@
 //! }
 //! ```
 
-
+use crate::engine::cookies::CookieJarHandle;
+use crate::engine::storage::types::PartitionPolicy;
+use crate::engine::storage::{PartitionKey, StorageEvent, StorageHandles};
+use crate::engine::tick::TickResult;
+use crate::engine::zone::ZoneId;
+use crate::engine::BrowsingContext;
+use crate::render::backend::{
+    CompositorSink, ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
+};
+use crate::render::Viewport;
+use crate::{EngineCommand, EngineEvent};
+use serde::__private::from_utf8_lossy;
 use std::sync::Arc;
 use std::time::Instant;
-use serde::__private::from_utf8_lossy;
 use tokio::runtime::Runtime;
 use url::Url;
 use uuid::Uuid;
-use crate::{EngineCommand, EngineEvent};
-use crate::engine::BrowsingContext;
-use crate::engine::tick::TickResult;
-use crate::render::Viewport;
-use crate::engine::cookies::CookieJarHandle;
-use crate::engine::storage::{PartitionKey, StorageEvent, StorageHandles};
-use crate::engine::storage::types::PartitionPolicy;
-use crate::engine::zone::ZoneId;
-use crate::render::backend::{CompositorSink, ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 
 /// A unique identifier for a browser tab within a [`GosubEngine`](crate::engine::GosubEngine).
 ///
@@ -133,7 +134,6 @@ pub enum TabMode {
     Suspended,
 }
 
-
 /// A single browsing context inside a [`Zone`](crate::engine::zone::Zone).
 ///
 /// A [`Tab`] owns an [`BrowsingContext`](crate::BrowsingContext) and tracks its
@@ -183,19 +183,18 @@ pub struct Tab {
     /// Storage partition policy
     pub partition_policy: PartitionPolicy,
 
-
     /// Backend rendering
-    pub thumbnail: Option<RgbaImage>,           // Thumbnail image of the tab in case the tab is not visible
-    surface: Option<Box<dyn ErasedSurface>>,    // Surface on which the browsing context can render the tab
-    surface_size: SurfaceSize,                  // Size of the surface (does not have to match viewport)
-    present_mode: PresentMode,                  // Present mode for the surface?
+    pub thumbnail: Option<RgbaImage>, // Thumbnail image of the tab in case the tab is not visible
+    surface: Option<Box<dyn ErasedSurface>>, // Surface on which the browsing context can render the tab
+    surface_size: SurfaceSize, // Size of the surface (does not have to match viewport)
+    present_mode: PresentMode, // Present mode for the surface?
 
     /// The viewport that was committed for the in-flight/last render
     committed_viewport: Viewport,
     /// The newest viewport requested by the tab, which may differ from the committed one.
     desired_viewport: Viewport,
     /// Set when a resize arrives while rendering. Causes an immediate re-render after finihsing the current rendering.
-    dirty_after_inflight: bool
+    dirty_after_inflight: bool,
 }
 
 impl Tab {
@@ -217,25 +216,28 @@ impl Tab {
             state: TabState::Idle,
             context: BrowsingContext::new(runtime),
 
-            favicon: vec![],                    // Placeholder for favicon data
-            title: "New Tab".to_string(),       // Title of the new tab
+            favicon: vec![],              // Placeholder for favicon data
+            title: "New Tab".to_string(), // Title of the new tab
 
             pending_url: None,
             current_url: None,
             is_loading: false,
             is_error: false,
 
-            mode: TabMode::Active,                  // Default mode is active
+            mode: TabMode::Active, // Default mode is active
             last_tick: Instant::now(),
 
             cookie_jar,
-            partition_key: PartitionKey::None,      // Start with no partition key
+            partition_key: PartitionKey::None, // Start with no partition key
             partition_policy: PartitionPolicy::TopLevelOrigin,
 
-            surface: None,                 // No surface initially
-            surface_size: SurfaceSize { width: 1, height: 1 },
+            surface: None, // No surface initially
+            surface_size: SurfaceSize {
+                width: 1,
+                height: 1,
+            },
             present_mode: PresentMode::Fifo,
-            thumbnail: None,               // No thumbnail initially
+            thumbnail: None, // No thumbnail initially
 
             committed_viewport: viewport,
             desired_viewport: viewport,
@@ -243,7 +245,6 @@ impl Tab {
         };
 
         tab.context.set_viewport(viewport);
-
 
         tab
     }
@@ -256,7 +257,7 @@ impl Tab {
             Err(e) => {
                 // Can't parse string to a URL to load
                 log::error!("Tab[{:?}]: Cannot parse URL: {}", self.id, e);
-                return
+                return;
             }
         };
 
@@ -328,10 +329,10 @@ impl Tab {
 
                             // Store cookies from the response in the cookie jar
                             if let Some(cookie_jar) = &self.cookie_jar {
-                                cookie_jar.write().unwrap().store_response_cookies(
-                                    &resp.url,
-                                    &resp.headers,
-                                );
+                                cookie_jar
+                                    .write()
+                                    .unwrap()
+                                    .store_response_cookies(&resp.url, &resp.headers);
                             }
 
                             // Set tab state
@@ -339,7 +340,8 @@ impl Tab {
                             self.is_loading = false;
                             self.pending_url = None;
                             self.current_url = Some(resp.url.clone());
-                            self.context.set_raw_html(from_utf8_lossy(resp.body.as_slice()).as_ref());
+                            self.context
+                                .set_raw_html(from_utf8_lossy(resp.body.as_slice()).as_ref());
 
                             // Set result
                             result.page_loaded = true;
@@ -421,7 +423,6 @@ impl Tab {
         Ok(result)
     }
 
-
     /// Handle an external UI event (scroll, mouse, keyboard, resize).
     /// Typically forwarded from your toolkit.
     pub(crate) fn handle_event(&mut self, event: EngineEvent) {
@@ -429,21 +430,30 @@ impl Tab {
             EngineEvent::Scroll { dx, dy } => {
                 let cur_vp = self.context.viewport();
                 self.set_viewport(Viewport::new(
-                    /// We should do clamp(), but we don't know the max x/y sizes of the rendered document
+                    // We should do clamp(), but we don't know the max x/y sizes of the rendered document
                     (cur_vp.x + dx as i32).max(0),
                     (cur_vp.y + dy as i32).max(0),
                     cur_vp.width,
-                    cur_vp.height
+                    cur_vp.height,
                 ));
             }
             EngineEvent::MouseMove { x, y } => {
-                println!("Mouse moved on tab {:?} to position ({}, {})", self.id, x, y);
+                println!(
+                    "Mouse moved on tab {:?} to position ({}, {})",
+                    self.id, x, y
+                );
             }
             EngineEvent::MouseDown { button, x, y } => {
-                println!("Mouse down event on tab {:?} at position ({}, {}) with button {:?}", self.id, x, y, button);
+                println!(
+                    "Mouse down event on tab {:?} at position ({}, {}) with button {:?}",
+                    self.id, x, y, button
+                );
             }
             EngineEvent::MouseUp { button, x, y } => {
-                println!("Mouse up event on tab {:?} at position ({}, {}) with button {:?}", self.id, x, y, button);
+                println!(
+                    "Mouse up event on tab {:?} at position ({}, {}) with button {:?}",
+                    self.id, x, y, button
+                );
             }
             EngineEvent::KeyDown { key } => {
                 println!("Key down event on tab {:?} for key: {}", self.id, key);
@@ -452,10 +462,16 @@ impl Tab {
                 println!("Key up event on tab {:?} for key: {}", self.id, key);
             }
             EngineEvent::InputChar { character } => {
-                println!("Input character event on tab {:?}: '{}'", self.id, character);
+                println!(
+                    "Input character event on tab {:?}: '{}'",
+                    self.id, character
+                );
             }
             EngineEvent::Resize { width, height } => {
-                println!("Resize event on tab {:?}: new size {}x{}", self.id, width, height);
+                println!(
+                    "Resize event on tab {:?}: new size {}x{}",
+                    self.id, width, height
+                );
                 let cur_vp = self.context.viewport();
                 self.set_viewport(Viewport::new(cur_vp.x, cur_vp.y, width, height))
             }
@@ -485,10 +501,10 @@ impl Tab {
         }
     }
 
-
     /// Get the current snapshotted image of the tab.
-    pub fn thumbnail(&self) -> Option<&RgbaImage> { self.thumbnail.as_ref() }
-
+    pub fn thumbnail(&self) -> Option<&RgbaImage> {
+        self.thumbnail.as_ref()
+    }
 
     /// Dispatch a storage event to same-origin documents in this tab (placeholder).
     /// Intended for HTML5 storage event semantics.
@@ -517,7 +533,11 @@ impl Tab {
     }
 
     /// Ensure the tab has a surface of the given size, creating it if necessary.
-    fn ensure_surface(&mut self, backend: &dyn RenderBackend, size: SurfaceSize) -> anyhow::Result<()> {
+    fn ensure_surface(
+        &mut self,
+        backend: &dyn RenderBackend,
+        size: SurfaceSize,
+    ) -> anyhow::Result<()> {
         if let Some(ref surf) = self.surface {
             if surf.size() == size {
                 return Ok(());

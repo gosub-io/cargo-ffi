@@ -1,8 +1,10 @@
-use std::any::Any;
-use anyhow::{anyhow, Result};
-use crate::render::backend::{RenderBackend, ErasedSurface, ExternalHandle, PresentMode, RgbaImage, SurfaceSize, PixelFormat};
 use crate::engine::BrowsingContext;
+use crate::render::backend::{
+    ErasedSurface, ExternalHandle, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
+};
 use crate::render::DisplayItem;
+use anyhow::{anyhow, Result};
+use std::any::Any;
 
 /// Cairo backend for rendering using cairo graphics library.
 pub struct CairoBackend;
@@ -26,17 +28,14 @@ impl RenderBackend for CairoBackend {
 
     /// Renders a surface by getting the DisplayItems from the browsing context and rendering them
     /// onto the ErasedSurface
-    fn render(
-        &mut self,
-        ctx: &mut BrowsingContext,
-        surface: &mut dyn ErasedSurface,
-    ) -> Result<()> {
+    fn render(&mut self, ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> Result<()> {
         // Ensure the surface is a CairoSurface.
-        let s = surface.as_any_mut()
+        let s = surface
+            .as_any_mut()
             .downcast_mut::<CairoSurface>()
             .expect("CairoBackend used with non-Cairo surface");
 
-        /// Viewport offset. We must take this into account when rendering items.
+        // Viewport offset. We must take this into account when rendering items.
         let vp = ctx.viewport();
         let offset_x = vp.x as f64;
         let offset_y = vp.y as f64;
@@ -49,7 +48,6 @@ impl RenderBackend for CairoBackend {
             cr.rectangle(0.0, 0.0, size.width as f64, size.height as f64);
             cr.clip();
 
-
             let _ = cr.save();
             cr.translate(-offset_x, -offset_y);
 
@@ -58,21 +56,45 @@ impl RenderBackend for CairoBackend {
                     DisplayItem::Clear { color } => {
                         // Clear the surface with the specified color.
                         cr.set_operator(cairo::Operator::Source);
-                        cr.set_source_rgba(color.r as f64, color.g as f64, color.b as f64, color.a as f64);
+                        cr.set_source_rgba(
+                            color.r as f64,
+                            color.g as f64,
+                            color.b as f64,
+                            color.a as f64,
+                        );
                         cr.paint()?;
                         cr.set_operator(cairo::Operator::Over);
-
                     }
                     DisplayItem::Rect { x, y, w, h, color } => {
                         // Draw a rectangle with the specified color.
-                        cr.set_source_rgba(color.r as f64, color.g as f64, color.b as f64, color.a as f64);
+                        cr.set_source_rgba(
+                            color.r as f64,
+                            color.g as f64,
+                            color.b as f64,
+                            color.a as f64,
+                        );
                         cr.rectangle(*x as f64, *y as f64, *w as f64, *h as f64);
                         cr.fill()?;
                     }
-                    DisplayItem::TextRun { x, y, text, size, color } => {
+                    DisplayItem::TextRun {
+                        x,
+                        y,
+                        text,
+                        size,
+                        color,
+                    } => {
                         // Draw text at the specified position with the specified size and color.
-                        cr.set_source_rgba(color.r as f64, color.g as f64, color.b as f64, color.a as f64);
-                        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
+                        cr.set_source_rgba(
+                            color.r as f64,
+                            color.g as f64,
+                            color.b as f64,
+                            color.a as f64,
+                        );
+                        cr.select_font_face(
+                            "Sans",
+                            cairo::FontSlant::Normal,
+                            cairo::FontWeight::Normal,
+                        );
                         cr.set_font_size(*size as f64);
                         cr.move_to(*x as f64, *y as f64);
                         cr.show_text(text)?;
@@ -82,7 +104,6 @@ impl RenderBackend for CairoBackend {
 
             let _ = cr.restore();
         }
-
 
         s.frame_id = s.frame_id.wrapping_add(1);
         Ok(())
@@ -95,7 +116,14 @@ impl RenderBackend for CairoBackend {
             .downcast_mut::<CairoSurface>()
             .ok_or_else(|| anyhow!("CairoBackend used with non-Cairo surface"))?;
 
-        let ExternalHandle::CpuPixelsOwned { pixels, width, height, stride, .. } = s.take_external_owned() else {
+        let ExternalHandle::CpuPixelsOwned {
+            pixels,
+            width,
+            height,
+            stride,
+            ..
+        } = s.take_external_owned()
+        else {
             return Err(anyhow!("unexpected external handle kind"));
         };
 
@@ -109,7 +137,6 @@ impl RenderBackend for CairoBackend {
         Some(s.take_external_owned())
     }
 }
-
 
 /// A Cairo surface that can be used for rendering.
 pub struct CairoSurface {
@@ -135,18 +162,18 @@ impl CairoSurface {
             .unwrap_or((size.width * 4) as i32);
 
         // Allocate a buffer large enough for the surface to be mapped on top.
-        let mut buf: Box<[u8]> = vec![0u8; (size.height as usize) * (stride as usize)].into_boxed_slice();
+        let mut buf: Box<[u8]> =
+            vec![0u8; (size.height as usize) * (stride as usize)].into_boxed_slice();
 
         // SAFETY: `buf` is stored in `Self` and outlives `surface
-        let slice_static: &'static mut [u8] = unsafe {
-            std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *buf)
-        };
+        let slice_static: &'static mut [u8] =
+            unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *buf) };
         let surface = cairo::ImageSurface::create_for_data(
             slice_static,
             cairo::Format::ARgb32,
             size.width as i32,
             size.height as i32,
-            stride
+            stride,
         )?;
 
         Ok(Self {
@@ -186,7 +213,7 @@ impl CairoSurface {
             &self.buf,
             self.size.width,
             self.size.height,
-            self.stride as u32
+            self.stride as u32,
         )
     }
 
@@ -201,16 +228,11 @@ impl CairoSurface {
 
         // fresh buffer/surface to keep this surface usable
         let mut fresh: Box<[u8]> = vec![0u8; (h as usize) * (stride as usize)].into_boxed_slice();
-        let fresh_static: &'static mut [u8] = unsafe {
-            std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *fresh)
-        };
-        let new_surface = cairo::ImageSurface::create_for_data(
-            fresh_static,
-            cairo::Format::ARgb32,
-            w,
-            h,
-            stride
-        ).expect("create_for_data(fresh)");
+        let fresh_static: &'static mut [u8] =
+            unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *fresh) };
+        let new_surface =
+            cairo::ImageSurface::create_for_data(fresh_static, cairo::Format::ARgb32, w, h, stride)
+                .expect("create_for_data(fresh)");
 
         let old_surface = std::mem::replace(&mut self.surface, new_surface);
         let old_buf = std::mem::replace(&mut self.buf, fresh);
@@ -227,7 +249,13 @@ impl CairoSurface {
 }
 
 impl ErasedSurface for CairoSurface {
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
-    fn size(&self) -> SurfaceSize { self.size }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn size(&self) -> SurfaceSize {
+        self.size
+    }
 }

@@ -66,12 +66,12 @@
 //!
 //! See [`Zone`] docs for field-level details.
 
+mod config;
 mod manager;
 mod password_store;
 mod zone;
-mod config;
 
-pub(crate) use manager::ZoneManager;
-pub use zone::ZoneId;
-pub use zone::Zone;
 pub use config::ZoneConfig;
+pub(crate) use manager::ZoneManager;
+pub use zone::Zone;
+pub use zone::ZoneId;

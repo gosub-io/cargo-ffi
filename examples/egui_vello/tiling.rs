@@ -1,13 +1,13 @@
+use gosub_engine::tab::TabId;
 use std::cell::RefCell;
 use std::rc::Rc;
-use gosub_engine::tab::TabId;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Rect {
     pub x: i32,
     pub y: i32,
     pub w: i32,
-    pub h: i32
+    pub h: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -28,8 +28,21 @@ pub(crate) fn compute_layout(node: &LayoutNode, rect: Rect, out: &mut Vec<(TabId
             let h_each = rect.h / n;
             let mut y = rect.y;
             for (i, ch) in children.iter().enumerate() {
-                let h = if i == children.len() - 1 { rect.y + rect.h - y } else { h_each };
-                compute_layout(ch, Rect { x: rect.x, y, w: rect.w, h }, out);
+                let h = if i == children.len() - 1 {
+                    rect.y + rect.h - y
+                } else {
+                    h_each
+                };
+                compute_layout(
+                    ch,
+                    Rect {
+                        x: rect.x,
+                        y,
+                        w: rect.w,
+                        h,
+                    },
+                    out,
+                );
                 y += h_each;
             }
         }
@@ -38,8 +51,21 @@ pub(crate) fn compute_layout(node: &LayoutNode, rect: Rect, out: &mut Vec<(TabId
             let w_each = rect.w / n;
             let mut x = rect.x;
             for (i, ch) in children.iter().enumerate() {
-                let w = if i == children.len() - 1 { rect.x + rect.w - x } else { w_each };
-                compute_layout(ch, Rect { x, y: rect.y, w, h: rect.h }, out);
+                let w = if i == children.len() - 1 {
+                    rect.x + rect.w - x
+                } else {
+                    w_each
+                };
+                compute_layout(
+                    ch,
+                    Rect {
+                        x,
+                        y: rect.y,
+                        w,
+                        h: rect.h,
+                    },
+                    out,
+                );
                 x += w_each;
             }
         }
@@ -53,9 +79,7 @@ pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> O
             let pxi = px as i32;
             let pyi = py as i32;
 
-            if pxi >= rect.x && pxi < rect.x + rect.w &&
-                pyi >= rect.y && pyi < rect.y + rect.h
-            {
+            if pxi >= rect.x && pxi < rect.x + rect.w && pyi >= rect.y && pyi < rect.y + rect.h {
                 Some(*tid)
             } else {
                 None
@@ -66,8 +90,24 @@ pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> O
             let h_each = rect.h / n;
             let mut y = rect.y;
             for (i, ch) in children.iter().enumerate() {
-                let h = if i == children.len() - 1 { rect.y + rect.h - y } else { h_each };
-                if let Some(t) = find_leaf_at(ch, Rect { x: rect.x, y, w: rect.w, h }, px, py) { return Some(t); }
+                let h = if i == children.len() - 1 {
+                    rect.y + rect.h - y
+                } else {
+                    h_each
+                };
+                if let Some(t) = find_leaf_at(
+                    ch,
+                    Rect {
+                        x: rect.x,
+                        y,
+                        w: rect.w,
+                        h,
+                    },
+                    px,
+                    py,
+                ) {
+                    return Some(t);
+                }
                 y += h_each;
             }
             None
@@ -77,8 +117,24 @@ pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> O
             let w_each = rect.w / n;
             let mut x = rect.x;
             for (i, ch) in children.iter().enumerate() {
-                let w = if i == children.len() - 1 { rect.x + rect.w - x } else { w_each };
-                if let Some(t) = find_leaf_at(ch, Rect { x, y: rect.y, w, h: rect.h }, px, py) { return Some(t); }
+                let w = if i == children.len() - 1 {
+                    rect.x + rect.w - x
+                } else {
+                    w_each
+                };
+                if let Some(t) = find_leaf_at(
+                    ch,
+                    Rect {
+                        x,
+                        y: rect.y,
+                        w,
+                        h: rect.h,
+                    },
+                    px,
+                    py,
+                ) {
+                    return Some(t);
+                }
                 x += w_each;
             }
             None
@@ -87,18 +143,28 @@ pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> O
 }
 
 // Replace a leaf with Cols(leaf + new tabs)
-pub(crate) fn split_leaf_into_cols(root: &LayoutHandle, target: TabId, new_tabs: Vec<TabId>) -> bool {
+pub(crate) fn split_leaf_into_cols(
+    root: &LayoutHandle,
+    target: TabId,
+    new_tabs: Vec<TabId>,
+) -> bool {
     fn rec(n: &mut LayoutNode, target: TabId, new_tabs: &[TabId]) -> bool {
         match n {
             LayoutNode::Leaf(t) if *t == target => {
                 let mut children = Vec::with_capacity(1 + new_tabs.len());
                 children.push(LayoutNode::Leaf(*t));
-                for &nt in new_tabs { children.push(LayoutNode::Leaf(nt)); }
+                for &nt in new_tabs {
+                    children.push(LayoutNode::Leaf(nt));
+                }
                 *n = LayoutNode::Cols(children);
                 true
             }
             LayoutNode::Rows(v) | LayoutNode::Cols(v) => {
-                for ch in v { if rec(ch, target, new_tabs) { return true; } }
+                for ch in v {
+                    if rec(ch, target, new_tabs) {
+                        return true;
+                    }
+                }
                 false
             }
             _ => false,
@@ -108,18 +174,28 @@ pub(crate) fn split_leaf_into_cols(root: &LayoutHandle, target: TabId, new_tabs:
 }
 
 // Replace a leaf with Rows(leaf + new tabs)
-pub(crate) fn split_leaf_into_rows(root: &LayoutHandle, target: TabId, new_tabs: Vec<TabId>) -> bool {
+pub(crate) fn split_leaf_into_rows(
+    root: &LayoutHandle,
+    target: TabId,
+    new_tabs: Vec<TabId>,
+) -> bool {
     fn rec(n: &mut LayoutNode, target: TabId, new_tabs: &[TabId]) -> bool {
         match n {
             LayoutNode::Leaf(t) if *t == target => {
                 let mut children = Vec::with_capacity(1 + new_tabs.len());
                 children.push(LayoutNode::Leaf(*t));
-                for &nt in new_tabs { children.push(LayoutNode::Leaf(nt)); }
+                for &nt in new_tabs {
+                    children.push(LayoutNode::Leaf(nt));
+                }
                 *n = LayoutNode::Rows(children);
                 true
             }
             LayoutNode::Rows(v) | LayoutNode::Cols(v) => {
-                for ch in v { if rec(ch, target, new_tabs) { return true; } }
+                for ch in v {
+                    if rec(ch, target, new_tabs) {
+                        return true;
+                    }
+                }
                 false
             }
             _ => false,
@@ -136,12 +212,16 @@ pub(crate) fn close_leaf(root: &LayoutHandle, target: TabId) -> bool {
             LayoutNode::Rows(v) => {
                 v.retain_mut(|ch| !rec(ch, target));
                 // Collapse
-                if v.len() == 1 { *n = v.remove(0); }
+                if v.len() == 1 {
+                    *n = v.remove(0);
+                }
                 false
             }
             LayoutNode::Cols(v) => {
                 v.retain_mut(|ch| !rec(ch, target));
-                if v.len() == 1 { *n = v.remove(0); }
+                if v.len() == 1 {
+                    *n = v.remove(0);
+                }
                 false
             }
         }
@@ -149,7 +229,10 @@ pub(crate) fn close_leaf(root: &LayoutHandle, target: TabId) -> bool {
     let mut root_b = root.borrow_mut();
     match &*root_b {
         LayoutNode::Leaf(t) if *t == target => false, // don't allow removing the last pane here
-        _ => { rec(&mut *root_b, target); true }
+        _ => {
+            rec(&mut *root_b, target);
+            true
+        }
     }
 }
 

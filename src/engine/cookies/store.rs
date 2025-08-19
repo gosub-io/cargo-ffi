@@ -33,8 +33,8 @@
 mod json;
 mod sqlite;
 
-use crate::engine::cookies::cookies::CookieJarHandle;
 use crate::engine::cookies::cookie_jar::DefaultCookieJar;
+use crate::engine::cookies::cookies::CookieJarHandle;
 use crate::engine::zone::ZoneId;
 
 /// File-backed JSON cookie store (one file for all zones).

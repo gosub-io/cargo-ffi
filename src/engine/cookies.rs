@@ -61,10 +61,10 @@
 //! - [`CookieJar`], [`DefaultCookieJar`], [`PersistentCookieJar`]
 //! - [`CookieStore`], [`JsonCookieStore`], [`SqliteCookieStore`]
 //!
-mod cookies;
 mod cookie_jar;
-mod store;
+mod cookies;
 mod persistent_cookie_jar;
+mod store;
 
 pub use cookies::Cookie;
 pub use cookies::CookieJarHandle;

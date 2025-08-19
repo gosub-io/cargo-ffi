@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use crate::{EngineError, GosubEngine};
 use crate::cookies::{CookieJarHandle, CookieStoreHandle};
-use crate::zone::{ZoneId, ZoneConfig};
 use crate::storage::StorageService;
+use crate::zone::{ZoneConfig, ZoneId};
+use crate::{EngineError, GosubEngine};
+use std::sync::Arc;
 
 /// Builder for creating a new [`Zone`](crate::engine::zone::Zone) in the [`GosubEngine`].
 ///
@@ -133,7 +133,11 @@ impl<'e> ZoneBuilder<'e> {
 
         // If we have a cookie store but not a cookie jar, we let the store create the jar for the zone_id
         if self.cookie_jar.is_none() && self.cookie_jar.is_some() {
-            let jar = self.cookie_store.clone().unwrap().jar_for(self.zone_id.unwrap());
+            let jar = self
+                .cookie_store
+                .clone()
+                .unwrap()
+                .jar_for(self.zone_id.unwrap());
             self.cookie_jar = jar
         }
 

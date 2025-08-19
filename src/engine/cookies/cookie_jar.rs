@@ -20,11 +20,11 @@
 //!
 //! See also: RFC 6265bis (HTTP State Management Mechanism).
 //!
-use std::any::Any;
-use std::collections::HashMap;
 use crate::engine::cookies::Cookie;
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::collections::HashMap;
 use url::Url;
 
 /// A cookie jar keeps the cookies for one single zone.
@@ -69,7 +69,6 @@ pub trait CookieJar: Send + Sync {
     fn remove_cookies_for_url(&mut self, url: &Url);
 }
 
-
 /// Default cookie jar which holds cookies for a single zone.
 ///
 /// This implementation is **in-memory only** and performs **no persistence**.
@@ -102,13 +101,20 @@ impl DefaultCookieJar {
 }
 
 impl CookieJar for DefaultCookieJar {
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 
     fn store_response_cookies(&mut self, url: &Url, headers: &HeaderMap) {
         let origin = url.origin().ascii_serialization();
         let _host = url.host_str().unwrap_or_default();
-        let default_path = url.path().rsplit_once('/').map_or("/", |(a, _)| if a.is_empty() { "/" } else { a });
+        let default_path =
+            url.path()
+                .rsplit_once('/')
+                .map_or("/", |(a, _)| if a.is_empty() { "/" } else { a });
 
         let bucket = self.entries.entry(origin).or_default();
 
@@ -136,7 +142,9 @@ impl CookieJar for DefaultCookieJar {
                         if let Some((k, v)) = part.split_once('=') {
                             match k.to_ascii_lowercase().as_str() {
                                 "path" => cookie.path = Some(v.to_string()),
-                                "domain" => cookie.domain = Some(v.trim_start_matches('.').to_string()),
+                                "domain" => {
+                                    cookie.domain = Some(v.trim_start_matches('.').to_string())
+                                }
                                 "expires" => cookie.expires = Some(v.to_string()),
                                 "samesite" => {
                                     // normalize to "Lax" | "Strict" | "None"
@@ -189,15 +197,15 @@ impl CookieJar for DefaultCookieJar {
 
         let cookies = self.entries.get(&origin)?;
 
-        let header = cookies.iter().filter(|cookie| {
-            // Check domain match
-            match &cookie.domain {
-                Some(domain) => {
-                    host == domain || host.ends_with(&format!(".{}", domain))
+        let header = cookies
+            .iter()
+            .filter(|cookie| {
+                // Check domain match
+                match &cookie.domain {
+                    Some(domain) => host == domain || host.ends_with(&format!(".{}", domain)),
+                    None => true,
                 }
-                None => true,
-            }
-        })
+            })
             .filter(|cookie| {
                 // Check path match
                 match &cookie.path {
@@ -225,16 +233,19 @@ impl CookieJar for DefaultCookieJar {
     }
 
     fn get_all_cookies(&self) -> Vec<(Url, String)> {
-        self.entries.iter().filter_map(|(origin, cookies)| {
-            Url::parse(origin).ok().map(|url| {
-                let str_ = cookies
-                    .iter()
-                    .map(|c| format!("{}={}", c.name, c.value))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                (url, str_)
+        self.entries
+            .iter()
+            .filter_map(|(origin, cookies)| {
+                Url::parse(origin).ok().map(|url| {
+                    let str_ = cookies
+                        .iter()
+                        .map(|c| format!("{}={}", c.name, c.value))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    (url, str_)
+                })
             })
-        }).collect()
+            .collect()
     }
 
     fn remove_cookie(&mut self, url: &Url, cookie_name: &str) {

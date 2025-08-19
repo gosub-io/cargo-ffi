@@ -1,3 +1,5 @@
+pub mod null;
+
 #[cfg(feature = "backend_cairo")]
 pub mod cairo;
 

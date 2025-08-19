@@ -36,15 +36,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use r2d2::{Pool, PooledConnection};
-use r2d2_sqlite::SqliteConnectionManager;
 use r2d2_sqlite::rusqlite::params;
+use r2d2_sqlite::SqliteConnectionManager;
 
-use crate::engine::cookies::{Cookie, CookieJarHandle, CookieStoreHandle};
 use crate::engine::cookies::cookie_jar::DefaultCookieJar;
-use crate::engine::cookies::store::CookieStore;
 use crate::engine::cookies::persistent_cookie_jar::PersistentCookieJar;
+use crate::engine::cookies::store::CookieStore;
+use crate::engine::cookies::{Cookie, CookieJarHandle, CookieStoreHandle};
 use crate::engine::zone::ZoneId;
-
 
 /// A SQLite-based cookie store that persists cookies across sessions.
 ///
@@ -85,8 +84,9 @@ impl SqliteCookieStore {
                     same_site TEXT,
                     http_only INTEGER NOT NULL,
                     PRIMARY KEY (zone_id, origin, name)
-                );"
-            ).expect("Failed to create cookies table");
+                );",
+            )
+            .expect("Failed to create cookies table");
         }
 
         let store = Arc::new(Self {
@@ -118,25 +118,29 @@ impl SqliteCookieStore {
     fn load_zone(&self, zone_id: ZoneId) -> DefaultCookieJar {
         let conn = self.conn();
 
-        let mut stmt = conn.prepare(
-            "SELECT origin, name, value, path, domain, secure, expires, same_site, http_only
-             FROM cookies WHERE zone_id = ?1"
-        ).expect("Prepare failed");
+        let mut stmt = conn
+            .prepare(
+                "SELECT origin, name, value, path, domain, secure, expires, same_site, http_only
+             FROM cookies WHERE zone_id = ?1",
+            )
+            .expect("Prepare failed");
 
-        let rows = stmt.query_map([zone_id.to_string()], |row| {
-            let origin: String = row.get(0)?;
-            let entry = Cookie {
-                name: row.get(1)?,
-                value: row.get(2)?,
-                path: row.get(3)?,
-                domain: row.get(4)?,
-                secure: row.get::<_, i64>(5)? != 0,
-                expires: row.get(6)?,
-                same_site: row.get(7)?,
-                http_only: row.get::<_, i64>(8)? != 0,
-            };
-            Ok((origin, entry))
-        }).expect("Query failed");
+        let rows = stmt
+            .query_map([zone_id.to_string()], |row| {
+                let origin: String = row.get(0)?;
+                let entry = Cookie {
+                    name: row.get(1)?,
+                    value: row.get(2)?,
+                    path: row.get(3)?,
+                    domain: row.get(4)?,
+                    secure: row.get::<_, i64>(5)? != 0,
+                    expires: row.get(6)?,
+                    same_site: row.get(7)?,
+                    http_only: row.get::<_, i64>(8)? != 0,
+                };
+                Ok((origin, entry))
+            })
+            .expect("Query failed");
 
         let mut jar = DefaultCookieJar::new();
         for result in rows {
@@ -158,8 +162,11 @@ impl SqliteCookieStore {
         let mut conn = self.conn();
         let tx = conn.transaction().expect("Transaction failed");
 
-        tx.execute("DELETE FROM cookies WHERE zone_id = ?1", [zone_id.to_string()])
-            .expect("Failed to delete cookies");
+        tx.execute(
+            "DELETE FROM cookies WHERE zone_id = ?1",
+            [zone_id.to_string()],
+        )
+        .expect("Failed to delete cookies");
 
         let mut stmt = tx.prepare(
             "INSERT INTO cookies (zone_id, origin, name, value, path, domain, secure, expires, same_site, http_only)
@@ -179,7 +186,8 @@ impl SqliteCookieStore {
                     cookie.expires,
                     cookie.same_site,
                     cookie.http_only as i64
-                ]).expect("Failed to insert cookie");
+                ])
+                .expect("Failed to insert cookie");
             }
         }
 
@@ -194,8 +202,11 @@ impl SqliteCookieStore {
     /// Panics on SQL execution error.
     fn remove_zone_from_db(&self, zone_id: ZoneId) {
         let conn = self.conn();
-        conn.execute("DELETE FROM cookies WHERE zone_id = ?1", [zone_id.to_string()])
-            .expect("Failed to delete zone cookies");
+        conn.execute(
+            "DELETE FROM cookies WHERE zone_id = ?1",
+            [zone_id.to_string()],
+        )
+        .expect("Failed to delete zone cookies");
     }
 }
 
@@ -220,7 +231,10 @@ impl CookieStore for SqliteCookieStore {
         let arc_jar: CookieJarHandle = Arc::new(RwLock::new(jar));
 
         let store_ref = self.store_self.read().unwrap();
-        let store = store_ref.as_ref().expect("store_self not initialized").clone();
+        let store = store_ref
+            .as_ref()
+            .expect("store_self not initialized")
+            .clone();
 
         let persistent = Arc::new(RwLock::new(PersistentCookieJar::new(
             zone_id,
@@ -228,7 +242,10 @@ impl CookieStore for SqliteCookieStore {
             store,
         )));
 
-        self.jars.write().unwrap().insert(zone_id, persistent.clone());
+        self.jars
+            .write()
+            .unwrap()
+            .insert(zone_id, persistent.clone());
 
         Some(persistent)
     }
