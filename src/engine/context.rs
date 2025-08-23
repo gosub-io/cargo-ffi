@@ -1,10 +1,10 @@
+use crate::engine::storage::{StorageArea, StorageHandles};
+use crate::net::{fetch, Response};
+use crate::render::{Color, DisplayItem, RenderList, Viewport};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use url::Url;
-use crate::engine::storage::{StorageArea, StorageHandles};
-use crate::net::{fetch, Response};
-use crate::render::{Color, DisplayItem, RenderList, Viewport};
 
 /// BrowsingContext dedicated to a specific tab
 ///
@@ -56,7 +56,7 @@ impl BrowsingContext {
             runtime,
             loading_task: None,
             failed: false,
-            storage: None,          // Default no storage unless binding manually by a tab
+            storage: None, // Default no storage unless binding manually by a tab
             render_list: RenderList::new(),
             render_dirty: false,
             viewport: Viewport::default(),
@@ -67,10 +67,12 @@ impl BrowsingContext {
         }
     }
 
-
     /// Binds the storage handles to the browsing context (@TODO: Why not via the ::new()?).
     pub fn bind_storage(&mut self, local: Arc<dyn StorageArea>, session: Arc<dyn StorageArea>) {
-        self.storage = Some(StorageHandles{ local: local.clone(), session: session.clone() });
+        self.storage = Some(StorageHandles {
+            local: local.clone(),
+            session: session.clone(),
+        });
         // At this point, we would probably want to hook our storage handles into the javascript/lua runtime
     }
     pub fn local_storage(&self) -> Option<Arc<dyn StorageArea>> {
@@ -80,13 +82,10 @@ impl BrowsingContext {
         self.storage.as_ref().map(|s| s.session.clone())
     }
 
-
     /// Starts a task that will load the actual url
     pub fn start_loading(&mut self, url: Url) {
         let url_clone = url.clone();
-        let handle = self.runtime.spawn(async move {
-            fetch(url_clone).await
-        });
+        let handle = self.runtime.spawn(async move { fetch(url_clone).await });
 
         self.loading_task = Some(handle);
         self.failed = false;
@@ -129,10 +128,14 @@ impl BrowsingContext {
     }
 
     #[inline]
-    pub fn viewport(&self) -> &Viewport { &self.viewport }
+    pub fn viewport(&self) -> &Viewport {
+        &self.viewport
+    }
 
     #[inline]
-    pub fn scene_epoch(&self) -> u64 { self.scene_epoch }
+    pub fn scene_epoch(&self) -> u64 {
+        self.scene_epoch
+    }
 
     pub fn invalidate_render(&mut self) {
         self.render_dirty = true;
@@ -148,13 +151,21 @@ impl BrowsingContext {
         let mut rl = RenderList::default();
 
         // Example scene: clear + show raw HTML as text
-        rl.items.push(DisplayItem::Clear { color: Color::new(0.75, 0.75, 0.75, 1.0) });
+        rl.items.push(DisplayItem::Clear {
+            color: Color::new(0.75, 0.75, 0.75, 1.0),
+        });
 
         // Text color: black
         let c = Color::new(0.0, 0.0, 0.0, 1.0);
         let mut y = 24.0;
         for line in self.raw_html.lines().take(600) {
-            rl.items.push(DisplayItem::TextRun { x: 14.0, y, text: line.to_string(), size: 13.0, color: c });
+            rl.items.push(DisplayItem::TextRun {
+                x: 14.0,
+                y,
+                text: line.to_string(),
+                size: 13.0,
+                color: c,
+            });
             y += 16.0;
         }
 
@@ -167,9 +178,10 @@ impl BrowsingContext {
         self.layout_dirty = false;
     }
 
-
     #[inline]
-    pub fn render_list(&self) -> &RenderList { &self.render_list }
+    pub fn render_list(&self) -> &RenderList {
+        &self.render_list
+    }
 
     /// Returns true when the loading failed
     pub fn has_failed(&self) -> bool {
@@ -177,6 +189,7 @@ impl BrowsingContext {
     }
 
     /// Returns the raw HTML of the tab
-    pub fn current_url(&self) -> Option<&Url> { self.current_url.as_ref() }
-
+    pub fn current_url(&self) -> Option<&Url> {
+        self.current_url.as_ref()
+    }
 }

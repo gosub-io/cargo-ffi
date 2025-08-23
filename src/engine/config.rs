@@ -24,7 +24,6 @@ use crate::engine::zone::ZoneConfig;
 /// Default user agent string used by the engine for HTTP requests.
 const DEFAULT_USER_AGENT: &str = "Gosub/1.0 (X11; Linux x86_64) Gecko/20250802 GosubBrowser/1.0";
 
-
 /// Main engine configuration.
 ///
 /// `EngineConfig` contains global defaults and limits for the entire
@@ -54,9 +53,7 @@ impl Default for EngineConfig {
         Self {
             user_agent: DEFAULT_USER_AGENT.to_string(),
             max_zones: 10,
-            default_zone_config: ZoneConfig {
-                max_tabs: 5,
-            },
+            default_zone_config: ZoneConfig { max_tabs: 5 },
         }
     }
 }

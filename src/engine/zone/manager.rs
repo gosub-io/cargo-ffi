@@ -35,14 +35,14 @@
 //! let zone = manager.get_zone(zone_id).unwrap();
 //! ```
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use crate::{EngineConfig, EngineError};
 use crate::cookies::CookieJarHandle;
 use crate::engine::storage::local::in_memory::InMemoryLocalStore;
 use crate::engine::storage::StorageService;
-use crate::engine::zone::{Zone, ZoneId, ZoneConfig};
+use crate::engine::zone::{Zone, ZoneConfig, ZoneId};
 use crate::storage::InMemorySessionStore;
+use crate::{EngineConfig, EngineError};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Manages all zones within the engine.
 ///
@@ -65,7 +65,6 @@ impl ZoneManager {
         }
     }
 
-
     /// Creates a new zone with the given configuration and optional services.
     ///
     /// # Arguments
@@ -87,7 +86,7 @@ impl ZoneManager {
         let mut zones = self.zones.lock().unwrap();
 
         if zones.len() >= self.config.max_zones {
-            return Err(EngineError::ZoneLimitExceeded)
+            return Err(EngineError::ZoneLimitExceeded);
         }
 
         // Check if we defined storage service, if not we use the default one (in-memory)
@@ -106,10 +105,8 @@ impl ZoneManager {
                     return Err(EngineError::ZoneAlreadyExists);
                 }
                 Zone::new_with_id(id, resolved_config, storage, cookie_jar)
-            },
-            None => {
-                Zone::new(resolved_config, storage, cookie_jar)
             }
+            None => Zone::new(resolved_config, storage, cookie_jar),
         };
         let zone_id = zone.id;
 
@@ -122,7 +119,6 @@ impl ZoneManager {
         let zones = self.zones.lock().ok()?;
         zones.get(&id).cloned()
     }
-
 
     /// Retrieves a zone by its [`ZoneId`] for mutation, if it exists.
     pub fn get_zone_mut(&self, id: &ZoneId) -> Option<Arc<Mutex<Zone>>> {

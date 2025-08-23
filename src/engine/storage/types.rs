@@ -10,7 +10,9 @@ pub enum PartitionKey {
 }
 
 impl Default for PartitionKey {
-    fn default() -> Self { PartitionKey::None }
+    fn default() -> Self {
+        PartitionKey::None
+    }
 }
 
 impl PartitionKey {
@@ -31,14 +33,14 @@ pub enum PartitionPolicy {
     /// No partitioning, uses a global state.
     None,
     /// Partitioning based on the top-level origin of the URL.
-    TopLevelOrigin
+    TopLevelOrigin,
 }
 
 /// Computes the partition key based on the URL and the specified partition policy.
 pub fn compute_partition_key(u: &Url, p: PartitionPolicy) -> PartitionKey {
     match p {
         PartitionPolicy::None => PartitionKey::None,
-        PartitionPolicy::TopLevelOrigin => PartitionKey::TopLevel(u.origin())
+        PartitionPolicy::TopLevelOrigin => PartitionKey::TopLevel(u.origin()),
     }
 }
 
@@ -61,7 +63,10 @@ mod tests {
     #[test]
     fn compute_none_policy_returns_none() {
         let u = Url::parse("https://example.com/path?q=1#frag").unwrap();
-        assert_eq!(compute_partition_key(&u, PartitionPolicy::None), PartitionKey::None);
+        assert_eq!(
+            compute_partition_key(&u, PartitionPolicy::None),
+            PartitionKey::None
+        );
     }
 
     #[test]

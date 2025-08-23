@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use gosub_engine::render::backend::{CompositorSink, ExternalHandle};
 use gosub_engine::tab::TabId;
+use std::collections::HashMap;
 
 /// A compositor implementation for GTK that manages frames per tab
 /// and requests redraws when new frames are submitted.

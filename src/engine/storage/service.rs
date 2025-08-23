@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex, mpsc};
-use anyhow::Result;
-use crate::tab::TabId;
-use crate::zone::ZoneId;
 use super::area::{LocalStore, SessionStore, StorageArea};
 use super::event::{StorageEvent, StorageScope};
 use super::types::PartitionKey;
+use crate::tab::TabId;
+use crate::zone::ZoneId;
+use anyhow::Result;
+use std::sync::{mpsc, Arc, Mutex};
 
 /// A handle for receiving storage change notifications.
 pub type Subscription = mpsc::Receiver<StorageEvent>;
@@ -36,24 +36,53 @@ pub struct StorageService {
 impl StorageService {
     /// Create a new StorageService with the given local and session stores.
     pub fn new(local: Arc<dyn LocalStore>, session: Arc<dyn SessionStore>) -> Self {
-        Self { local, session, bus: Arc::new(StorageBus::default()) }
+        Self {
+            local,
+            session,
+            bus: Arc::new(StorageBus::default()),
+        }
     }
 
     /// Subscribe to storage changes (engine can dispatch DOM `storage` events).
-    pub fn subscribe(&self) -> Subscription { self.bus.subscribe() }
+    pub fn subscribe(&self) -> Subscription {
+        self.bus.subscribe()
+    }
 
     /// Get a localStorage area (wrapped to emit notifications).
-    pub fn local_for(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin) -> Result<Arc<dyn StorageArea>>
-    {
+    pub fn local_for(
+        &self,
+        zone: ZoneId,
+        part: &PartitionKey,
+        origin: &url::Origin,
+    ) -> Result<Arc<dyn StorageArea>> {
         let inner = self.local.area(zone, part, origin)?;
-        Ok(self.wrap_notifying(inner, zone, None, part.clone(), origin.clone(), StorageScope::Local))
+        Ok(self.wrap_notifying(
+            inner,
+            zone,
+            None,
+            part.clone(),
+            origin.clone(),
+            StorageScope::Local,
+        ))
     }
 
     /// Get a sessionStorage area (wrapped to emit notifications).
-    pub fn session_for(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea>
-    {
+    pub fn session_for(
+        &self,
+        zone: ZoneId,
+        tab: TabId,
+        part: &PartitionKey,
+        origin: &url::Origin,
+    ) -> Arc<dyn StorageArea> {
         let inner = self.session.area(zone, tab, part, origin);
-        self.wrap_notifying(inner, zone, Some(tab), part.clone(), origin.clone(), StorageScope::Session)
+        self.wrap_notifying(
+            inner,
+            zone,
+            Some(tab),
+            part.clone(),
+            origin.clone(),
+            StorageScope::Session,
+        )
     }
 
     /// Drops a tab from sessionStorage.
@@ -68,7 +97,7 @@ impl StorageService {
         source_tab: Option<TabId>,
         partition: PartitionKey,
         origin: url::Origin,
-        scope: StorageScope
+        scope: StorageScope,
     ) -> Arc<dyn StorageArea> {
         Arc::new(NotifyingArea {
             inner,
@@ -141,8 +170,12 @@ impl StorageArea for NotifyingArea {
         });
         Ok(())
     }
-    fn len(&self) -> usize { self.inner.len() }
-    fn keys(&self) -> Vec<String> { self.inner.keys() }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+    fn keys(&self) -> Vec<String> {
+        self.inner.keys()
+    }
 }
 
 #[cfg(test)]
@@ -151,9 +184,9 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
-    use crate::zone::ZoneId;
-    use crate::tab::TabId;
     use crate::storage::InMemorySessionStore;
+    use crate::tab::TabId;
+    use crate::zone::ZoneId;
 
     // --- Tiny in-memory StorageArea for tests ---
     #[derive(Default)]
@@ -166,7 +199,10 @@ mod tests {
             self.map.lock().unwrap().get(key).cloned()
         }
         fn set_item(&self, key: &str, value: &str) -> Result<()> {
-            self.map.lock().unwrap().insert(key.to_string(), value.to_string());
+            self.map
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_string());
             Ok(())
         }
         fn remove_item(&self, key: &str) -> Result<()> {
@@ -196,7 +232,7 @@ mod tests {
             &self,
             zone: ZoneId,
             part: &PartitionKey,
-            origin: &url::Origin
+            origin: &url::Origin,
         ) -> Result<Arc<dyn StorageArea>> {
             let key = (zone, part.clone(), origin.clone());
             let mut g = self.areas.lock().unwrap();
@@ -207,17 +243,25 @@ mod tests {
     }
 
     // --- helpers ---
-    fn z() -> ZoneId { ZoneId::new() }
-    fn t() -> TabId { TabId::new() }
+    fn z() -> ZoneId {
+        ZoneId::new()
+    }
+    fn t() -> TabId {
+        TabId::new()
+    }
     fn o(s: &str) -> url::Origin {
         let url = url::Url::parse(s).expect("valid URL");
         url.origin()
     }
     fn recv_ok(rx: &Subscription) -> StorageEvent {
-        rx.recv_timeout(Duration::from_millis(200)).expect("expected event within 200ms")
+        rx.recv_timeout(Duration::from_millis(200))
+            .expect("expected event within 200ms")
     }
     fn recv_none(rx: &Subscription) {
-        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "unexpected extra event");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "unexpected extra event"
+        );
     }
 
     // =============== Local (localStorage) =================
@@ -345,15 +389,21 @@ mod tests {
         area.set_item("c", "3").unwrap();
 
         // rx1 order
-        let e1 = recv_ok(&rx1); assert_eq!(e1.key.as_deref(), Some("a"));
-        let e2 = recv_ok(&rx1); assert_eq!(e2.key.as_deref(), Some("b"));
-        let e3 = recv_ok(&rx1); assert_eq!(e3.key.as_deref(), Some("c"));
+        let e1 = recv_ok(&rx1);
+        assert_eq!(e1.key.as_deref(), Some("a"));
+        let e2 = recv_ok(&rx1);
+        assert_eq!(e2.key.as_deref(), Some("b"));
+        let e3 = recv_ok(&rx1);
+        assert_eq!(e3.key.as_deref(), Some("c"));
         recv_none(&rx1);
 
         // rx2 order
-        let f1 = recv_ok(&rx2); assert_eq!(f1.key.as_deref(), Some("a"));
-        let f2 = recv_ok(&rx2); assert_eq!(f2.key.as_deref(), Some("b"));
-        let f3 = recv_ok(&rx2); assert_eq!(f3.key.as_deref(), Some("c"));
+        let f1 = recv_ok(&rx2);
+        assert_eq!(f1.key.as_deref(), Some("a"));
+        let f2 = recv_ok(&rx2);
+        assert_eq!(f2.key.as_deref(), Some("b"));
+        let f3 = recv_ok(&rx2);
+        assert_eq!(f3.key.as_deref(), Some("c"));
         recv_none(&rx2);
     }
 

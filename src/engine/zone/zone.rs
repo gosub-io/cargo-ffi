@@ -1,28 +1,30 @@
 // src/engine/zone.rs
 //! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
 //!
+use crate::engine::cookies::CookieJarHandle;
+use crate::engine::cookies::DefaultCookieJar;
+use crate::engine::storage::event::StorageScope;
+use crate::engine::storage::types::compute_partition_key;
+use crate::engine::storage::{
+    PartitionKey, StorageArea, StorageEvent, StorageHandles, StorageService, Subscription,
+};
+use crate::engine::tab::{Tab, TabId, TabMode};
+use crate::engine::tick::TickResult;
+use crate::engine::zone::password_store::PasswordStore;
 use crate::render::backend::CompositorSink;
+use crate::render::backend::RenderBackend;
+use crate::render::Viewport;
+use crate::zone::ZoneConfig;
+use crate::EngineError;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
-use crate::engine::tab::{Tab, TabId, TabMode};
-use crate::EngineError;
-use crate::engine::tick::TickResult;
 use uuid::Uuid;
-use crate::engine::cookies::CookieJarHandle;
-use crate::engine::cookies::DefaultCookieJar;
-use crate::engine::storage::{PartitionKey, StorageArea, StorageEvent, StorageHandles, StorageService, Subscription};
-use crate::engine::storage::event::StorageScope;
-use crate::engine::zone::password_store::PasswordStore;
-use rand::{Rng, SeedableRng};
-use rand::rngs::StdRng;
-use crate::engine::storage::types::compute_partition_key;
-use crate::render::backend::RenderBackend;
-use crate::render::Viewport;
-use crate::zone::ZoneConfig;
 
 /// A unique identifier for a [`Zone`](crate::zone::Zone) within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -221,7 +223,6 @@ impl Zone {
         storage: Arc<StorageService>,
         cookie_jar: Option<CookieJarHandle>,
     ) -> Self {
-
         // We generate the color by using the zone id as a seed
         let mut rng = StdRng::seed_from_u64(zone_id.0.as_u64_pair().0);
         let random_color = [
@@ -233,7 +234,8 @@ impl Zone {
 
         let storage_rx = storage.subscribe();
 
-        let cookie_jar = cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
+        let cookie_jar =
+            cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
 
         Self {
             id: zone_id,
@@ -294,7 +296,11 @@ impl Zone {
     }
 
     /// Opens a new tab into the zone
-    pub(crate) fn open_tab(&mut self, runtime: Arc<Runtime>, viewport: Viewport) -> Result<TabId, EngineError> {
+    pub(crate) fn open_tab(
+        &mut self,
+        runtime: Arc<Runtime>,
+        viewport: Viewport,
+    ) -> Result<TabId, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
@@ -302,7 +308,7 @@ impl Zone {
         let tab = Tab::new(self.id, runtime, viewport, Some(self.cookie_jar.clone()));
         let tab_id = tab.id;
 
-        self.tabs.  insert(tab_id, Arc::new(Mutex::new(tab)));
+        self.tabs.insert(tab_id, Arc::new(Mutex::new(tab)));
         Ok(tab_id)
     }
 
@@ -329,10 +335,10 @@ impl Zone {
             let mut tab = tab_arc.lock().unwrap();
 
             let interval = match tab.mode {
-                TabMode::Active => Duration::from_secs(0),              // Always run
-                TabMode::BackgroundLive => Duration::from_millis(100),  // Run at 10Hz
-                TabMode::BackgroundIdle => Duration::from_secs(1),      // Run at 1Hz
-                TabMode::Suspended => continue,                              // Skip suspended tabs
+                TabMode::Active => Duration::from_secs(0), // Always run
+                TabMode::BackgroundLive => Duration::from_millis(100), // Run at 10Hz
+                TabMode::BackgroundIdle => Duration::from_secs(1), // Run at 1Hz
+                TabMode::Suspended => continue,            // Skip suspended tabs
             };
 
             // Check if enough time has passed since the last tick
@@ -357,14 +363,22 @@ impl Zone {
         results
     }
 
-
     /// Get the shared localStorage area for this (zone × partition × origin).
-    pub fn local_area(&self, pk: &PartitionKey, origin: &url::Origin) -> anyhow::Result<Arc<dyn StorageArea>> {
+    pub fn local_area(
+        &self,
+        pk: &PartitionKey,
+        origin: &url::Origin,
+    ) -> anyhow::Result<Arc<dyn StorageArea>> {
         self.storage.local_for(self.id, pk, origin)
     }
 
     /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
-    pub fn session_area(&self, tab: TabId, pk: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea> {
+    pub fn session_area(
+        &self,
+        tab: TabId,
+        pk: &PartitionKey,
+        origin: &url::Origin,
+    ) -> Arc<dyn StorageArea> {
         self.storage.session_for(self.id, tab, pk, origin)
     }
 
@@ -388,11 +402,13 @@ impl Zone {
                 // Deliver to *other* same-origin documents in the same zone/partition.
                 for (tab_id, tab) in &self.tabs {
                     // Skip the tab that caused it (spec behavior)
-                    if Some(*tab_id) == ev.source_tab { continue; }
+                    if Some(*tab_id) == ev.source_tab {
+                        continue;
+                    }
 
                     let mut tab = tab.lock().unwrap();
                     tab.dispatch_storage_event_to_same_origin_docs(
-                        &ev.origin, /*include_iframes=*/true, &ev
+                        &ev.origin, /*include_iframes=*/ true, &ev,
                     );
                 }
             }
@@ -403,7 +419,7 @@ impl Zone {
                     if let Some(tab) = self.tabs.get(&tab_id) {
                         let mut tab = tab.lock().unwrap();
                         tab.dispatch_storage_event_to_same_origin_docs(
-                            &ev.origin, /*include_iframes=*/true, &ev
+                            &ev.origin, /*include_iframes=*/ true, &ev,
                         );
                     }
                 }
@@ -417,9 +433,9 @@ impl Zone {
 
         // 2) bind storage
         let origin = final_url.origin().clone();
-        let local   = self.local_area(&tab.partition_key, &origin)?;
+        let local = self.local_area(&tab.partition_key, &origin)?;
         let session = self.session_area(tab.id, &tab.partition_key, &origin);
-        tab.bind_storage(StorageHandles{ local, session });
+        tab.bind_storage(StorageHandles { local, session });
         Ok(())
     }
 }

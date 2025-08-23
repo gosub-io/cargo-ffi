@@ -68,21 +68,21 @@
 
 use std::sync::Arc;
 
-/// Storage types
-pub mod types;
 /// Storage area module, defining the key/value storage interface.
 pub mod area;
 /// Event module, providing storage change events.
 pub mod event;
 /// Service module, providing a unified storage service for zones.
 pub mod service;
+/// Storage types
+pub mod types;
 
 /// Local storage module, providing persistent storage areas.
 pub mod local {
-    /// SQLite-backed local storage implementation.
-    pub mod sqlite_store;
     /// In-memory local storage implementation.
     pub mod in_memory;
+    /// SQLite-backed local storage implementation.
+    pub mod sqlite_store;
 }
 
 /// Session storage module, providing in-memory session storage.
@@ -100,10 +100,9 @@ pub struct StorageHandles {
     pub session: Arc<dyn StorageArea>,
 }
 
-pub use types::PartitionKey;
-pub use area::{StorageArea, LocalStore, SessionStore};
-pub use service::{StorageService, Subscription};
-pub use local::sqlite_store::SqliteLocalStore;
-pub use session::in_memory::InMemorySessionStore;
+pub use area::{LocalStore, SessionStore, StorageArea};
 pub use event::StorageEvent;
-
+pub use local::sqlite_store::SqliteLocalStore;
+pub use service::{StorageService, Subscription};
+pub use session::in_memory::InMemorySessionStore;
+pub use types::PartitionKey;

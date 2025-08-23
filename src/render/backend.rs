@@ -17,24 +17,25 @@
 //! Backends differ in how they manage memory, synchronization, and ownership.
 //! Some are CPU-bound (Cairo), others GPU-accelerated (Vello, Skia, OpenGL).
 
-use std::{any::Any, ptr::NonNull};
 use crate::engine::BrowsingContext;
 use crate::render::Viewport;
-
+use std::{any::Any, ptr::NonNull};
 
 /// Size of a rendering surface in pixels.
-#[derive(Clone, Copy, Debug)]
-#[derive(PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceSize {
     /// Width of the surface in pixels.
     pub width: u32,
     /// Height of the surface in pixels.
-    pub height: u32
+    pub height: u32,
 }
 
 impl From<Viewport> for SurfaceSize {
     fn from(vp: Viewport) -> Self {
-        Self { width: vp.width, height: vp.height }
+        Self {
+            width: vp.width,
+            height: vp.height,
+        }
     }
 }
 
@@ -56,7 +57,21 @@ pub enum PresentMode {
 pub enum PixelFormat {
     /// 32-bit ARGB with premultiplied alpha.
     PreMulArgb32,
+    /// 8-bit RGBA.
+    Rgba8,
 }
+
+/// Pixel format for GPU textures.
+#[derive(Clone, Copy, Debug)]
+pub enum GpuPixelFormat {
+    /// 32-bit BGRA with sRGB color space.
+    Bgra8UnormSrgb,
+    /// 32-bit RGBA with sRGB color space.
+    Rgba8UnormSrgb,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct WgpuTextureId(pub u64);
 
 /// Handle that the host/browser can use to composite a surface.
 ///
@@ -64,6 +79,16 @@ pub enum PixelFormat {
 /// Each variant provides different trade-offs (safety, performance).
 #[derive(Clone, Debug)]
 pub enum ExternalHandle {
+    /// No-op handle. Useful for testing or headless operation. Never shows any pixels
+    NullHandle {
+        /// Width of the surface in pixels.
+        width: u32,
+        /// Height of the surface in pixels.
+        height: u32,
+        /// Frame ID for synchronization. Optional, can be `0` if not used.
+        frame_id: u64,
+    },
+
     /// CPU pixels in RGBA8. Safer owned alternative to raw pointers.
     CpuPixelsOwned {
         /// Width of the image in pixels.
@@ -75,7 +100,7 @@ pub enum ExternalHandle {
         /// Raw pixel data in RGBA8 format.
         pixels: Vec<u8>,
         /// Pixel format of the image.
-        format: PixelFormat
+        format: PixelFormat,
     },
 
     /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
@@ -88,7 +113,7 @@ pub enum ExternalHandle {
         /// Stride in bytes. This is the number of bytes per row of pixels.
         stride: u32,
         /// Raw pixel data pointer in RGBA8 format.
-        ptr: NonNull<u8>
+        ptr: NonNull<u8>,
     },
 
     /// GL / GLES texture. `target` is usually GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES.
@@ -103,19 +128,21 @@ pub enum ExternalHandle {
         /// Height of the texture in pixels.
         height: u32,
         /// Frame ID for synchronization. Optional, can be `0` if not used.
-        frame_id: u64
+        frame_id: u64,
     },
 
     /// WGPU/Vello app-owned indirection. Contract: host can resolve `id` to a usable texture.
     WgpuTextureId {
-        /// Unique texture ID managed by the host application.
+        /// Unique texture ID managed by the host application (for instance, in its texture store)
         id: u64,
         /// Width of the texture in pixels.
         width: u32,
         /// Height of the texture in pixels.
         height: u32,
+        /// WGPU texture format (e.g., TextureFormat::Rgba8UnormSrgb).
+        format: GpuPixelFormat,
         /// Frame ID for synchronization. Optional, can be `0` if not used.
-        frame_id: u64
+        frame_id: u64,
     },
 
     /// Skia image handle/ID (e.g., promise image). Contract to be defined with the host.
@@ -127,7 +154,7 @@ pub enum ExternalHandle {
         /// Height of the image in pixels.
         height: u32,
         /// Frame ID for synchronization. Optional, can be `0` if not used.
-        frame_id: u64
+        frame_id: u64,
     },
 }
 
@@ -200,20 +227,31 @@ pub trait ErasedSurface: Any {
     fn size(&self) -> SurfaceSize;
 }
 
-
 /// Core backend interface.
 ///
 /// Implemented by all rendering backends. The engine calls these methods
 /// on the backend’s owning thread.
 pub trait RenderBackend {
     /// Create a new surface with the given size and present mode.
-    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> anyhow::Result<Box<dyn ErasedSurface>>;
+    fn create_surface(
+        &self,
+        size: SurfaceSize,
+        present: PresentMode,
+    ) -> anyhow::Result<Box<dyn ErasedSurface>>;
 
     /// Render the current state of the browsing context to the given surface.
-    fn render(&mut self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
+    fn render(
+        &mut self,
+        context: &mut BrowsingContext,
+        surface: &mut dyn ErasedSurface,
+    ) -> anyhow::Result<()>;
 
     /// Generate a small RGBA8 snapshot of the surface, suitable for thumbnails or previews.
-    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
+    fn snapshot(
+        &mut self,
+        surface: &mut dyn ErasedSurface,
+        max_dim: u32,
+    ) -> anyhow::Result<RgbaImage>;
 
     /// Returns an external handle for the surface, if supported.
     fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;

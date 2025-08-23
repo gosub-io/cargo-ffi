@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use anyhow::Result;
+use super::types::PartitionKey;
 use crate::tab::TabId;
 use crate::zone::ZoneId;
-use super::types::PartitionKey;
+use anyhow::Result;
+use std::sync::Arc;
 
 /// Object-safe key/value storage area (DOM’s Storage).
 pub trait StorageArea: Send + Sync {
@@ -28,25 +28,33 @@ pub trait StorageArea: Send + Sync {
 /// Store for localStorage-like areas (shared per (zone, partition, origin)).
 pub trait LocalStore: Send + Sync {
     /// Retrieves a storage area for the given zone, partition, and origin.
-    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin)
-            -> Result<Arc<dyn StorageArea>>;
+    fn area(
+        &self,
+        zone: ZoneId,
+        part: &PartitionKey,
+        origin: &url::Origin,
+    ) -> Result<Arc<dyn StorageArea>>;
 }
 
 /// Store for sessionStorage-like areas (isolated per (zone, tab, partition, origin)).
 pub trait SessionStore: Send + Sync {
     /// Retrieves a storage area for the given zone, tab, partition, and origin.
-    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin)
-            -> Arc<dyn StorageArea>;
+    fn area(
+        &self,
+        zone: ZoneId,
+        tab: TabId,
+        part: &PartitionKey,
+        origin: &url::Origin,
+    ) -> Arc<dyn StorageArea>;
 
     /// Drops all session storage for the given tab in the specified zone.
     fn drop_tab(&self, zone: ZoneId, tab: TabId);
 }
 
-
 #[cfg(test)]
 mod tests {
-    use crate::storage::InMemorySessionStore;
     use super::*;
+    use crate::storage::InMemorySessionStore;
 
     fn set(area: &Arc<dyn StorageArea>, k: &str, v: &str) {
         area.set_item(k, v).unwrap();

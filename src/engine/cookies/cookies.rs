@@ -45,10 +45,10 @@
 //! };
 //! ```
 
-use std::sync::{Arc, RwLock};
-use serde::{Deserialize, Serialize};
 use crate::engine::cookies::store::CookieStore;
 use crate::engine::cookies::CookieJar;
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, RwLock};
 
 /// A handle to a cookie jar trait.
 ///

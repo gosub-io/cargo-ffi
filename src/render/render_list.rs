@@ -41,7 +41,7 @@ pub struct Color {
     /// Blue channel
     pub b: f32,
     /// Alpha channel (opacity)
-    pub a: f32
+    pub a: f32,
 }
 
 #[allow(unused)]
@@ -84,7 +84,6 @@ impl Color {
     }
 }
 
-
 /// A single display item representing a drawing command.
 ///
 /// These commands are appended to a [`RenderList`] and later processed
@@ -99,7 +98,7 @@ pub enum DisplayItem {
     /// Clear the entire surface with the given color.
     Clear {
         /// The color to clear the surface with.
-        color: Color
+        color: Color,
     },
 
     /// Draw a filled rectangle at `(x, y)` with width `w` and height `h`.
@@ -113,7 +112,7 @@ pub enum DisplayItem {
         /// The height of the rectangle.
         h: f32,
         /// The color to fill the rectangle with.
-        color: Color
+        color: Color,
     },
 
     /// Draw a text run at `(x, y)` with font size `size`.
@@ -127,10 +126,9 @@ pub enum DisplayItem {
         /// The font size to use for the text.
         size: f32,
         /// The color to render the text with.
-        color: Color
+        color: Color,
     },
 }
-
 
 /// A list of display items to be rendered.
 ///
@@ -145,9 +143,7 @@ pub struct RenderList {
 impl RenderList {
     /// Creates a new, empty render list.
     pub fn new() -> Self {
-        RenderList {
-            items: Vec::new(),
-        }
+        RenderList { items: Vec::new() }
     }
 
     /// Adds a new display item (drawing command) to the list.

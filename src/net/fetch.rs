@@ -29,8 +29,8 @@
 //! }
 //! ```
 //!
-use url::Url;
 use crate::net::Response;
+use url::Url;
 
 /// Loads a URL using an HTTP GET request and returns the response.
 ///
@@ -68,7 +68,11 @@ pub async fn fetch(url: Url) -> Result<Response, reqwest::Error> {
     // Fetch results
     let final_url = res.url().clone();
     let status = res.status().as_u16();
-    let status_text = res.status().canonical_reason().unwrap_or("Unknown").to_string();
+    let status_text = res
+        .status()
+        .canonical_reason()
+        .unwrap_or("Unknown")
+        .to_string();
     let headers = res.headers().clone();
 
     // Fetch body. We don't do streaming yet

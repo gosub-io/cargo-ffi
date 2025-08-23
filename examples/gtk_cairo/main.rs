@@ -1,34 +1,47 @@
-use gosub_engine::{GosubEngine, EngineCommand, EngineEvent};
+use crate::compositor::GtkCompositor;
+use crate::tiling::{
+    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols,
+    split_leaf_into_rows, LayoutHandle, LayoutNode, Rect,
+};
 use gosub_engine::cookies::SqliteCookieStore;
-use gosub_engine::zone::ZoneId;
+use gosub_engine::render::backend::ExternalHandle;
+use gosub_engine::render::Viewport;
 use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
-use gtk4::prelude::*;
-use gtk4::{glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, Orientation};
-use gtk4::{GestureClick};
+use gosub_engine::zone::ZoneId;
+use gosub_engine::{EngineCommand, EngineEvent, GosubEngine};
 use gtk4::glib::clone;
+use gtk4::prelude::*;
+use gtk4::GestureClick;
+use gtk4::{
+    glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry,
+    EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, Orientation,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use url::Url;
-use gosub_engine::render::backend::ExternalHandle;
-use gosub_engine::render::Viewport;
-use crate::compositor::GtkCompositor;
-use crate::tiling::{close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle, LayoutNode, Rect};
 
-mod tiling;
 mod compositor;
+mod tiling;
 
-const DEFAULT_MAIN_ZONE : &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
+const DEFAULT_MAIN_ZONE: &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
 
 fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
-    eng.get_tab(tab_id).unwrap().lock().unwrap().current_url.clone()
+    eng.get_tab(tab_id)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .current_url
+        .clone()
 }
 
 fn main() {
-    let app = Application::builder().application_id("io.gosub.engine").build();
+    let app = Application::builder()
+        .application_id("io.gosub.engine")
+        .build();
 
     // Persistent cookie store
-    let cookie_store= SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
+    let cookie_store = SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
     let storage = Arc::new(StorageService::new(
         Arc::new(SqliteLocalStore::new(".gosub-gtk-local-storage.db").unwrap()),
         Arc::new(InMemorySessionStore::new()),

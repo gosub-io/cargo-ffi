@@ -1,7 +1,5 @@
-// #![forbid(unsafe_code)]
-// Optional but nice once docs are filled in:
-#![deny(missing_docs)]
-#![deny(rustdoc::broken_intra_doc_links)]
+// #![deny(missing_docs)]
+// #![deny(rustdoc::broken_intra_doc_links)]
 
 //! # Gosub Engine
 //!
@@ -48,6 +46,7 @@
 //! ## Building docs
 //! `cargo doc --open`
 
+extern crate core;
 
 mod engine;
 mod net;
@@ -58,21 +57,19 @@ mod net;
 /// engine to paint content into host-provided contexts.
 pub mod render;
 
-pub use engine::{
-    EngineConfig, EngineCommand, EngineEvent, MouseButton, EngineError, GosubEngine,
-};
+pub use engine::{EngineCommand, EngineConfig, EngineError, EngineEvent, GosubEngine, MouseButton};
 
 #[doc(inline)]
-pub use engine::tab as tab;
+pub use engine::tab;
 
 #[doc(inline)]
-pub use engine::zone as zone;
+pub use engine::zone;
 
 #[doc(inline)]
-pub use engine::cookies as cookies;
+pub use engine::cookies;
 
 #[doc(inline)]
-pub use engine::storage as storage;
+pub use engine::storage;
 
 #[doc(inline)]
-pub use engine::tick::TickResult as TickResult;
+pub use engine::tick::TickResult;

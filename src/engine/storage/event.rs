@@ -1,6 +1,6 @@
+use super::types::PartitionKey;
 use crate::tab::TabId;
 use crate::zone::ZoneId;
-use super::types::{PartitionKey};
 
 /// Scope of the store
 #[derive(Copy, Clone, Debug)]
@@ -8,7 +8,7 @@ pub enum StorageScope {
     /// Local storage, typically not tied to a specific tab.
     Local,
     /// Session storage, tied to a specific tab and valid only for the duration of that tab's session.
-    Session
+    Session,
 }
 
 /// Represents a storage event that occurred in a specific zone and partition, with details about the change.
@@ -36,8 +36,12 @@ pub struct StorageEvent {
 mod tests {
     use super::*;
 
-    fn z() -> ZoneId { ZoneId::new() }
-    fn t() -> TabId { TabId::new() }
+    fn z() -> ZoneId {
+        ZoneId::new()
+    }
+    fn t() -> TabId {
+        TabId::new()
+    }
     fn o(s: &str) -> url::Origin {
         let url = url::Url::parse(s).expect("valid URL");
         url.origin()
@@ -83,7 +87,9 @@ mod tests {
 
         // Basic checks
         match &ev.partition {
-            PartitionKey::TopLevel(orig) => assert_eq!(orig.ascii_serialization(), "https://site.test"),
+            PartitionKey::TopLevel(orig) => {
+                assert_eq!(orig.ascii_serialization(), "https://site.test")
+            }
             _ => panic!("expected TopLevel partition"),
         }
         assert_eq!(ev.origin.ascii_serialization(), "https://site.test");
