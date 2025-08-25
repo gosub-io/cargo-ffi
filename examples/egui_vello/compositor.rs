@@ -2,6 +2,8 @@ use gosub_engine::render::backend::{CompositorSink, ExternalHandle};
 use gosub_engine::tab::TabId;
 use std::collections::HashMap;
 
+/// The vello compositor is very simple. It stores the given frame through submit_frame,
+/// and allows retrieval through frame_for and frame_for_mut.
 pub struct VelloCompositor {
     pub frames: HashMap<TabId, ExternalHandle>,
 }

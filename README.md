@@ -18,10 +18,10 @@ interference of existing logic.
 
 * **Zones** as first‑class isolation units (cookies, local/session storage, password store, etc.).
 * **Tabs** managed inside zones; each tab encapsulates a browsing context (DOM/graphics/framebuffer).
-* **Pluggable render backends** (Cairo today; Vello/Skia optional via cargo features) behind a single trait.
+* **Pluggable render backends** (Cairo & Vello are implemented, optional via cargo features) behind a single trait.
 * **Opt‑in resource fetching** using async Rust (reqwest). Streamed/advanced pipelines coming later.
 * **GTK example** showing Cairo compositing into an image surface and painting to screen.
-
+* **EFrame example** showing Vello compositing into a GPU surface.
 ---
 
 ## Table of Contents
@@ -47,11 +47,11 @@ interference of existing logic.
 
 A **Zone** is an isolation boundary similar to a browser profile or container. It owns storage (cookies, session/local 
 storage), password entries, and configuration. Tabs belong to a zone; a host app can keep multiple zones and opt into 
-sharing specific resources between zones (e.g., shared password store) with clear ownership rules.
+sharing specific resources between zones (e.g., shared password store) with clear ownership rules. 
 
 ### Tab
 
-A **Tab** encapsulates a running engine instance (document/DOM and rendering state). Tabs can be visible or offscreen. 
+A **Tab** encapsulates a running browsing context (document/DOM and rendering state). Tabs can be visible or offscreen. 
 Visible tabs own a framebuffer/surface sized to the viewport; hidden tabs typically relinquish GPU/CPU surfaces until 
 activated.
 
@@ -67,7 +67,7 @@ viewport; backends adapt that buffer to the host: e.g., Cairo into GTK, Vello in
 * **Engine** → manages Zones and top-level orchestration.
 * **Zone** → owns storage/services; manages Tabs.
 * **Tab** → owns an **BrowsingContext** (DOM, layout, paint), a **Surface** (when visible), and state like title, favicon.
-* **Render Pipeline** → produces a composited buffer sized to the tab viewport. Reallocated on resize. (Not avaiable yet)
+* **Render Pipeline** → produces a composited buffer sized to the tab viewport. Reallocated on resize.
 * **Backend abstraction** → `Backend` trait to create surfaces and drive rendering.
 
 ```mermaid
@@ -115,7 +115,9 @@ Backends implement a small trait surface:
 ```rust
 pub trait Backend {
     fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> anyhow::Result<Box<dyn ErasedSurface>>;
-    fn render(&mut self, ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
+    fn render(&mut self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
+    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
+    fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;
 }
 ```
 
@@ -126,8 +128,10 @@ pub trait Backend {
 
 ### Vello / Skia (GPU)
 
-* Planned: feature-gated crates.
-* Same API surface; different `Surface` types and present modes.
+* Planned GPU backends.
+* Will produce GPU surfaces (e.g., OpenGL, Vulkan) for efficient rendering.
+* Host integrates with its GPU context.
+* Vello backend will leverage the [vello](https://crates.io/crates/vello) crate for GPU-accelerated vector graphics rendering.
 
 ---
 
@@ -152,10 +156,10 @@ Although the primary API is Rust, the boundary is being shaped to support FFI fo
 
 ## Feature Flags
 
-* `backend-cairo` (default in examples): CPU rendering, GTK-friendly.
-* `backend-vello` (planned): GPU path via Vello.
-* `backend-skia` (planned): GPU path via Skia.
-
+* `backend-cairo` : CPU rendering, GTK-friendly.
+* `backend-vello` : GPU path via Vello.
+* `sqlite_cookie_store`: SQLite-backed cookie store.
+* 
 Enable one backend at a time for smaller builds:
 
 ```toml

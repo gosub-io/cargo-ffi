@@ -66,7 +66,6 @@ fn main() {
         let active_tab = Rc::new(RefCell::new(tab0));
         let last_size = Rc::new(RefCell::new((800i32, 600i32)));
 
-
         let address_entry = Entry::new();
         address_entry.set_placeholder_text(Some("Enter URL for active pane..."));
         address_entry.set_hexpand(true);
