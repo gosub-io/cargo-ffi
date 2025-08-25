@@ -44,7 +44,6 @@ pub struct Color {
     pub a: f32,
 }
 
-#[allow(unused)]
 impl Color {
     /// Creates a new color from `f32` channel values in the range `0.0 ..= 1.0`.
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Color {

@@ -303,10 +303,6 @@ impl Tab {
     ) -> anyhow::Result<TickResult> {
         let mut result = TickResult::default();
 
-        if self.state != TabState::Idle {
-            println!("Tab tick: {:?} State: {:?}", self.id, self.state.clone());
-        }
-
         match self.state.clone() {
             TabState::Idle => {
                 // Nothing to do
@@ -325,8 +321,6 @@ impl Tab {
                 if let Some(done) = self.context.poll_loading() {
                     match done {
                         Ok(resp) => {
-                            // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
-
                             // Store cookies from the response in the cookie jar
                             if let Some(cookie_jar) = &self.cookie_jar {
                                 cookie_jar
@@ -348,8 +342,6 @@ impl Tab {
                             result.commited_url = Some(resp.url.clone());
                         }
                         Err(e) => {
-                            // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
-
                             self.state = TabState::Failed(e);
                             self.is_loading = false;
                             self.is_error = true;
@@ -361,7 +353,6 @@ impl Tab {
 
             // Start rendering after we finished loading
             TabState::Loaded => {
-                // println!("Tabstate loaded, starting rendering");
                 self.state = TabState::PendingRendering(*self.context.viewport());
             }
 
@@ -480,23 +471,16 @@ impl Tab {
 
     /// Execute a high-level engine command (navigate, reload).
     pub(crate) fn execute_command(&mut self, command: EngineCommand) {
-        println!("Executing command in tab: {:?} {:?}", self.id, command);
         match command {
             EngineCommand::Navigate(url) => {
-                println!("Loading URL '{}' in tab {:?}", url, self.id);
-                // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
-                // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
             }
             EngineCommand::Reload() => {
                 let Some(url) = self.current_url.clone() else {
                     return;
                 };
 
-                // println!("Reloading URL '{}' in tab {:?}", url, self.id);
-                // self.pending_url = Some(url.clone());f
                 self.state = TabState::PendingLoad(url);
-                // println!("Tab[{:?}]: State: {:?}\n", self.id, self.state.clone());
             }
         }
     }

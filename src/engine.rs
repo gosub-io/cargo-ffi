@@ -8,7 +8,6 @@ pub mod cookies;
 mod engine;
 mod errors;
 mod event;
-#[allow(unused)]
 pub mod storage;
 pub mod tab;
 pub mod tick;

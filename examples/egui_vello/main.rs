@@ -61,6 +61,7 @@ impl GosubApp {
         ));
 
         // Set up the engine with a null backend for now. We will update this once we have an egui context
+        // so we can initialize the vello renderer properly.
         let backend = gosub_engine::render::backends::null::NullBackend::new()
             .expect("NullBackend::new failed");
         let engine = Arc::new(RefCell::new(GosubEngine::new(None, Box::new(backend))));

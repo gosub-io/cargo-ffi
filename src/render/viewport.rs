@@ -1,12 +1,12 @@
 //! Viewport definition for rendering.
 //!
-//! A [`Viewport`] defines the position and size of the visible rendering area
-//! for a [`Tab`](crate::Tab). It is used by the engine and rendering pipeline
-//! to determine what portion of a page to paint and at what dimensions.
+//! A [`Viewport`] describes the rectangular region of a page that should be
+//! rendered. It is defined by its top-left corner `(x, y)` and its pixel
+//! `width` and `height`. The engine and backends use this to determine what
+//! part of a [`Tab`](crate::tab::Tab) to paint and at what size.
 //!
-//! A viewport is defined by its top-left corner `(x, y)` and its `width`/`height`
-//! in pixels. The coordinate system is engine-defined, but typically `(0, 0)` is
-//! the top-left of the canvas or window.
+//! The coordinate system is engine-defined. Typically `(0, 0)` refers to the
+//! top-left corner of the root surface or window.
 //!
 //! # Examples
 //!
@@ -14,27 +14,37 @@
 //! ```
 //! use gosub_engine::render::Viewport;
 //!
-//! // 800x600 at origin
+//! // 800x600 at the origin
 //! let viewport = Viewport::new(0, 0, 800, 600);
 //! ```
 //!
 //! Resizing and moving a viewport:
 //! ```
-//! use gosub_engine::Viewport;
+//! use gosub_engine::render::Viewport;
 //!
 //! let mut vp = Viewport::new(0, 0, 800, 600);
 //! vp.resize(1024, 768);
 //! vp.translate(10, 20);
 //! assert_eq!(vp.width, 1024);
 //! assert_eq!(vp.x, 10);
+//! assert_eq!(vp.y, 20);
 //! ```
 //!
 //! Computing aspect ratio:
 //! ```
-//! use gosub_engine::Viewport;
+//! use gosub_engine::render::Viewport;
 //!
 //! let vp = Viewport::new(0, 0, 1920, 1080);
 //! assert_eq!(vp.aspect_ratio(), 1920.0 / 1080.0);
+//! ```
+//!
+//! Converting to a [`SurfaceSize`] for backend use:
+//! ```
+//! use gosub_engine::render::{Viewport, backend::SurfaceSize};
+//!
+//! let vp = Viewport::new(0, 0, 1280, 720);
+//! let size: SurfaceSize = vp.as_size();
+//! assert_eq!(size.width, 1280);
 //! ```
 
 use crate::render::backend::SurfaceSize;

@@ -1,16 +1,20 @@
-use gosub_engine::render::backend::{CompositorSink, ExternalHandle};
-use gosub_engine::tab::TabId;
 use std::collections::HashMap;
+use crate::render::backend::{CompositorSink, ExternalHandle};
+use crate::tab::TabId;
 
-/// A compositor implementation for GTK that manages frames per tab
+/// A default compositor implementation that manages frames per tab
 /// and requests redraws when new frames are submitted.
+///
+/// Often, you would implement your own compositor depending on the UI
+/// frame work you use (e.g. GTK, egui, etc). But this default compositor
+/// can be used as a simple starting point or for testing.
 ///
 /// The compositor acts as the sink for rendered frames: the backend
 /// rendering system calls [`CompositorSink::submit_frame`] to provide
 /// a new frame for a specific tab. The compositor stores the frame
 /// in its `frames` map and triggers a redraw callback so the host
-/// UI (GTK) can repaint.
-pub struct GtkCompositor {
+/// UI can repaint however it wants.
+pub struct DefaultCompositor {
     /// A map of tab IDs to their corresponding external handles.
     /// Each [`TabId`] maps to an [`ExternalHandle`] provided by the
     /// render backend.
@@ -22,8 +26,8 @@ pub struct GtkCompositor {
     redraw_cb: Box<dyn Fn() + 'static>,
 }
 
-impl GtkCompositor {
-    /// Creates a new `GtkCompositor` with the given redraw callback.
+impl DefaultCompositor {
+    /// Creates a new `DefaultCompositor` with the given redraw callback.
     ///
     /// # Arguments
     ///
@@ -67,7 +71,7 @@ impl GtkCompositor {
     }
 }
 
-impl CompositorSink for GtkCompositor {
+impl CompositorSink for DefaultCompositor {
     /// Submits a new frame for the given [`TabId`].
     ///
     /// Called by the render backend when it has produced a new frame.
