@@ -38,7 +38,8 @@ impl GosubEngine {
     /// If `config` is `None`, defaults are used.
     ///
     /// ```
-    /// let engine = gosub_engine::GosubEngine::new(None);
+    /// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+    /// let engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
     /// ```
     pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend>) -> Self {
         let runtime = Arc::new(
@@ -95,9 +96,13 @@ impl GosubEngine {
     /// Open a new tab in a zone and return its [`TabId`].
     ///
     /// ```
-    /// # let mut engine = gosub_engine::GosubEngine::new(None);
-    /// # let zone_id = engine.zone_builder().create().unwrap();
-    /// let tab_id = engine.open_tab_in_zone(zone_id).unwrap();
+    /// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+    /// let mut engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
+    ///
+    /// let zone_id = engine.zone_builder().create().unwrap();
+    ///
+    /// let viewport = gosub_engine::render::Viewport::new(0, 0, 800, 600);
+    /// let tab_id = engine.open_tab_in_zone(zone_id, viewport).unwrap();
     /// ```
     pub fn open_tab_in_zone(
         &mut self,

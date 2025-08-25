@@ -27,7 +27,8 @@
 //! ```no_run
 //! use gosub_engine::GosubEngine;
 //!
-//! let mut engine = GosubEngine::new(None);
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
 //! let zone_id = engine.zone_builder().create().unwrap();
 //! println!("Created zone: {:?}", zone_id);
 //! ```
@@ -38,7 +39,8 @@
 //! use gosub_engine::GosubEngine;
 //! use gosub_engine::zone::{ZoneConfig, ZoneId};
 //!
-//! let mut engine = GosubEngine::new(None);
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
 //!
 //! let zone_id = engine.zone_builder()
 //!     .id(ZoneId::new())
@@ -56,7 +58,9 @@
 //!
 //! let jar = DefaultCookieJar::new();
 //!
-//! let mut engine = GosubEngine::new(None);
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
+//!
 //! let zone_id = engine.zone_builder()
 //!     .cookie_jar(Arc::new(RwLock::new(jar)))
 //!     .create()
@@ -72,6 +76,6 @@ mod password_store;
 mod zone;
 
 pub use config::ZoneConfig;
-pub(crate) use manager::ZoneManager;
+pub use manager::ZoneManager;
 pub use zone::Zone;
 pub use zone::ZoneId;

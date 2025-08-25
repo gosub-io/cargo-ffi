@@ -1,6 +1,3 @@
-// src/engine/zone.rs
-//! Zone system: [`ZoneManager`], [`Zone`], and [`ZoneId`].
-//!
 use crate::engine::cookies::CookieJarHandle;
 use crate::engine::cookies::DefaultCookieJar;
 use crate::engine::storage::event::StorageScope;
@@ -26,7 +23,7 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-/// A unique identifier for a [`Zone`](crate::zone::Zone) within a [`GosubEngine`](crate::GosubEngine).
+/// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
 /// Internally, a `ZoneId` wraps a [`Uuid`] to guarantee global uniqueness for
 /// each zone created in the engine.
@@ -56,7 +53,9 @@ use uuid::Uuid;
 /// use gosub_engine::GosubEngine;
 /// use gosub_engine::zone::ZoneId;
 ///
-/// let mut engine = GosubEngine::new(None);
+/// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+/// let mut engine = GosubEngine::new(None, Box::new(backend));
+///
 /// let fixed_id = ZoneId::from("123e4567-e89b-12d3-a456-426614174000");
 /// let zone_id = engine.zone_builder()
 ///     .id(fixed_id)
@@ -134,7 +133,8 @@ impl Display for ZoneId {
 /// use gosub_engine::storage::{StorageService, InMemorySessionStore, SqliteLocalStore};
 /// use gosub_engine::zone::{ZoneConfig, ZoneId};
 ///
-/// let mut engine = GosubEngine::new(None);
+/// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+/// let mut engine = GosubEngine::new(None, Box::new(backend));
 ///
 /// // Create a persistent storage service
 /// let storage = Arc::new(StorageService::new(

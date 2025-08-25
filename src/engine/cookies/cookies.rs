@@ -30,8 +30,8 @@
 //! The [`Cookie`] struct is used for persistence/inspection and can be (de)serialized
 //! via `serde` to JSON or other formats.
 //!
-//! ```ignore
-//! use crate::engine::cookies::Cookie;
+//! ```rust,no_run
+//! use gosub_engine::cookies::Cookie;
 //!
 //! let c = Cookie {
 //!     name: "session".into(),

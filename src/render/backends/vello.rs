@@ -5,77 +5,20 @@ use crate::render::backend::{
 };
 use crate::render::DisplayItem;
 use anyhow::{anyhow, Result};
-use parley::{
-    layout::PositionedLayoutItem,
-    style::{FontFamily, FontStack, StyleProperty},
-    FontContext, LayoutContext,
-};
 use std::any::Any;
-use std::cell::RefCell;
 use std::sync::Arc;
 use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::wgpu;
-use vello::{Glyph, RenderParams, Renderer, RendererOptions, Scene};
+use vello::{RenderParams, Renderer, RendererOptions, Scene};
+use crate::render::backends::vello::font_cache::FontCache;
+use crate::render::backends::vello::font_manager::FontManager;
+use crate::render::backends::vello::text_renderer::{TextKey, TextRenderer};
 
 mod font_manager;
-use font_manager::FontManager;
+mod font_cache;
+mod text_renderer;
 
-fn draw_text(
-    fm: &mut FontManager,
-    scene: &mut Scene,
-    x: f32,
-    y: f32,
-    text: &str,
-    px: f32,
-    rgba: [f32; 4],
-    font: &str,
-) {
-    // Resolve the font
-    let (vello_font, resolved_name) = fm
-        .resolve_ui_font(
-            if font.is_empty() { None } else { Some(font) },
-            fontique::Attributes::default(),
-        )
-        .unwrap_or_else(|_| panic!("Failed to resolve font: {}", font)); // format the var!
-
-    let mut font_cx = FontContext::new();
-    let mut layout_cx: LayoutContext<[u8; 4]> = LayoutContext::new(); // or LayoutContext::<()>::new()
-
-    let mut builder = layout_cx.ranged_builder(&mut font_cx, text, 1.0, true);
-    builder.push_default(StyleProperty::FontSize(px));
-    builder.push_default(StyleProperty::FontStack(FontStack::Single(
-        FontFamily::Named(resolved_name.clone().into()),
-    )));
-    let mut layout = builder.build(text);
-    layout.break_all_lines(None);
-    layout.align(
-        None,
-        parley::layout::Alignment::Start,
-        parley::layout::AlignmentOptions::default(),
-    );
-
-    // 4) Stream glyphs to Vello
-    for line in layout.lines() {
-        for item in line.items() {
-            if let PositionedLayoutItem::GlyphRun(run) = item {
-                let glyphs_iter = run.positioned_glyphs().map(|g| Glyph {
-                    // Swash glyph id → u32
-                    id: g.id as u32,
-                    x: g.x,
-                    y: -run.baseline() + g.y,
-                });
-
-                scene
-                    .draw_glyphs(&vello_font)
-                    .transform(Affine::translate((x as f64, y as f64)))
-                    .font_size(px)
-                    .brush(Color::new(rgba))
-                    .draw(Fill::NonZero, glyphs_iter);
-            }
-        }
-    }
-}
 
 /// This trait abstracts over the wgpu context (device, queue, texture management) so we can connect
 /// UI based wgpu contexts (like eframe) to the Vello backend.
@@ -93,19 +36,22 @@ pub struct VelloBackend<C: WgpuContextProvider> {
     context: Arc<C>,
     /// The Vello renderer instance.
     renderer: Renderer,
-    /// Standard font manager for loading fonts
-    font_manager: RefCell<FontManager>,
+
+    text_renderer: TextRenderer,
+    font_manager: FontManager,
+    font_cache: FontCache,
 }
 
 impl<C: WgpuContextProvider> VelloBackend<C> {
     pub fn new(context: Arc<C>) -> Result<Self> {
         let renderer = Renderer::new(context.device(), RendererOptions::default())?;
-        let font_manager = FontManager::new();
 
         Ok(Self {
             context,
             renderer,
-            font_manager: RefCell::new(font_manager),
+            text_renderer: TextRenderer::new(),
+            font_manager: FontManager::new(),
+            font_cache: FontCache::new(),
         })
     }
 
@@ -126,14 +72,14 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                 base_color: Color::WHITE,
                 width: surface.size.width,
                 height: surface.size.height,
-                antialiasing_method: vello::AaConfig::Area,
+                antialiasing_method: vello::AaConfig::Msaa16,
             },
         )?;
 
         Ok(())
     }
 
-    fn convert_browsing_context_to_scene(&self, ctx: &mut BrowsingContext) -> Result<Scene> {
+    fn convert_browsing_context_to_scene(&mut self, ctx: &mut BrowsingContext) -> Result<Scene> {
         // Build a scene from your DisplayItems
         let vp = ctx.viewport();
         let offset_x = vp.x as f32;
@@ -141,7 +87,6 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
 
         let mut scene = Scene::new();
         for item in ctx.render_list().items.iter() {
-            print!("[VelloBackend] Rendering item: {item:?} ");
             match item {
                 DisplayItem::Clear { color } => {
                     // full-frame clear
@@ -177,30 +122,31 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                     text,
                     size,
                     color,
+                    max_width,
                 } => {
                     let x = (*x as f32) - offset_x;
                     let y = (*y as f32) - offset_y;
-                    draw_text(
-                        &mut self.font_manager.borrow_mut(),
+
+                    let key = TextKey {
+                        text: Arc::from(text.as_str()),
+                        font_name: Arc::from("Comic Sans"),
+                        font_size: size.ceil() as u32,
+                        wrap: max_width.map(|mw| mw.ceil() as u32),
+                        // wrap: Some(600),
+                        align: 0,
+                    };
+
+                    self.text_renderer.draw(
+                        &mut self.font_manager,
+                        &mut self.font_cache,
                         &mut scene,
-                        x,
-                        y,
-                        text,
-                        *size,
-                        [color.r, color.g, color.b, color.a],
-                        "Comic Sans",
+                        &key,
+                        x, y,
+                        (*color).into(),
                     );
                 }
             }
         }
-
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            Color::new([255.0, 0.0, 0.0, 1.0]),
-            None,
-            &vello::kurbo::Rect::new(0.0, 0.0, 100.0, 200.0),
-        );
 
         Ok(scene)
     }

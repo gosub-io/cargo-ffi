@@ -17,12 +17,17 @@
 //! ## Design notes
 //! - Stores are **not** kept in zones; they are *only used at build time* to obtain a jar.
 //! - Implementations should be `Send + Sync` and safe for concurrent access.
-//! - `jar_for(zone_id)` should return the *same logical jar instance* for a zone for
+//! - `CookieStore::jar_for(zone_id)` should return the *same logical jar instance* for a zone for
 //!   the lifetime of the store, so all handles observe consistent state.
 //!
 //! ## Example: per-zone store override
-//! ```ignore
-//! let mut engine = GosubEngine::new(None);
+//! ```rust,no_run
+//!
+//! use gosub_engine::GosubEngine;
+//! use gosub_engine::cookies::{JsonCookieStore, SqliteCookieStore};
+//!
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
 //!
 //! let cookie_store = SqliteCookieStore::new("cookies.db".into());
 //! let zone_id = engine.zone_builder().cookie_store(cookie_store).create().unwrap();
@@ -77,7 +82,7 @@ pub trait CookieStore: Send + Sync {
     /// Removes all persisted cookie data for `zone_id` from the store.
     ///
     /// Implementations should also drop any internal cache for this zone so that
-    /// subsequent calls to [`jar_for`] can recreate a fresh, empty jar (or return `None`).
+    /// subsequent calls to [`CookieStore::jar_for`] can recreate a fresh, empty jar (or return `None`).
     ///
     /// This operation should be **idempotent** and must not panic.
     fn remove_zone(&self, zone_id: ZoneId);

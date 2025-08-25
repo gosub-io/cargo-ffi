@@ -4,7 +4,7 @@
 //! Zone manager.
 //!
 //! The [`ZoneManager`] is responsible for creating, tracking, and
-//! managing all [`Zone`](crate::engine::zone::Zone) instances in the
+//! managing all [`Zone`] instances in the
 //! engine. It enforces global limits defined by the [`EngineConfig`]
 //! (such as maximum number of zones) and provides accessors to retrieve,
 //! iterate, and remove zones.

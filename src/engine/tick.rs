@@ -4,7 +4,7 @@
 //! engine advances a [`Tab`](crate::tab::Tab) by one `tick()`.
 //!
 //! A “tick” is a single iteration of the engine’s scheduling loop for a tab.
-//! Each tick processes the tab’s current [`TabState`](crate::tab::TabState),
+//! Each tick processes the tab’s current [`TabState`],
 //! performs any pending network/layout/rendering work, and produces a [`TickResult`].
 //!
 //! The render pipeline can also use [`DirtyFlags`] to track which stages need
@@ -13,14 +13,19 @@
 //! # Typical flow
 //!
 //! ```no_run
-//! use gosub_engine::{GosubEngine, Viewport};
+//! use gosub_engine::GosubEngine;
+//! use gosub_engine::render::Viewport;
 //!
-//! let mut engine = GosubEngine::new(None);
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
+//!
 //! let zone_id = engine.zone_builder().create().unwrap();
-//! let tab_id = engine.open_tab_in_zone(zone_id, &Viewport::new(0, 0, 800, 600)).unwrap();
+//! let tab_id = engine.open_tab_in_zone(zone_id, Viewport::new(0, 0, 800, 600)).unwrap();
+//!
+//! let compositor = &mut gosub_engine::render::DefaultCompositor::new(|| {});
 //!
 //! // Drive the engine
-//! let results = engine.tick();
+//! let results = engine.tick(compositor);
 //! if let Some(res) = results.get(&tab_id) {
 //!     if res.page_loaded {
 //!         println!("Page committed: {:?}", res.commited_url);
@@ -32,9 +37,9 @@
 //! ```
 use crate::engine::tab::TabState;
 
-/// Result of processing a single [`Tab`](crate::engine::tab::Tab) tick.
+/// Result of processing a single [`Tab`](crate::tab::Tab) tick.
 ///
-/// Returned from [`Tab::tick`](crate::engine::tab::Tab::tick) and collected by
+/// Returned from `Tab::tick` and collected by
 /// [`GosubEngine::tick`](crate::GosubEngine::tick).
 #[derive(Default, Debug)]
 pub struct TickResult {

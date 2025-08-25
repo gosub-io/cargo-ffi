@@ -1,12 +1,12 @@
 //! Tab system: [`Tab`], [`Tick`](crate::engine::tick::TickResult), and [`TabId`].
 //!
 //! A **tab** is a single browsing context within a [`Zone`](crate::engine::zone::Zone):
-//! it owns an [`BrowsingContext`](crate::BrowsingContext), a [`Viewport`], and state
+//! it owns an `BrowsingContext`, a [`Viewport`], and state
 //! for loading+rendering a page. Tabs share zone resources such as cookies and storage.
 //!
 //! # Lifecycle
 //!
-//! Tabs run a small state machine (`[`TabState`]`) driven by [`Tab::tick`]:
+//! Tabs run a small state machine (`[`TabState`]`) driven by `Tab::tick`:
 //!
 //! 1. `Idle` → user action
 //! 2. `PendingLoad(url)` → start network → `Loading`
@@ -14,26 +14,32 @@
 //! 4. `Loaded` → `PendingRendering(viewport)` → `Rendering` → `Rendered` → `Idle`
 //!
 //! The engine calls `tick()` regularly (e.g., each frame or via a scheduler).
-//! `tick()` returns a [`TickResult`](crate::engine::tick::TickResult) indicating whether
+//! `tick()` returns a [`TickResult`] indicating whether
 //! the tab needs redraw and/or committed a new URL.
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```rust,no_run
 //! use gosub_engine::{GosubEngine, EngineCommand};
 //! use url::Url;
+//! use gosub_engine::render::Viewport;
 //!
-//! let mut engine = GosubEngine::new(None);
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
+//!
 //! let zone_id = engine.zone_builder().create().unwrap();
 //!
 //! // Create a tab
-//! let tab_id = engine.open_tab_in_zone(zone_id).unwrap();
+//! let viewport = Viewport::new(0, 0, 800, 600);
+//! let tab_id = engine.open_tab_in_zone(zone_id, viewport).unwrap();
+//!
+//! let compositor = &mut gosub_engine::render::DefaultCompositor::new(|| {});
 //!
 //! // Navigate
 //! engine.execute_command(tab_id, EngineCommand::Navigate(Url::parse("https://example.com").unwrap())).unwrap();
 //!
 //! // Drive the engine
-//! let results = engine.tick();
+//! let results = engine.tick(compositor);
 //! if let Some(res) = results.get(&tab_id) {
 //!     if res.needs_redraw { /* schedule a repaint */ }
 //! }
@@ -136,12 +142,12 @@ pub enum TabMode {
 
 /// A single browsing context inside a [`Zone`](crate::engine::zone::Zone).
 ///
-/// A [`Tab`] owns an [`BrowsingContext`](crate::BrowsingContext) and tracks its
+/// A [`Tab`] owns an `BrowsingContext` and tracks its
 /// viewport, loading/rendering state, current/pending URL, favicon/title, and
 /// per-tab storage partitioning. Tabs share the zone's cookie jar and storage.
 ///
-/// Drive a tab by calling [`tick`](Tab::tick) regularly and by injecting
-/// [`EngineEvent`](crate::EngineEvent) and [`EngineCommand`](crate::EngineCommand)
+/// Drive a tab by calling `tick` regularly and by injecting
+/// [`EngineEvent`] and [`EngineCommand`]
 /// from your UI.
 ///
 /// Typical loop: `execute_command(Navigate) → tick() → (Loaded) → tick() → (Rendered)`
@@ -250,7 +256,7 @@ impl Tab {
     }
 
     /// Navigate to a URL (string is parsed into a `Url`). On success, moves the
-    /// tab to [`TabState::PendingLoad(url)`]. Invalid URLs are ignored and logged.
+    /// tab to [`TabState::PendingLoad`]. Invalid URLs are ignored and logged.
     pub fn navigate_to(&mut self, url: impl Into<String>) {
         let url = match Url::parse(&url.into()) {
             Ok(url) => url,

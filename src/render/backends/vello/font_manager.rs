@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use fontique::{Attributes, Collection, GenericFamily, QueryFamily, QueryStatus, SourceCache};
 use parley::Font;
 
+/// A simple font manager that uses Fontique to manage and resolve fonts.
 pub struct FontManager {
     collection: Collection,
     cache: SourceCache,
