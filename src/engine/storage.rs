@@ -1,4 +1,4 @@
-//! Storage system for the Gosub engine.
+//! Local and Session storage systems
 //!
 //! This module defines the traits, types, and implementations that power
 //! HTML5 **LocalStorage** and **SessionStorage** within the engine. It
@@ -41,8 +41,10 @@
 //!
 //! # Example: Attaching storage to a zone
 //!
-//! ```no_run
+//! ```rust,no_run
 //! use std::sync::Arc;
+//! use gosub_engine::GosubEngine;
+//! use gosub_engine::render::backends::null::NullBackend;
 //! use gosub_engine::storage::{StorageService, SqliteLocalStore, InMemorySessionStore};
 //!
 //! // Create persistent local storage and ephemeral session storage
@@ -51,7 +53,8 @@
 //!     Arc::new(InMemorySessionStore::new()),
 //! ));
 //!
-//! let mut engine = gosub_engine::GosubEngine::new(None);
+//! let backend = NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
 //!
 //! // Create a zone and attach the storage service
 //! let zone_id = engine.zone_builder()

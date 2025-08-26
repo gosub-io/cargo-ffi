@@ -1,20 +1,21 @@
 //! Engine API surface.
 //!
-//! Most users should start with [`GosubEngine`](crate::engine::GosubEngine).
+//! Most users should start with [`GosubEngine`].
 
-mod config;
 mod context;
-pub mod cookies;
 mod engine;
 mod errors;
 mod event;
-pub mod storage;
+mod zone_builder;
+
+pub mod cookies;
 pub mod tab;
 pub mod tick;
 pub mod zone;
-mod zone_builder;
+pub mod storage;
 
-pub use config::EngineConfig;
+pub mod config;
+
 pub use context::BrowsingContext;
 pub use engine::GosubEngine;
 pub use errors::EngineError;

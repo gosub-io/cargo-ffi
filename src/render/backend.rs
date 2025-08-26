@@ -260,7 +260,7 @@ pub trait RenderBackend {
 /// Interface for compositors to receive frames from backends.
 ///
 /// A [`CompositorSink`] is typically implemented by the host application.
-/// After rendering, the backend calls [`submit_frame`] with an [`ExternalHandle`]
+/// After rendering, the backend calls [`CompositorSink::submit_frame`] with an [`ExternalHandle`]
 /// that the host can composite into its UI.
 pub trait CompositorSink {
     /// Submit a rendered frame for the given tab.

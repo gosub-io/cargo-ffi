@@ -34,7 +34,8 @@ use std::sync::Arc;
 /// use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
 ///
 /// // Create the engine
-/// let mut engine = GosubEngine::new(None);
+/// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+/// let mut engine = GosubEngine::new(None, Box::new(backend));
 ///
 /// // Create an in-memory storage service
 /// let storage = Arc::new(StorageService::new(
@@ -54,7 +55,8 @@ use std::sync::Arc;
 /// Creating a zone without persistent storage:
 /// ```
 /// use gosub_engine::GosubEngine;
-/// let mut engine = GosubEngine::new(None);
+/// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+/// let mut engine = GosubEngine::new(None, Box::new(backend));
 /// let zone_id = engine.zone_builder()
 ///     .create()
 ///     .unwrap();

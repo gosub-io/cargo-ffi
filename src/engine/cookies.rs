@@ -33,7 +33,8 @@
 //! use gosub_engine::zone::ZoneId;
 //! use gosub_engine::cookies::{CookieJarHandle, SqliteCookieStore, PersistentCookieJar, DefaultCookieJar};
 //!
-//! let mut engine = GosubEngine::new(None);
+//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! let mut engine = GosubEngine::new(None, Box::new(backend));
 //!
 //! // Open or create the SQLite cookie store
 //! let cookie_store = SqliteCookieStore::new("cookies.db".into());

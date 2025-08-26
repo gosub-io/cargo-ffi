@@ -2,7 +2,6 @@ use std::str::FromStr;
 use std::thread::sleep;
 use url::Url;
 use gosub_engine::render::Viewport;
-use gosub_engine::tab::TabState;
 
 fn main() -> Result<(), gosub_engine::EngineError> {
     // Null backend means that we don't actually render anything.

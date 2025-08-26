@@ -1,21 +1,19 @@
-//! Minimal HTTP response model.
-//!
-//! This struct represents a **fully buffered** HTTP response returned by the
-//! network layer. It contains the final URL (after redirects, if the client
-//! follows them), status code + reason, response headers, and the raw body bytes.
-//!
-//! ## Notes
-//! - The body is stored as raw `Vec<u8>`. For text responses, convert with
-//!   `String::from_utf8_lossy(&resp.body)` or similar. For JSON, parse with
-//!   `serde_json::from_slice::<T>(&resp.body)`.
-//! - `headers` is an `http::HeaderMap`, which is **case-insensitive** for
-//!   header names.
-//! - `status_text` is typically derived from the status code’s canonical
-//!   reason phrase and may be `"Unknown"` for non-standard codes.
-//!
 use http::HeaderMap;
 
-/// Simple structure for HTTP responses.
+/// Minimal HTTP response model.
+///
+/// This struct represents a **fully buffered** HTTP response returned by the
+/// network layer. It contains the final URL (after redirects, if the client
+/// follows them), status code + reason, response headers, and the raw body bytes.
+///
+/// ## Notes
+/// - The body is stored as raw `Vec<u8>`. For text responses, convert with
+///   `String::from_utf8_lossy(&resp.body)` or similar. For JSON, parse with
+///   `serde_json::from_slice::<T>(&resp.body)`.
+/// - `headers` is an `http::HeaderMap`, which is **case-insensitive** for
+///   header names.
+/// - `status_text` is typically derived from the status code’s canonical
+///   reason phrase and may be `"Unknown"` for non-standard codes.
 ///
 /// All fields reflect the **received** response as-is; no additional parsing
 /// or transformation is performed by this type.

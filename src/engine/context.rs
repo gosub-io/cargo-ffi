@@ -158,13 +158,14 @@ impl BrowsingContext {
         // Text color: black
         let c = Color::new(0.0, 0.0, 0.0, 1.0);
         let mut y = 24.0;
-        for line in self.raw_html.lines().take(600) {
+        for line in self.raw_html.lines() {
             rl.items.push(DisplayItem::TextRun {
                 x: 14.0,
                 y,
                 text: line.to_string(),
-                size: 13.0,
+                size: 23.0,
                 color: c,
+                max_width: Some(self.viewport.width as f32),
             });
             y += 16.0;
         }

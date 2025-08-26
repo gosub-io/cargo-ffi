@@ -6,13 +6,13 @@ use crate::tiling::{
 use crate::wgpu_context_provider::EguiWgpuContextProvider;
 use eframe::{egui, CreationContext};
 use egui::load::SizedTexture;
-use egui::{StrokeKind, Vec2};
+use egui::StrokeKind;
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::render::backend::ExternalHandle;
 use gosub_engine::render::backends::vello::WgpuContextProvider;
 use gosub_engine::render::Viewport;
 use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
-use gosub_engine::zone::ZoneId;
+use gosub_engine::zone::{ZoneConfig, ZoneId};
 use gosub_engine::{EngineCommand, EngineEvent, GosubEngine};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -72,12 +72,14 @@ impl GosubApp {
         );
 
         // Create our main zone ID
+        let config = ZoneConfig::builder().max_tabs(100).build().unwrap();
         let zone_id = engine
             .borrow_mut()
             .zone_builder()
             .id(ZoneId::from(DEFAULT_MAIN_ZONE))
             .storage(storage.clone())
             .cookie_store(cookie_store.clone())
+            .config(config)
             .create()
             .expect("zone creation failed");
 
@@ -314,7 +316,7 @@ impl GosubApp {
         let (w, h) = *self.last_size.borrow();
 
         if let Some(tab_id) = find_leaf_at(&self.root.borrow(), Rect { x: 0, y: 0, w, h }, px, py) {
-            let line_h = 20.0;
+            let line_h = 2.0;
             let dx_px = delta.x * line_h;
             let dy_px = delta.y * line_h;
 
@@ -357,6 +359,9 @@ impl GosubApp {
 
 impl eframe::App for GosubApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+
         // Initialize vello backend if not already done
         self.init_vello_backend();
 
@@ -414,11 +419,11 @@ impl eframe::App for GosubApp {
             }
         }
 
-        // Update URL input from active tab
-        let tab_id = *self.active_tab.borrow();
-        if let Some(url) = current_url_for_tab(&self.engine.borrow(), tab_id) {
-            self.current_url_input = url.to_string();
-        }
+        // // Update URL input from active tab
+        // let tab_id = *self.active_tab.borrow();
+        // if let Some(url) = current_url_for_tab(&self.engine.borrow(), tab_id) {
+        //     self.current_url_input = url.to_string();
+        // }
 
         // UI Layout
         egui::TopBottomPanel::top("address_bar")
@@ -524,16 +529,6 @@ impl eframe::App for GosubApp {
                         egui::vec2(rect.w as f32, rect.h as f32),
                     );
 
-                    ui.painter().rect_filled(
-                        rect_ui,
-                        0.0,
-                        if is_active {
-                            egui::Color32::LIGHT_GRAY
-                        } else {
-                            egui::Color32::DARK_GRAY
-                        },
-                    );
-
                     match handle {
                         ExternalHandle::WgpuTextureId {
                             id, width, height, ..
@@ -543,35 +538,33 @@ impl eframe::App for GosubApp {
                             let mut renderer = frame.wgpu_render_state().unwrap().renderer.write();
                             let device = &frame.wgpu_render_state().unwrap().device;
 
-                            let id = renderer.register_native_texture(
+                            let tid = renderer.register_native_texture(
                                 device,
                                 &view,
                                 wgpu::FilterMode::Nearest,
                             );
-                            // renderer.update_texture(
-                            //     device,
-                            //     id,
-                            //     &view,
-                            // );
 
-                            ui.add(egui::Image::new(SizedTexture::new(
-                                id,
-                                Vec2::new(*width as f32, *height as f32),
-                            )));
+                            let ppp = ui.ctx().pixels_per_point();
+                            let size_points = egui::Vec2::new(*width as f32 / ppp, *height as f32 / ppp);
+                            ui.add(egui::Image::new(SizedTexture::new(tid, size_points)));
                         }
                         _ => {
                             eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
                         }
                     }
 
-                    if is_active {
-                        ui.painter().rect_stroke(
-                            rect_ui,
-                            0.0,
-                            egui::Stroke::new(1.0, egui::Color32::RED),
-                            StrokeKind::Middle,
-                        );
-                    }
+                    let col = if is_active {
+                        egui::Color32::YELLOW
+                    } else {
+                        egui::Color32::DARK_GRAY
+                    };
+
+                    ui.painter().rect_stroke(
+                        rect_ui,
+                        0.0,
+                        egui::Stroke::new(1.0, col),
+                        StrokeKind::Outside,
+                    );
                 }
             }
 

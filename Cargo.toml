@@ -63,9 +63,12 @@ png = "0.17.16"
 futures-intrusive = "0.5.0"
 parley = "0.5.0"
 fontique = "0.5.0"
+hashbrown = "0.15.5"
+skrifa = "0.31.3"
+num_cpus = "1.17.0"
 
 [features]
-default = ["sqlite_cookie_store"]
+default = ["sqlite_cookie_store", "parley_layout"]
 ui_eframe = ["dep:eframe", "dep:egui"]
 winit = ["dep:winit", "dep:wgpu"]
 gtk4 = ["dep:gtk4", "dep:cairo-rs"]
@@ -73,6 +76,7 @@ sqlite_cookie_store = ["r2d2", "r2d2_sqlite"]
 backend_cairo = ["dep:gtk4", "dep:cairo-rs"]
 backend_vello = ["dep:vello", "dep:wgpu"]
 backend_skia  = ["dep:skia-safe"]
+parley_layout = []
 
 wayland = ["gdk4-wayland"]
 x11     = ["gdk4-x11"]

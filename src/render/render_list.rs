@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```rust
-//! use gosub_engine::render::render_list::{RenderList, DisplayItem, Color};
+//! use gosub_engine::render::{RenderList, DisplayItem, Color};
 //!
 //! let mut list = RenderList::new();
 //!
@@ -42,6 +42,18 @@ pub struct Color {
     pub b: f32,
     /// Alpha channel (opacity)
     pub a: f32,
+}
+
+impl Into<[f32; 4]> for Color {
+    fn into(self) -> [f32; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
+
+impl Into<[u8; 4]> for Color {
+    fn into(self) -> [u8; 4] {
+        [self.r_u8(), self.g_u8(), self.b_u8(), self.a_u8()]
+    }
 }
 
 impl Color {
@@ -89,9 +101,9 @@ impl Color {
 /// by the render backend.
 ///
 /// Variants:
-/// - [`Clear`] — clear the entire surface to a color.
-/// - [`Rect`] — draw a solid rectangle.
-/// - [`TextRun`] — draw a run of text at a position.
+/// - [`DisplayItem::Clear`] — clear the entire surface to a color.
+/// - [`DisplayItem::Rect`] — draw a solid rectangle.
+/// - [`DisplayItem::TextRun`] — draw a run of text at a position.
 #[derive(Clone, Debug)]
 pub enum DisplayItem {
     /// Clear the entire surface with the given color.
@@ -126,6 +138,8 @@ pub enum DisplayItem {
         size: f32,
         /// The color to render the text with.
         color: Color,
+        /// Optional maximum width for text wrapping (in pixels).
+        max_width: Option<f32>,
     },
 }
 
