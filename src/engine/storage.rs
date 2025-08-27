@@ -45,22 +45,30 @@
 //! use std::sync::Arc;
 //! use gosub_engine::GosubEngine;
 //! use gosub_engine::render::backends::null::NullBackend;
-//! use gosub_engine::storage::{StorageService, SqliteLocalStore, InMemorySessionStore};
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
 //!
-//! // Create persistent local storage and ephemeral session storage
+//! # async fn demo() -> anyhow::Result<()> {
+//! // 1) Build a storage service (persistent local area could be swapped in later)
 //! let storage = Arc::new(StorageService::new(
-//!     Arc::new(SqliteLocalStore::new("local.db").unwrap()),
+//!     Arc::new(InMemoryLocalStore::new()),
 //!     Arc::new(InMemorySessionStore::new()),
 //! ));
 //!
-//! let backend = NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
+//! // 2) Engine + backend
+//! let backend = NullBackend::new()?;
+//! let mut engine_handle = GosubEngine::new(None, Box::new(backend));
 //!
-//! // Create a zone and attach the storage service
-//! let zone_id = engine.zone_builder()
-//!     .storage(storage.clone())
-//!     .create()
-//!     .unwrap();
+//! // 4) Attach storage via ZoneServices and create the zone
+//! let services = ZoneServices {
+//!     storage: storage.clone(),
+//!     cookie_store: None,
+//!     cookie_jar: None, // or Some(DefaultCookieJar::new().into()) for ephemeral cookies
+//!     partition_policy: PartitionPolicy::None,
+//! };
+//!
+//! let _zone = engine_handle.create_zone(ZoneConfig::default(), services, None)?;
+//! # Ok(()) }
 //! ```
 //!
 //! # See also
@@ -105,7 +113,9 @@ pub struct StorageHandles {
 
 pub use area::{LocalStore, SessionStore, StorageArea};
 pub use event::StorageEvent;
+pub use local::in_memory::InMemoryLocalStore;
 pub use local::sqlite_store::SqliteLocalStore;
 pub use service::{StorageService, Subscription};
 pub use session::in_memory::InMemorySessionStore;
 pub use types::PartitionKey;
+pub use types::PartitionPolicy;

@@ -1,4 +1,9 @@
-use crate::render::backend::SurfaceSize;
+use crate::render::backend::{SurfaceRect, SurfaceSize};
+
+
+#[derive(Debug, Copy, Clone)]
+pub struct DevicePixelRatio(pub f64);
+
 
 /// Viewport definition for rendering.
 ///
@@ -87,12 +92,7 @@ impl std::fmt::Debug for Viewport {
 impl Viewport {
     /// Creates a new [`Viewport`] with the given position and size.
     pub fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
+        Self { x, y, width, height }
     }
 
     /// Resizes the viewport to the given width and height.
@@ -124,5 +124,25 @@ impl Viewport {
             width: self.width,
             height: self.height,
         }
+    }
+
+    pub fn to_surface_rect(self, dpr: DevicePixelRatio) -> SurfaceRect {
+        let fx = ((self.x as f64) * dpr.0).round();
+        let fy = ((self.y as f64) * dpr.0).round();
+        let fw = ((self.width as f64) * dpr.0).round().clamp(1.0, u32::MAX as f64);
+        let fh = ((self.height as f64) * dpr.0).round().clamp(1.0, u32::MAX as f64);
+
+        SurfaceRect {
+            x: fx as i32,
+            y: fy as i32,
+            width: fw as u32,
+            height: fh as u32,
+        }
+    }
+
+    pub fn to_surface_size(self, dpr: DevicePixelRatio) -> SurfaceSize {
+        let w = ((self.width as f64) * dpr.0).round().clamp(1.0, u32::MAX as f64) as u32;
+        let h = ((self.height as f64) * dpr.0).round().clamp(1.0, u32::MAX as f64) as u32;
+        SurfaceSize { width: w, height: h }
     }
 }

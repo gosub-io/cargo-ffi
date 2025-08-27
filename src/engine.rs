@@ -5,18 +5,19 @@
 mod context;
 mod engine;
 mod errors;
-mod event;
-mod zone_builder;
+pub mod events;
 
 pub mod cookies;
-pub mod tab;
-pub mod tick;
-pub mod zone;
 pub mod storage;
+pub mod tab;
+pub mod zone;
 
 pub mod config;
+pub mod types;
 
 pub use context::BrowsingContext;
 pub use engine::GosubEngine;
 pub use errors::EngineError;
-pub use event::{EngineCommand, EngineEvent, MouseButton};
+
+/// Default capacity for MPSC channels
+const DEFAULT_CHANNEL_CAPACITY: usize = 512;

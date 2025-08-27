@@ -18,11 +18,7 @@ impl CairoBackend {
 
 impl RenderBackend for CairoBackend {
     /// Will create a new Cairo surface with the given size and present mode.
-    fn create_surface(
-        &self,
-        size: SurfaceSize,
-        present: PresentMode,
-    ) -> Result<Box<dyn ErasedSurface>> {
+    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> Result<Box<dyn ErasedSurface>> {
         Ok(Box::new(CairoSurface::new(size, present)?))
     }
 
@@ -90,11 +86,7 @@ impl RenderBackend for CairoBackend {
                             color.b as f64,
                             color.a as f64,
                         );
-                        cr.select_font_face(
-                            "Sans",
-                            cairo::FontSlant::Normal,
-                            cairo::FontWeight::Normal,
-                        );
+                        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
                         cr.set_font_size(*size as f64);
                         cr.move_to(*x as f64, *y as f64);
                         cr.show_text(text)?;
@@ -162,12 +154,10 @@ impl CairoSurface {
             .unwrap_or((size.width * 4) as i32);
 
         // Allocate a buffer large enough for the surface to be mapped on top.
-        let mut buf: Box<[u8]> =
-            vec![0u8; (size.height as usize) * (stride as usize)].into_boxed_slice();
+        let mut buf: Box<[u8]> = vec![0u8; (size.height as usize) * (stride as usize)].into_boxed_slice();
 
         // SAFETY: `buf` is stored in `Self` and outlives `surface
-        let slice_static: &'static mut [u8] =
-            unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *buf) };
+        let slice_static: &'static mut [u8] = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *buf) };
         let surface = cairo::ImageSurface::create_for_data(
             slice_static,
             cairo::Format::ARgb32,
@@ -230,9 +220,8 @@ impl CairoSurface {
         let mut fresh: Box<[u8]> = vec![0u8; (h as usize) * (stride as usize)].into_boxed_slice();
         let fresh_static: &'static mut [u8] =
             unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *fresh) };
-        let new_surface =
-            cairo::ImageSurface::create_for_data(fresh_static, cairo::Format::ARgb32, w, h, stride)
-                .expect("create_for_data(fresh)");
+        let new_surface = cairo::ImageSurface::create_for_data(fresh_static, cairo::Format::ARgb32, w, h, stride)
+            .expect("create_for_data(fresh)");
 
         let old_surface = std::mem::replace(&mut self.surface, new_surface);
         let old_buf = std::mem::replace(&mut self.buf, fresh);
