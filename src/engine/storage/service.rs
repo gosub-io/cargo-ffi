@@ -73,16 +73,16 @@ impl StorageService {
         tab: TabId,
         part: &PartitionKey,
         origin: &url::Origin,
-    ) -> Arc<dyn StorageArea> {
+    ) -> Result<Arc<dyn StorageArea>> {
         let inner = self.session.area(zone, tab, part, origin);
-        self.wrap_notifying(
+        Ok(self.wrap_notifying(
             inner,
             zone,
             Some(tab),
             part.clone(),
             origin.clone(),
             StorageScope::Session,
-        )
+        ))
     }
 
     /// Drops a tab from sessionStorage.

@@ -76,6 +76,7 @@ mod engine;
 pub mod net;
 
 pub mod render;
+mod events;
 
 pub use engine::{EngineCommand, EngineError, EngineEvent, GosubEngine, MouseButton};
 

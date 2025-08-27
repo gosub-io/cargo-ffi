@@ -60,8 +60,12 @@ use serde::__private::from_utf8_lossy;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc::Sender;
 use url::Url;
 use uuid::Uuid;
+use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::storage::types::compute_partition_key;
+use crate::zone::ZoneServices;
 
 /// A unique identifier for a browser tab within a [`GosubEngine`](crate::engine::GosubEngine).
 ///
@@ -90,6 +94,44 @@ impl TabId {
         Self(Uuid::new_v4())
     }
 }
+
+
+pub struct TabHandle {
+    pub id: TabId,
+    pub cmd_tx: Sender<EngineCommand>,
+}
+
+impl TabHandle {
+    pub fn id(&self) -> TabId {
+        self.id
+    }
+
+    pub async fn emit(&self, cmd: EngineCommand) -> Result<(), tokio::sync::mpsc::error::SendError<EngineCommand>> {
+        self.cmd_tx.send(cmd).await
+    }
+}
+
+pub struct TabBuilder {
+    event_tx: Option<Sender<EngineEvent>>,
+}
+
+impl TabBuilder {
+    pub fn new() -> Self {
+        Self { event_tx: None }
+    }
+
+    pub fn with_event_tx(mut self, tx: Sender<EngineEvent>) -> Self {
+        self.event_tx = Some(tx);
+        self
+    }
+
+    pub(crate) fn take_event_tx(&mut self) -> Sender<EngineEvent> {
+        self.event_tx.take().expect("TabBuilder event_tx already taken or not yet set")
+    }
+}
+
+
+
 
 /// Current state of the tab. This is a state machine that defines what the tab is doing at the moment.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
@@ -537,3 +579,79 @@ impl Tab {
         Ok(())
     }
 }
+
+
+
+pub(crate) fn spawn_tab_task(
+    tab_id: TabId,
+    mut cmd_rx: tokio::sync::mpsc::Receiver<EngineCommand>,
+    event_tx: Sender<EngineEvent>,
+    services: ZoneServices,
+    viewport: Viewport,
+) {
+    tokio::spawn(async move {
+        println!("Spawned tab task for tab {:?}", tab_id);
+
+        let mut current_viewport = viewport;
+        let mut fps = 0;
+        let mut drawing_enabled = false;
+        let mut dirty = true;
+
+        while let Some(cmd) = cmd_rx.recv().await {
+            match cmd {
+                EngineCommand::Navigate { url } => {
+                    println!("Tab {:?} navigating to URL: {}", tab_id, url);
+
+                    let pk = compute_partition_key(&url, &services.partition_policy);
+                    let origin = url.origin().clone();
+                    let local = services.storage.local_for(services.zone_id, &pk, &origin).expect("cannot get local storage for tab");
+                    let session = services.storage.session_for(services.zone_id, tab_id, &pk, &origin).expect("cannot get session storage for tab");
+
+                    let _ = event_tx.send(EngineEvent::ConnectionEstablished { tab: tab_id, url: url.clone() }).await;
+                    dirty = true;
+                }
+                EngineCommand::ResumeDrawing { fps: wanted_fps } => {
+                    drawing_enabled = true;
+                    fps = wanted_fps;
+                    dirty = true;
+                    println!("Tab {:?} resumed drawing FPS: {} / {}", tab_id, fps, drawing_enabled);
+                }
+                EngineCommand::SuspendDrawing=> {
+                    drawing_enabled = false;
+                    println!("Tab {:?} suspended drawing: at fps: {} / {}", tab_id, fps, drawing_enabled);
+                }
+                EngineCommand::Resize { width, height } => {
+                    current_viewport.width = width;
+                    current_viewport.height = height;
+                    dirty = true;
+                    println!("Tab {:?} resized to {}x{}", tab_id, width, height);
+                }
+                EngineCommand::MouseMove { x, y } => {
+                    dirty = true;
+                }
+                _ => {
+                    println!("Tab {:?} received command: {:?}", tab_id, cmd);
+                    dirty = true;
+                }
+            }
+
+            if drawing_enabled && dirty {
+                let surface = ExternalSurface {
+                    width: current_viewport.width,
+                    height: current_viewport.height,
+                };
+
+                let _ = event_tx.send(EngineEvent::Redraw { tab: tab_id, handle: surface  }).await;
+                dirty = false;
+            }
+        }
+
+        // Cleanup code here
+        println!("Tab task for tab {:?} exiting", tab_id);
+
+        // Disconnect local/session storage
+        services.storage.drop_tab(services.zone_id, tab_id);
+    });
+}
+
+

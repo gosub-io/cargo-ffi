@@ -11,7 +11,7 @@
 //! Zones are the Gosub equivalent of browser profiles. They can be:
 //!
 //! - **Private** — only the tabs within that zone can access its data.
-//! - **Shared** — marked with flags in [`SharedFlags`](crate::engine::zone::Zone) so
+//! - **Shared** — marked with flags in [`SharedFlags`] so
 //!   other zones can read or write certain datasets (cookies, passwords, etc.).
 //!
 //! # Key Types
@@ -75,7 +75,47 @@ mod manager;
 mod password_store;
 mod zone;
 
+use std::sync::Arc;
+use tokio::sync::mpsc::Sender;
+use crate::engine::events::{EngineEvent};
+use crate::tab::{TabBuilder, TabHandle, TabId};
+
 pub use config::ZoneConfig;
 pub use manager::ZoneManager;
 pub use zone::Zone;
 pub use zone::ZoneId;
+pub use zone::ZoneServices;
+
+#[derive(Clone)]
+pub struct ZoneHandle {
+    inner: Arc<ZoneInner>
+}
+
+struct ZoneInner {
+    engine_event_tx: Sender<EngineEvent>,
+}
+
+impl ZoneHandle {
+    pub(crate) fn new(engine_event_tx: Sender<EngineEvent>) -> Self {
+        Self {
+            inner: Arc::new(ZoneInner { engine_event_tx })
+        }
+    }
+
+    pub fn tab_builder(&self) -> TabBuilder {
+        TabBuilder::new()
+    }
+
+    pub fn create_tab(&self, mut builder: TabBuilder) -> TabHandle {
+        let event_tx = builder.take_event_tx();
+
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(256);
+
+        let tab_id = TabId::new();
+        spawn_tab_task(tab_id, cmd_rx, event_tx.clone());
+
+        TabHandle { id: tab_id, cmd_tx }
+    }
+}
+
+

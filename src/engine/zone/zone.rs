@@ -1,27 +1,25 @@
 use crate::engine::cookies::CookieJarHandle;
 use crate::engine::cookies::DefaultCookieJar;
-use crate::engine::storage::event::StorageScope;
-use crate::engine::storage::types::compute_partition_key;
 use crate::engine::storage::{
-    PartitionKey, StorageArea, StorageEvent, StorageHandles, StorageService, Subscription,
+    PartitionKey, StorageArea, StorageService, Subscription,
 };
-use crate::engine::tab::{Tab, TabId, TabMode};
-use crate::engine::tick::TickResult;
+use crate::engine::tab::TabId;
 use crate::engine::zone::password_store::PasswordStore;
-use crate::render::backend::CompositorSink;
-use crate::render::backend::RenderBackend;
 use crate::render::Viewport;
 use crate::zone::ZoneConfig;
 use crate::EngineError;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::Display;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
-use tokio::runtime::Runtime;
+use std::sync::{Arc, RwLock};
+use tokio::sync::mpsc::{Sender, channel};
 use uuid::Uuid;
+use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::tab::{spawn_tab_task, TabHandle};
+
+
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -101,76 +99,25 @@ impl Display for ZoneId {
     }
 }
 
-/// A `Zone` is a self-contained browsing context within a [`GosubEngine`](crate::engine::GosubEngine).
-///
-/// All tabs opened in the same zone share the zone's **session storage**,
-/// **local storage**, **cookie jar**, **bookmarks**, **autocomplete data**,
-/// and other per-zone resources.
-///
-/// Zones are the Gosub equivalent of browser profiles. They can be:
-///
-/// - **Private**: Only tabs in that zone can read/write its data.
-/// - **Shared**: Marked as `shared`, allowing other zones to read (and in
-///   some cases write) data back into it. This is useful for sharing
-///   credentials, bookmarks, or autocomplete entries between profiles.
-///
-/// # Key concepts
-///
-/// - **Isolation:** Tabs in different zones cannot access each other’s
-///   storage unless sharing is explicitly enabled.
-/// - **Persistence:** A zone can be associated with a [`StorageService`]
-///   for persistent storage of cookies, local/session data, etc.
-/// - **Identification:** Each zone has a stable [`ZoneId`] for lookups
-///   and persistence across sessions.
-/// - **UI metadata:** Title, icon, description, and tab color are available
-///   for use in browser UIs.
-///
-/// # Typical usage
-///
-/// ```
-/// use gosub_engine::GosubEngine;
-/// use std::sync::Arc;
-/// use gosub_engine::storage::{StorageService, InMemorySessionStore, SqliteLocalStore};
-/// use gosub_engine::zone::{ZoneConfig, ZoneId};
-///
-/// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-/// let mut engine = GosubEngine::new(None, Box::new(backend));
-///
-/// // Create a persistent storage service
-/// let storage = Arc::new(StorageService::new(
-///     Arc::new(SqliteLocalStore::new("local.db").unwrap()),
-///     Arc::new(InMemorySessionStore::new()),
-/// ));
-///
-/// // Create a zone with custom config and storage
-/// let zone_id = engine.zone_builder()
-///     .id(ZoneId::new())
-///     .storage(storage.clone())
-///     .create()
-///     .unwrap();
-///
-/// // Fetch the zone and inspect properties
-/// let zone = engine.get_zone_mut(zone_id).unwrap();
-/// println!("Zone title: {}", zone.lock().unwrap().title);
-/// ```
-///
-/// # Fields
-///
-/// - `id`: The [`ZoneId`] that uniquely identifies this zone.
-/// - `config`: Per-zone configuration (e.g., max number of tabs).
-/// - `title`: Display title for the zone (e.g., "Home", "Work").
-/// - `icon`: Icon bytes (may be base64-encoded or raw image data).
-/// - `description`: Human-readable description.
-/// - `color`: RGBA color for tabs in this zone.
-/// - `tabs`: The set of [`Tab`]s currently open in the zone.
-/// - `storage`: The [`StorageService`] used for local/session storage.
-/// - `storage_rx`: Subscription for observing session storage changes.
-/// - `cookie_jar`: Where cookies are stored/loaded for this zone.
-/// - `password_store`: Per-zone password storage.
-/// - `shared_flags`: Flags that define which data is shared with other zones.
-///
-/// **Note:** Internal details such as `tabs` and `storage_rx` are
-/// engine-managed; user code typically interacts through the public API.
+
+/// Internal record for a tab within a zone
+#[derive(Clone, Debug)]
+struct TabRecord {
+    /// Tab ID
+    id: TabId,
+    /// Tab title
+    title: String,
+    /// Command channel to the tab task
+    cmd_tx: Sender<EngineCommand>,
+}
+
+/// Services provided to tabs within a zone
+pub struct ZoneServices {
+    pub zone_id: ZoneId,
+    pub storage: Arc<StorageService>,
+    pub cookie_jar: CookieJarHandle,
+}
+
 pub struct Zone {
     /// ID of the zone
     pub id: ZoneId,
@@ -186,22 +133,21 @@ pub struct Zone {
     pub color: [u8; 4],
 
     /// Tabs in the zone
-    tabs: HashMap<TabId, Arc<Mutex<Tab>>>,
+    tabs: RwLock<HashMap<TabId, TabRecord>>,
 
     /// Session storage for the zone (shared between all tabs in the zone)
     pub storage: Arc<StorageService>,
-
     /// Subscription for session storage changes
     storage_rx: Subscription,
 
     /// Where to load/store cookies within this zone
     pub cookie_jar: CookieJarHandle,
-
     /// Per-zone password storage
     pub password_store: PasswordStore,
-
     /// Flags controlling which data is shared with other zones.
     pub shared_flags: SharedFlags,
+
+    event_tx: Sender<EngineEvent>,
 }
 
 pub struct SharedFlags {
@@ -222,6 +168,7 @@ impl Zone {
         config: ZoneConfig,
         storage: Arc<StorageService>,
         cookie_jar: Option<CookieJarHandle>,
+        event_tx: Sender<EngineEvent>,
     ) -> Self {
         // We generate the color by using the zone id as a seed
         let mut rng = StdRng::seed_from_u64(zone_id.0.as_u64_pair().0);
@@ -237,13 +184,13 @@ impl Zone {
         let cookie_jar =
             cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
 
-        Self {
+        let zone = Self {
             id: zone_id,
             title: "Untitled Zone".to_string(),
             icon: vec![],
             description: "".to_string(),
             color: random_color,
-            tabs: HashMap::new(),
+            tabs:  RwLock::new(HashMap::new()),
             config,
 
             storage,
@@ -257,7 +204,11 @@ impl Zone {
                 share_passwords: false,
                 share_cookiejar: false,
             },
-        }
+            event_tx,
+        };
+
+        zone.spawn_storage_forward();
+        zone
     }
 
     /// Creates a new zone with a random ID and the provided configuration
@@ -265,9 +216,10 @@ impl Zone {
         config: ZoneConfig,
         storage: Arc<StorageService>,
         cookie_jar: Option<CookieJarHandle>,
+        event_tx: Sender<EngineEvent>,
     ) -> Self {
         let zone_id = ZoneId::new();
-        Zone::new_with_id(zone_id, config, storage, cookie_jar)
+        Self::new_with_id(zone_id, config, storage, cookie_jar, event_tx)
     }
 
     /// Sets the title of the zone
@@ -295,72 +247,44 @@ impl Zone {
         self.cookie_jar = cookie_jar;
     }
 
-    /// Opens a new tab into the zone
-    pub(crate) fn open_tab(
-        &mut self,
-        runtime: Arc<Runtime>,
+    /// Returns the services available to tabs within this zone
+    pub fn services(&self) -> ZoneServices {
+        ZoneServices {
+            zone_id: self.id,
+            storage: self.storage.clone(),
+            cookie_jar: self.cookie_jar.clone(),
+        }
+    }
+
+    pub fn create_tab(
+        &self,
+        title: impl Into<String>,
         viewport: Viewport,
-    ) -> Result<TabId, EngineError> {
-        if self.tabs.len() >= self.config.max_tabs {
+    ) -> Result<TabHandle, EngineError> {
+        if self.tabs.read().unwrap().len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
-        let tab = Tab::new(self.id, runtime, viewport, Some(self.cookie_jar.clone()));
-        let tab_id = tab.id;
+        let (cmd_tx, cmd_rx) = channel::<EngineCommand>(256);
+        let tab_id = TabId::new();
 
-        self.tabs.insert(tab_id, Arc::new(Mutex::new(tab)));
-        Ok(tab_id)
-    }
+        spawn_tab_task(
+            tab_id,
+            cmd_rx,
+            self.event_tx.clone(),
+            self.services(),
+            viewport,
+        );
 
-    /// Returns the given tab by its ID, or `None` if it doesn't exist.
-    pub fn get_tab(&self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
-        self.tabs.get(&tab_id).cloned()
-    }
-
-    /// Returns a mutable reference to the given tab by its ID, or `None` if it doesn't exist.
-    pub fn get_tab_mut(&mut self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
-        self.tabs.get_mut(&tab_id).cloned()
-    }
-
-    /// Ticks all tabs in the zone, returning a map of TabId to TickResult
-    pub fn tick_all_tabs(
-        &mut self,
-        backend: &mut dyn RenderBackend,
-        host: &mut impl CompositorSink,
-    ) -> BTreeMap<TabId, TickResult> {
-        let now = Instant::now();
-        let mut results = BTreeMap::new();
-
-        for (tab_id, tab_arc) in self.tabs.iter_mut() {
-            let mut tab = tab_arc.lock().unwrap();
-
-            let interval = match tab.mode {
-                TabMode::Active => Duration::from_secs(0), // Always run
-                TabMode::BackgroundLive => Duration::from_millis(100), // Run at 10Hz
-                TabMode::BackgroundIdle => Duration::from_secs(1), // Run at 1Hz
-                TabMode::Suspended => continue,            // Skip suspended tabs
-            };
-
-            // Check if enough time has passed since the last tick
-            if !interval.is_zero() && now.duration_since(tab.last_tick) < interval {
-                continue; // Skip if not time to tick
-            }
-            tab.last_tick = now;
-
-            match tab.tick(backend, host) {
-                Ok(result) => {
-                    // If tick was successful, update the tab's last successful tick time
-                    tab.last_tick = now;
-                    results.insert(*tab_id, result);
-                }
-                Err(e) => {
-                    // Log or handle the error as needed
-                    log::error!("Error ticking tab {:?}: {}", tab_id, e);
-                }
-            }
+        {
+            let mut tabs = self.tabs.write().unwrap();
+            tabs.insert(
+                tab_id,
+                TabRecord { id: tab_id, title: title.into(), cmd_tx: cmd_tx.clone() }
+            );
         }
 
-        results
+        Ok(TabHandle { id: tab_id, cmd_tx })
     }
 
     /// Get the shared localStorage area for this (zone × partition × origin).
@@ -382,60 +306,43 @@ impl Zone {
         self.storage.session_for(self.id, tab, pk, origin)
     }
 
-    /// Tell the storage layer a tab is gone (cleans its sessionStorage).
-    pub fn on_tab_closed(&self, tab: TabId) {
-        self.storage.drop_tab(self.id, tab);
+
+    /// Forwards storage events from the storage service to the engine event channel.
+    fn spawn_storage_forward(&self) {
+        let mut rx = self.storage_rx.clone();
+        let tx = self.event_tx.clone();
+
+        let zone_id = self.id;
+
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                let _ = tx.send(EngineEvent::StorageChanged {
+                    tab: ev.source_tab,
+                    zone: Some(zone_id.clone()),
+                    key: ev.key,
+                    value: ev.value,
+                    scope: ev.scope,
+                    origin: ev.origin.clone(),
+                }).await;
+            }
+        });
     }
 
-    /// Read the storage channel and process storage events
-    pub fn pump_storage_events(&mut self) {
-        // Drain the queue without blocking.
-        while let Ok(ev) = self.storage_rx.try_recv() {
-            self.dispatch_storage_event(ev);
+    pub fn close_tab(&self, tab_id: TabId) -> bool {
+        if let Some(rec) = self.tabs.write().unwrap().remove(&tab_id) {
+            drop(rec.cmd_tx);
+            self.storage.drop_tab(self.id, tab_id);
+            true
+        } else {
+            false
         }
     }
 
-    /// Dispatches the storage event to the correct tabs based on the event's scope.
-    fn dispatch_storage_event(&mut self, ev: StorageEvent) {
-        match ev.scope {
-            StorageScope::Local => {
-                // Deliver to *other* same-origin documents in the same zone/partition.
-                for (tab_id, tab) in &self.tabs {
-                    // Skip the tab that caused it (spec behavior)
-                    if Some(*tab_id) == ev.source_tab {
-                        continue;
-                    }
-
-                    let mut tab = tab.lock().unwrap();
-                    tab.dispatch_storage_event_to_same_origin_docs(
-                        &ev.origin, /*include_iframes=*/ true, &ev,
-                    );
-                }
-            }
-            StorageScope::Session => {
-                // sessionStorage is per top-level browsing context (tab).
-                // Optionally deliver to *same tab* same-origin iframes (not other tabs).
-                if let Some(tab_id) = ev.source_tab {
-                    if let Some(tab) = self.tabs.get(&tab_id) {
-                        let mut tab = tab.lock().unwrap();
-                        tab.dispatch_storage_event_to_same_origin_docs(
-                            &ev.origin, /*include_iframes=*/ true, &ev,
-                        );
-                    }
-                }
-            }
-        }
+    pub fn list_tabs(&self) -> Vec<TabId> {
+        self.tabs.read().unwrap().keys().cloned().collect()
     }
 
-    /// Called when a tab commits a navigation to a new URL.
-    pub fn on_tab_commit(&self, tab: &mut Tab, final_url: &url::Url) -> anyhow::Result<()> {
-        tab.partition_key = compute_partition_key(final_url, tab.partition_policy);
-
-        // 2) bind storage
-        let origin = final_url.origin().clone();
-        let local = self.local_area(&tab.partition_key, &origin)?;
-        let session = self.session_area(tab.id, &tab.partition_key, &origin);
-        tab.bind_storage(StorageHandles { local, session });
-        Ok(())
+    pub fn tab_title(&self, tab_id: TabId) -> Option<String> {
+        self.tabs.read().unwrap().get(&tab_id).map(|rec| rec.title.clone())
     }
 }
