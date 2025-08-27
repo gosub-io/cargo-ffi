@@ -13,10 +13,11 @@
 //! use std::str::FromStr;
 //! use std::thread::sleep;
 //! use url::Url;
-//! use gosub_engine::{EngineError, MouseButton};
+//! use gosub_engine::{EngineConfig, EngineError, MouseButton};
 //! use gosub_engine::render::Viewport;
 //!
 //! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//!
 //! let mut engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
 //!
 //! // Create a zone (with all default settings)
@@ -24,12 +25,13 @@
 //!
 //! // Open a tab in the zone
 //! let viewport = Viewport::new(0, 0, 800, 600);
+//!
 //! let tab_id = engine.open_tab_in_zone(zone_id, viewport)?;
 //!
 //! // Drive the engine and let it render stuff into the compositor
 //! let compositor = &mut gosub_engine::render::DefaultCompositor::new(
-//!     || { println!("Frame is ready and can be drawn")
-//! });
+//!     || { println!("Frame is ready and can be drawn") }
+//! );
 //!
 //! // Send events/commands
 //! engine.handle_event(tab_id, gosub_engine::EngineEvent::MouseDown{ button: MouseButton::Left, x: 10.0, y: 10.0})?;

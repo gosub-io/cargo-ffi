@@ -99,10 +99,10 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                     );
                 }
                 DisplayItem::Rect { x, y, w, h, color } => {
-                    let x = (*x as f32) - offset_x;
-                    let y = (*y as f32) - offset_y;
-                    let w = *w as f32;
-                    let h = *h as f32;
+                    let x = *x - offset_x;
+                    let y = *y - offset_y;
+                    let w = *w;
+                    let h = *h;
                     scene.fill(
                         Fill::NonZero,
                         Affine::IDENTITY,
@@ -124,8 +124,8 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                     color,
                     max_width,
                 } => {
-                    let x = (*x as f32) - offset_x;
-                    let y = (*y as f32) - offset_y;
+                    let x = *x - offset_x;
+                    let y = *y - offset_y;
 
                     let key = TextKey {
                         text: Arc::from(text.as_str()),
@@ -219,7 +219,7 @@ impl ErasedSurface for VelloSurface {
         self
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 

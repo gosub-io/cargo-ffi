@@ -152,22 +152,23 @@ impl BrowsingContext {
 
         // Example scene: clear + show raw HTML as text
         rl.items.push(DisplayItem::Clear {
-            color: Color::new(0.75, 0.75, 0.75, 1.0),
+            color: Color::new(0.55, 0.25, 0.45, 1.0),
         });
 
         // Text color: black
         let c = Color::new(0.0, 0.0, 0.0, 1.0);
-        let mut y = 24.0;
+        let font_size = 16.0;
+        let mut y = 0.0;
         for line in self.raw_html.lines() {
             rl.items.push(DisplayItem::TextRun {
-                x: 14.0,
+                x: 0.0,
                 y,
                 text: line.to_string(),
-                size: 23.0,
+                size: font_size,
                 color: c,
                 max_width: Some(self.viewport.width as f32),
             });
-            y += 16.0;
+            y += font_size;
         }
 
         self.render_list = rl;
