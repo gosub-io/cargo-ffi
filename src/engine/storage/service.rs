@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use super::area::{LocalStore, SessionStore, StorageArea};
 use super::event::{StorageEvent, StorageScope};
 use super::types::PartitionKey;
@@ -10,7 +11,7 @@ use std::sync::{mpsc, Arc, Mutex};
 pub type Subscription = mpsc::Receiver<StorageEvent>;
 
 /// Internal bus that fans out StorageEvent to subscribers.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct StorageBus {
     subs: Mutex<Vec<mpsc::Sender<StorageEvent>>>,
 }
@@ -27,10 +28,17 @@ impl StorageBus {
 }
 
 /// Public service used by the engine/DOM to access storage and receive events.
+#[derive(Clone)]
 pub struct StorageService {
     local: Arc<dyn LocalStore>,
     session: Arc<dyn SessionStore>,
     bus: Arc<StorageBus>,
+}
+
+impl Debug for StorageService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageService").finish_non_exhaustive()
+    }
 }
 
 impl StorageService {
@@ -354,7 +362,7 @@ mod tests {
         let rx = svc.subscribe();
         let area = svc.session_for(zone, tab, &part, &origin);
 
-        area.set_item("s", "v").unwrap();
+        area.unwrap().borrow_mut().set_item("s", "v").unwrap();
         let ev = recv_ok(&rx);
         assert!(matches!(ev.scope, StorageScope::Session));
         assert_eq!(ev.source_tab, Some(tab));

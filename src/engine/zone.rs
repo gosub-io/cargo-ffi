@@ -1,94 +1,23 @@
-//! Zone system: [`Zone`], and [`ZoneId`].
-//!
-//! A **zone** in Gosub is an isolated browsing context that groups together:
-//!
-//! - A set of [`Tab`](crate::engine::tab::Tab) instances
-//! - Shared session/local storage
-//! - A cookie jar
-//! - Zone-scoped configuration and metadata
-//! - Optional password store, bookmarks, autocomplete entries, etc.
-//!
-//! Zones are the Gosub equivalent of browser profiles. They can be:
-//!
-//! - **Private** — only the tabs within that zone can access its data.
-//! - **Shared** — marked with flags in [`SharedFlags`] so
-//!   other zones can read or write certain datasets (cookies, passwords, etc.).
-//!
-//! # Key Types
-//!
-//! - [`Zone`] — The struct representing one zone instance.
-//! - [`ZoneId`] — Opaque, globally unique identifier for a zone.
-//! - [`ZoneConfig`] — Per-zone configuration settings.
-//!
-//! # Example
-//!
-//! Creating a zone with defaults:
-//!
-//! ```no_run
-//! use gosub_engine::GosubEngine;
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//! let zone_id = engine.zone_builder().create().unwrap();
-//! println!("Created zone: {:?}", zone_id);
-//! ```
-//!
-//! Creating a zone with a fixed ID and custom config:
-//!
-//! ```no_run
-//! use gosub_engine::GosubEngine;
-//! use gosub_engine::zone::{ZoneConfig, ZoneId};
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! let zone_id = engine.zone_builder()
-//!     .id(ZoneId::new())
-//!     .create()
-//!     .unwrap();
-//! ```
-//!
-//! Attaching a persistent cookie jar to a zone:
-//!
-//! ```no_run
-//! use std::sync::{Arc, RwLock};
-//! use gosub_engine::cookies::{SqliteCookieStore, PersistentCookieJar, DefaultCookieJar};
-//! use gosub_engine::GosubEngine;
-//! use gosub_engine::zone::ZoneId;
-//!
-//! let jar = DefaultCookieJar::new();
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! let zone_id = engine.zone_builder()
-//!     .cookie_jar(Arc::new(RwLock::new(jar)))
-//!     .create()
-//!     .unwrap();
-//!
-//! ```
-//!
-//! See [`Zone`] docs for field-level details.
-
 mod config;
-mod manager;
 mod password_store;
 mod zone;
 
-use std::sync::Arc;
+use anyhow::Result;
 use tokio::sync::mpsc::Sender;
-use crate::engine::events::{EngineEvent};
-use crate::tab::{TabBuilder, TabHandle, TabId};
+use tokio::sync::oneshot;
+use crate::engine::events::{EngineCommand, EngineEvent, ZoneCommand};
 
 pub use config::ZoneConfig;
-pub use manager::ZoneManager;
 pub use zone::Zone;
 pub use zone::ZoneId;
 pub use zone::ZoneServices;
+use crate::render::Viewport;
+use crate::tab::{TabHandle, TabId};
 
 #[derive(Clone)]
 pub struct ZoneHandle {
-    inner: Arc<ZoneInner>
+    zone: ZoneId,
+    engine_cmd_tx: Sender<EngineCommand>,
 }
 
 struct ZoneInner {
@@ -96,26 +25,89 @@ struct ZoneInner {
 }
 
 impl ZoneHandle {
-    pub(crate) fn new(engine_event_tx: Sender<EngineEvent>) -> Self {
-        Self {
-            inner: Arc::new(ZoneInner { engine_event_tx })
-        }
+    pub fn new(zone: ZoneId, engine_cmd_tx: Sender<EngineCommand>) -> Self {
+        Self { zone, engine_cmd_tx }
     }
 
-    pub fn tab_builder(&self) -> TabBuilder {
-        TabBuilder::new()
+    pub fn id(&self) -> ZoneId { self.zone }
+
+    pub async fn set_title(&self, title: impl Into<String>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetTitle {
+            zone: self.zone,
+            title: title.into(),
+            reply: tx,
+        })).await?;
+        rx.await?
     }
 
-    pub fn create_tab(&self, mut builder: TabBuilder) -> TabHandle {
-        let event_tx = builder.take_event_tx();
+    pub async fn set_icon(&self, icon: Vec<u8>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetIcon {
+            zone: self.zone,
+            icon,
+            reply: tx,
+        })).await?;
+        rx.await?
+    }
 
-        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(256);
+    pub async fn set_description(&self, description: impl Into<String>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetDescription {
+            zone: self.zone,
+            description: description.into(),
+            reply: tx,
+        })).await?;
+        rx.await?
+    }
 
-        let tab_id = TabId::new();
-        spawn_tab_task(tab_id, cmd_rx, event_tx.clone());
+    pub async fn set_color(&self, color: [u8; 4]) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetColor {
+            zone: self.zone,
+            color,
+            reply: tx,
+        })).await?;
+        rx.await?
+    }
 
-        TabHandle { id: tab_id, cmd_tx }
+    pub async fn open_tab(&self, title: impl Into<String>, viewport: Viewport) -> Result<TabHandle> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::OpenTab {
+            zone: self.zone,
+            title: title.into(),
+            viewport,
+            reply: tx,
+        })).await?;
+        rx.await?
+    }
+
+    pub async fn close_tab(&self, tab: TabId) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::CloseTab {
+            zone: self.zone,
+            tab,
+            reply: tx,
+        })).await?;
+        rx.await?
+    }
+
+    pub async fn list_tabs(&self) -> Result<Vec<TabId>> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::ListTabs {
+            zone: self.zone,
+            reply: tx,
+        })).await?;
+        rx.await?
+    }
+
+    pub async fn tab_title(&self, tab: TabId) -> Result<Option<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.engine_cmd_tx.send(EngineCommand::Zone(ZoneCommand::TabTitle {
+            zone: self.zone,
+            tab,
+            reply: tx,
+        })).await?;
+        rx.await?
     }
 }
-
-

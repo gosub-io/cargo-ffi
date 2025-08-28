@@ -76,9 +76,8 @@ mod engine;
 pub mod net;
 
 pub mod render;
-mod events;
 
-pub use engine::{EngineCommand, EngineError, EngineEvent, GosubEngine, MouseButton};
+pub use engine::{EngineError, GosubEngine};
 
 #[doc(inline)]
 pub use engine::tab;
@@ -91,9 +90,6 @@ pub use engine::cookies;
 
 #[doc(inline)]
 pub use engine::storage;
-
-#[doc(inline)]
-pub use engine::tick::TickResult;
 
 // EngineConfig at crate root:
 #[doc(inline)]

@@ -1,15 +1,7 @@
-use crate::cookies::CookieJarHandle;
-use crate::engine::storage::StorageService;
-use crate::engine::tab::{Tab, TabId};
-use crate::engine::tick::TickResult;
-use crate::engine::zone::ZoneManager;
-use crate::render::backend::{CompositorSink, RenderBackend};
-use crate::render::Viewport;
-use crate::zone::{ZoneConfig, ZoneHandle};
-use crate::zone::{Zone, ZoneId};
-use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent};
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use crate::render::backend::{RenderBackend};
+use crate::zone::{Zone, ZoneConfig, ZoneHandle, ZoneId};
+use crate::EngineConfig;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::engine::events::EngineEvent;
@@ -29,10 +21,6 @@ pub struct GosubEngine {
 }
 
 impl GosubEngine {
-    pub fn update_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend>) {
-        self.backend = new_backend;
-    }
-
     /// Create a new engine.
     ///
     /// If `config` is `None`, defaults are used.
@@ -63,18 +51,29 @@ impl GosubEngine {
         tokio::sync::mpsc::channel(cap)
     }
 
-    pub fn create_zone(&self, event_tx: Sender<EngineEvent>) -> ZoneHandle {
-        ZoneHandle::new(event_tx)
+    pub fn update_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend>) {
+        self.backend = new_backend;
     }
 
-    /// Get a mutable reference to the zone manager.pub
-    /// Create a new zone and return its [`ZoneId`].
-    pub(crate) fn create_zone_obs(
+
+    pub fn create_zone(
         &mut self,
-        zone_id: Option<ZoneId>,
-        config: Option<ZoneConfig>,
-        storage_service: Option<Arc<StorageService>>,
-        cookie_jar: Option<CookieJarHandle>,
-    ) -> Result<ZoneId, EngineError> {
+        config: ZoneConfig,
+        zone_id: Option<ZoneId>
+    ) -> anyhow::Result<ZoneHandle> {
+        
+        let zone_id = ZoneId::new();
+
+        let zone = Arc::new(Zone::new_with_id(
+            zone_id,
+            config,             // 👈 passed in here
+            self.storage.clone(),
+            None,               // or Some(cookie jar handle)
+            self.engine_event_tx.clone(),
+        ));
+
+        self.zones.insert(zone_id, zone);
+        Ok(ZoneHandle::new(zone_id, self.engine_cmd_tx.clone()))
     }
+}
 }

@@ -1,9 +1,11 @@
+use tokio::sync::oneshot;
 use url::Url;
 use crate::config::LogLevel;
 use crate::cookies::Cookie;
 use crate::render::backend::ExternalHandle;
+use crate::render::Viewport;
 use crate::storage::event::StorageScope;
-use crate::tab::TabId;
+use crate::tab::{TabHandle, TabId};
 use crate::zone::ZoneId;
 
 /// Represents a mouse button that can be pressed or released
@@ -30,8 +32,102 @@ pub enum Modifiers {
     Meta,
 }
 
+pub enum ZoneCommand {
+    SetTitle {
+        zone: ZoneId,
+        title: String,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
+    SetIcon {
+        zone: ZoneId,
+        icon: Vec<u8>,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
+    SetDescription {
+        zone: ZoneId,
+        description: String,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
+    SetColor {
+        zone: ZoneId,
+        color: [u8; 4],
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
+
+    OpenTab {
+        zone: ZoneId,
+        title: String,
+        viewport: Viewport,
+        reply: oneshot::Sender<anyhow::Result<TabHandle>>,
+    },
+    CloseTab {
+        zone: ZoneId,
+        tab: TabId,
+        reply: oneshot::Sender<anyhow::Result<()>>,
+    },
+    ListTabs {
+        zone: ZoneId,
+        reply: oneshot::Sender<anyhow::Result<Vec<TabId>>>,
+    },
+    TabTitle {
+        zone: ZoneId,
+        tab: TabId,
+        reply: oneshot::Sender<anyhow::Result<Option<String>>>,
+    },
+}
+
+impl Debug for ZoneCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ZoneCommand::SetTitle { zone, title, .. } => f
+                .debug_struct("SetTitle")
+                .field("zone", zone)
+                .field("title", title)
+                .finish(),
+            ZoneCommand::SetIcon { zone, icon, .. } => f
+                .debug_struct("SetIcon")
+                .field("zone", zone)
+                .field("icon_len", &icon.len())
+                .finish(),
+            ZoneCommand::SetDescription { zone, description, .. } => f
+                .debug_struct("SetDescription")
+                .field("zone", zone)
+                .field("description", description)
+                .finish(),
+            ZoneCommand::SetColor { zone, color, .. } => f
+                .debug_struct("SetColor")
+                .field("zone", zone)
+                .field("color", color)
+                .finish(),
+            ZoneCommand::OpenTab { zone, title, viewport, .. } => f
+                .debug_struct("OpenTab")
+                .field("zone", zone)
+                .field("title", title)
+                .field("viewport", viewport)
+                .finish(),
+            ZoneCommand::CloseTab { zone, tab, .. } => f
+                .debug_struct("CloseTab")
+                .field("zone", zone)
+                .field("tab", tab)
+                .finish(),
+            ZoneCommand::ListTabs { zone, .. } => f
+                .debug_struct("ListTabs")
+                .field("zone", zone)
+                .finish(),
+            ZoneCommand::TabTitle { zone, tab, .. } => f
+                .debug_struct("TabTitle")
+                .field("zone", zone)
+                .field("tab", tab)
+                .finish(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EngineCommand {
+    // Zone management
+    Zone(ZoneCommand),
+
     // Navigation / lifecycle
     Navigate { url: Url },
     Reload { ignore_cache: bool },
@@ -46,8 +142,8 @@ pub enum EngineCommand {
 
     // User input
     MouseMove { x: f32, y: f32 },
-    MouseDown { button: MouseButton },
-    MouseUp { button: MouseButton },
+    MouseDown { x: f32, y: f32, button: MouseButton },
+    MouseUp { x: f32, y: f32, button: MouseButton },
     MouseScroll { delta_x: f32, delta_y: f32 },
     KeyDown { key: String, code: String, modifiers: Modifiers },
     KeyUp { key: String, code: String, modifiers: Modifiers },
@@ -68,6 +164,7 @@ pub enum EngineCommand {
     // Debug / devtools
     EnableLogging { level: LogLevel },
     DumpDomTree,
+    InputChar,
 }
 
 
@@ -88,10 +185,20 @@ pub enum EngineEvent {
     LoadProgress { tab: TabId, progress: f32 },
     LoadFinished { tab: TabId, url: Url },
     LoadFailed { tab: TabId, url: Url, error: String },
+    PageCommitted { tab: TabId, url: Url },
+
+    // Tab lifecycle
+    TabCreated { tab: TabId },
+    TabClosed { tab: TabId },
 
     // Input / interaction
     FocusChanged { tab: TabId, focused: bool },
     // CursorChanged { tab: TabId, cursor: CursorIcon },
+    KeyDown { key: String, code: String, modifiers: Modifiers },
+    KeyUp { key: String, code: String, modifiers: Modifiers },
+    MouseUp { button: MouseButton, x: f32, y: f32 },
+    MouseDown { button: MouseButton, x: f32, y: f32 },
+    InputChar { character: char },
 
     // Session / zone state
     CookieAdded { tab: TabId, cookie: Cookie },
@@ -113,4 +220,8 @@ pub enum EngineEvent {
     NetworkError { tab: TabId, url: Url, message: String },
     JavaScriptError { tab: TabId, message: String, line: u32, column: u32 },
     EngineCrashed { tab: TabId, reason: String },
+
+    // Uncategorized / generic
+
+
 }

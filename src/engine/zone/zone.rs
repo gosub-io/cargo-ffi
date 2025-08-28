@@ -12,11 +12,12 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{Sender, channel};
 use uuid::Uuid;
 use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::storage::types::PartitionPolicy;
 use crate::tab::{spawn_tab_task, TabHandle};
 
 
@@ -112,10 +113,12 @@ struct TabRecord {
 }
 
 /// Services provided to tabs within a zone
+#[derive(Clone, Debug)]
 pub struct ZoneServices {
     pub zone_id: ZoneId,
     pub storage: Arc<StorageService>,
     pub cookie_jar: CookieJarHandle,
+    pub partition_policy: PartitionPolicy,
 }
 
 pub struct Zone {
@@ -150,6 +153,21 @@ pub struct Zone {
     event_tx: Sender<EngineEvent>,
 }
 
+impl Debug for Zone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Zone")
+            .field("id", &self.id)
+            .field("title", &self.title)
+            .field("description", &self.description)
+            .field("color", &self.color)
+            .field("tabs", &self.tabs.read().unwrap().keys().collect::<Vec<_>>())
+            .field("config", &self.config)
+            .field("shared_flags", &self.shared_flags)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SharedFlags {
     /// Other zones are allowed to read this autocomplete elements
     pub share_autocomplete: bool,
@@ -253,6 +271,7 @@ impl Zone {
             zone_id: self.id,
             storage: self.storage.clone(),
             cookie_jar: self.cookie_jar.clone(),
+            partition_policy: self.partition_policy,
         }
     }
 
@@ -318,7 +337,7 @@ impl Zone {
             while let Some(ev) = rx.recv().await {
                 let _ = tx.send(EngineEvent::StorageChanged {
                     tab: ev.source_tab,
-                    zone: Some(zone_id.clone()),
+                    zone: Some(zone_id),
                     key: ev.key,
                     value: ev.value,
                     scope: ev.scope,

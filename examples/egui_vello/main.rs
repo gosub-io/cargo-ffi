@@ -17,6 +17,7 @@ use gosub_engine::{EngineCommand, EngineEvent, GosubEngine};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use tokio::sync::mpsc::channel;
 use url::Url;
 
 mod compositor;
@@ -73,9 +74,11 @@ impl GosubApp {
                 .expect("Failed to create EguiWgpuContextProvider"),
         );
 
+        let (tx, rx) = channel();
+
         // Create our main zone ID
         let config = ZoneConfig::builder().max_tabs(100).build().unwrap();
-        let zone_id = engine
+        let zone = engine
             .borrow_mut()
             .zone_builder()
             .id(ZoneId::from(DEFAULT_MAIN_ZONE))
@@ -84,6 +87,9 @@ impl GosubApp {
             .config(config)
             .create()
             .expect("zone creation failed");
+
+
+        let tabs : Vec<Tabhandle> = Vec![];
 
         // Open a tab in our zone
         let viewport = Viewport::new(0, 0, DEFAULT_WIDTH as u32, DEFAULT_HEIGHT as u32);

@@ -10,7 +10,6 @@ mod zone_builder;
 
 pub mod cookies;
 pub mod tab;
-pub mod tick;
 pub mod zone;
 pub mod storage;
 

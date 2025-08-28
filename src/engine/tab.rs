@@ -1,69 +1,22 @@
-//! Tab system: [`Tab`], [`Tick`](crate::engine::tick::TickResult), and [`TabId`].
-//!
-//! A **tab** is a single browsing context within a [`Zone`](crate::engine::zone::Zone):
-//! it owns an `BrowsingContext`, a [`Viewport`], and state
-//! for loading+rendering a page. Tabs share zone resources such as cookies and storage.
-//!
-//! # Lifecycle
-//!
-//! Tabs run a small state machine (`[`TabState`]`) driven by `Tab::tick`:
-//!
-//! 1. `Idle` → user action
-//! 2. `PendingLoad(url)` → start network → `Loading`
-//! 3. `Loading` → on success: `Loaded` (and set raw HTML) / on error: `Failed`
-//! 4. `Loaded` → `PendingRendering(viewport)` → `Rendering` → `Rendered` → `Idle`
-//!
-//! The engine calls `tick()` regularly (e.g., each frame or via a scheduler).
-//! `tick()` returns a [`TickResult`] indicating whether
-//! the tab needs redraw and/or committed a new URL.
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use gosub_engine::{GosubEngine, EngineCommand};
-//! use url::Url;
-//! use gosub_engine::render::Viewport;
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! let zone_id = engine.zone_builder().create().unwrap();
-//!
-//! // Create a tab
-//! let viewport = Viewport::new(0, 0, 800, 600);
-//! let tab_id = engine.open_tab_in_zone(zone_id, viewport).unwrap();
-//!
-//! let compositor = &mut gosub_engine::render::DefaultCompositor::new(|| {});
-//!
-//! // Navigate
-//! engine.execute_command(tab_id, EngineCommand::Navigate(Url::parse("https://example.com").unwrap())).unwrap();
-//!
-//! // Drive the engine
-//! let results = engine.tick(compositor);
-//! if let Some(res) = results.get(&tab_id) {
-//!     if res.needs_redraw { /* schedule a repaint */ }
-//! }
-//! ```
-
 use crate::engine::cookies::CookieJarHandle;
 use crate::engine::storage::types::PartitionPolicy;
 use crate::engine::storage::{PartitionKey, StorageEvent, StorageHandles};
-use crate::engine::tick::TickResult;
 use crate::engine::zone::ZoneId;
 use crate::engine::BrowsingContext;
 use crate::render::backend::{
-    CompositorSink, ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
+    ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
 };
 use crate::render::Viewport;
-use crate::{EngineCommand, EngineEvent};
-use serde::__private::from_utf8_lossy;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::oneshot;
 use url::Url;
 use uuid::Uuid;
 use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::net::Response;
 use crate::storage::types::compute_partition_key;
 use crate::zone::ZoneServices;
 
@@ -96,6 +49,7 @@ impl TabId {
 }
 
 
+/// A handle to a tab's command channel, allowing sending commands to the tab.
 pub struct TabHandle {
     pub id: TabId,
     pub cmd_tx: Sender<EngineCommand>,
@@ -111,6 +65,7 @@ impl TabHandle {
     }
 }
 
+/// Builder for creating a new tab within a zone.
 pub struct TabBuilder {
     event_tx: Option<Sender<EngineEvent>>,
 }
@@ -130,6 +85,28 @@ impl TabBuilder {
     }
 }
 
+/// Represents an in-flight network load operation. It allows for easy cancellation in case
+/// the load is no longer needed (e.g., user navigated away).
+struct InflightLoad {
+    cancel: CancellationToken,
+    rx: oneshot::Receiver<anyhow::Result<Response>>,
+}
+
+/// State for the tab task driving a single tab.
+struct TabTaskState {
+    /// Is drawing enabled (vs suspended)
+    drawing_enabled: bool,
+    /// Target frames per second when drawing is enabled
+    fps: u32,
+    /// Interval timer for driving ticks
+    interval: tokio::time::Interval,
+    /// Current in-flight load operation, if any
+    load: Option<InflightLoad>,
+    /// Current viewport size
+    viewport: Viewport,
+    /// Has something changed that requires a redraw
+    dirty: bool,
+}
 
 
 
@@ -168,7 +145,7 @@ pub enum TabState {
 
 /// Activity mode for a [`Tab`]. Schedulers can allocate CPU/time by mode.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum TabMode {
+pub enum TabActivityMode {
     /// Foreground: fully active (network, layout, paint, animations ~60 Hz).
     Active,
 
@@ -182,18 +159,7 @@ pub enum TabMode {
     Suspended,
 }
 
-/// A single browsing context inside a [`Zone`](crate::engine::zone::Zone).
-///
-/// A [`Tab`] owns an `BrowsingContext` and tracks its
-/// viewport, loading/rendering state, current/pending URL, favicon/title, and
-/// per-tab storage partitioning. Tabs share the zone's cookie jar and storage.
-///
-/// Drive a tab by calling `tick` regularly and by injecting
-/// [`EngineEvent`] and [`EngineCommand`]
-/// from your UI.
-///
-/// Typical loop: `execute_command(Navigate) → tick() → (Loaded) → tick() → (Rendered)`
-/// and then paint the returned surface.
+
 pub struct Tab {
     /// ID of the tab
     pub id: TabId,
@@ -203,11 +169,8 @@ pub struct Tab {
     pub context: BrowsingContext,
     /// State of the tab (idle, loading, loaded, etc.)
     pub state: TabState,
-
     /// Current tab mode (idle, live, background)
-    pub mode: TabMode,
-    /// When was the last tick?
-    pub last_tick: Instant,
+    pub mode: TabActivityMode,
 
     /// Favicon binary data for the current tab
     pub favicon: Vec<u8>,
@@ -249,12 +212,11 @@ impl Tab {
     /// Create a new tab bound to `zone_id`, with a runtime, initial viewport,
     /// and an optional zone-shared cookie jar handle.
     ///
-    /// The tab starts in [`TabState::Idle`], [`TabMode::Active`], and with
+    /// The tab starts in [`TabState::Idle`], [`TabActivityMode::Active`], and with
     /// [`PartitionKey::None`]/[`PartitionPolicy::TopLevelOrigin`].
     pub fn new(
         zone_id: ZoneId,
         runtime: Arc<Runtime>,
-        // surface_provider: Arc<dyn SurfaceProvider>,
         viewport: Viewport,
         cookie_jar: Option<CookieJarHandle>,
     ) -> Self {
@@ -272,14 +234,13 @@ impl Tab {
             is_loading: false,
             is_error: false,
 
-            mode: TabMode::Active, // Default mode is active
-            last_tick: Instant::now(),
+            mode: TabActivityMode::Active, // Default mode is active
 
             cookie_jar,
             partition_key: PartitionKey::None, // Start with no partition key
             partition_policy: PartitionPolicy::TopLevelOrigin,
 
-            surface: None, // No surface initially
+            surface: None,
             surface_size: SurfaceSize {
                 width: 1,
                 height: 1,
@@ -338,201 +299,6 @@ impl Tab {
         }
     }
 
-    /// Advance the tab’s state machine once and return a [`TickResult`]
-    /// indicating whether a redraw is needed and whether a page was committed.
-    ///
-    /// **Returns**
-    /// - `needs_redraw = true` when a new surface is ready to paint
-    /// - `page_loaded = true` when a navigation commits
-    pub(crate) fn tick(
-        &mut self,
-        backend: &mut dyn RenderBackend,
-        host: &mut impl CompositorSink,
-    ) -> anyhow::Result<TickResult> {
-        let mut result = TickResult::default();
-
-        match self.state.clone() {
-            TabState::Idle => {
-                // Nothing to do
-            }
-
-            // Start loading the URL
-            TabState::PendingLoad(url) => {
-                self.state = TabState::Loading;
-                self.is_loading = true;
-                self.pending_url = Some(url.clone());
-                self.context.start_loading(url.clone());
-            }
-
-            // Poll the loading task until it's completed (or failed)
-            TabState::Loading => {
-                if let Some(done) = self.context.poll_loading() {
-                    match done {
-                        Ok(resp) => {
-                            // Store cookies from the response in the cookie jar
-                            if let Some(cookie_jar) = &self.cookie_jar {
-                                cookie_jar
-                                    .write()
-                                    .unwrap()
-                                    .store_response_cookies(&resp.url, &resp.headers);
-                            }
-
-                            // Set tab state
-                            self.state = TabState::Loaded;
-                            self.is_loading = false;
-                            self.pending_url = None;
-                            self.current_url = Some(resp.url.clone());
-                            self.context
-                                .set_raw_html(from_utf8_lossy(resp.body.as_slice()).as_ref());
-
-                            // Set result
-                            result.page_loaded = true;
-                            result.commited_url = Some(resp.url.clone());
-                        }
-                        Err(e) => {
-                            self.state = TabState::Failed(e);
-                            self.is_loading = false;
-                            self.is_error = true;
-                            result.needs_redraw = true;
-                        }
-                    }
-                }
-            }
-
-            // Start rendering after we finished loading
-            TabState::Loaded => {
-                self.state = TabState::PendingRendering(*self.context.viewport());
-            }
-
-            TabState::PendingRendering(_viewport) => {
-                if self.committed_viewport != self.desired_viewport {
-                    self.committed_viewport = self.desired_viewport;
-                    self.surface_size = self.committed_viewport.as_size();
-                }
-                self.state = TabState::Rendering(self.committed_viewport);
-            }
-
-            // Normally, rendering will take a while (async). Currently, it doesn't so we move directly
-            // to a Rendered state.
-            TabState::Rendering(viewport) => {
-                // Make sure we have a surface to render on
-                self.ensure_surface(backend, viewport.as_size())?;
-
-                // Rebuild the render list if needed
-                self.context.rebuild_render_list_if_needed();
-
-                if let Some(ref mut surf) = self.surface {
-                    backend.render(&mut self.context, surf.as_mut())?;
-
-                    if let Some(handle) = backend.external_handle(surf.as_mut()) {
-                        host.submit_frame(self.id, handle);
-                    }
-                }
-
-                self.state = TabState::Rendered(viewport);
-            }
-
-            // Notify the outside world that we have something to paint, and we can go back to idle state.
-            TabState::Rendered(_viewport) => {
-                // Tell the world our surface is ready to paint
-                result.needs_redraw = true;
-
-                if self.dirty_after_inflight || self.committed_viewport != self.desired_viewport {
-                    // If we have a dirty viewport, we need to re-render it
-                    self.dirty_after_inflight = false;
-                    self.state = TabState::PendingRendering(self.desired_viewport);
-                } else {
-                    // If we are not dirty, we can go back to idle state
-                    self.state = TabState::Idle;
-                }
-
-                self.state = TabState::Idle;
-            }
-
-            TabState::Failed(error_msg) => {
-                // Something has failed. We need to show the error message so we set the raw HTML
-                // to the error message and trigger a redraw.
-                self.context.set_raw_html(error_msg.as_str());
-                self.state = TabState::Loaded;
-
-                result.needs_redraw = true;
-            }
-        }
-
-        Ok(result)
-    }
-
-    /// Handle an external UI event (scroll, mouse, keyboard, resize).
-    /// Typically forwarded from your toolkit.
-    pub(crate) fn handle_event(&mut self, event: EngineEvent) {
-        match event {
-            EngineEvent::Scroll { dx, dy } => {
-                let cur_vp = self.context.viewport();
-                self.set_viewport(Viewport::new(
-                    // We should do clamp(), but we don't know the max x/y sizes of the rendered document
-                    (cur_vp.x + dx as i32).max(0),
-                    (cur_vp.y + dy as i32).max(0),
-                    cur_vp.width,
-                    cur_vp.height,
-                ));
-            }
-            EngineEvent::MouseMove { x, y } => {
-                println!(
-                    "Mouse moved on tab {:?} to position ({}, {})",
-                    self.id, x, y
-                );
-            }
-            EngineEvent::MouseDown { button, x, y } => {
-                println!(
-                    "Mouse down event on tab {:?} at position ({}, {}) with button {:?}",
-                    self.id, x, y, button
-                );
-            }
-            EngineEvent::MouseUp { button, x, y } => {
-                println!(
-                    "Mouse up event on tab {:?} at position ({}, {}) with button {:?}",
-                    self.id, x, y, button
-                );
-            }
-            EngineEvent::KeyDown { key } => {
-                println!("Key down event on tab {:?} for key: {}", self.id, key);
-            }
-            EngineEvent::KeyUp { key } => {
-                println!("Key up event on tab {:?} for key: {}", self.id, key);
-            }
-            EngineEvent::InputChar { character } => {
-                println!(
-                    "Input character event on tab {:?}: '{}'",
-                    self.id, character
-                );
-            }
-            EngineEvent::Resize { width, height } => {
-                println!(
-                    "Resize event on tab {:?}: new size {}x{}",
-                    self.id, width, height
-                );
-                let cur_vp = self.context.viewport();
-                self.set_viewport(Viewport::new(cur_vp.x, cur_vp.y, width, height))
-            }
-        }
-    }
-
-    /// Execute a high-level engine command (navigate, reload).
-    pub(crate) fn execute_command(&mut self, command: EngineCommand) {
-        match command {
-            EngineCommand::Navigate(url) => {
-                self.state = TabState::PendingLoad(url);
-            }
-            EngineCommand::Reload() => {
-                let Some(url) = self.current_url.clone() else {
-                    return;
-                };
-
-                self.state = TabState::PendingLoad(url);
-            }
-        }
-    }
-
     /// Get the current snapshotted image of the tab.
     pub fn thumbnail(&self) -> Option<&RgbaImage> {
         self.thumbnail.as_ref()
@@ -578,6 +344,15 @@ impl Tab {
         self.surface = Some(backend.create_surface(size, self.present_mode)?);
         Ok(())
     }
+
+
+    pub fn handle_event(_event: EngineEvent) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    pub fn execute_command(_cmd: EngineCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 
@@ -588,70 +363,211 @@ pub(crate) fn spawn_tab_task(
     event_tx: Sender<EngineEvent>,
     services: ZoneServices,
     viewport: Viewport,
+    runtime: Arc<Runtime>,
+    backend: Arc<Mutex<Box<dyn RenderBackend + Send>>>,
 ) {
     tokio::spawn(async move {
         println!("Spawned tab task for tab {:?}", tab_id);
 
-        let mut current_viewport = viewport;
-        let mut fps = 0;
-        let mut drawing_enabled = false;
-        let mut dirty = true;
+        let mut tab = Tab::new(
+            services.zone_id,
+            runtime.clone(),
+            viewport,
+            Some(services.cookie_jar.clone()),
+        );
 
-        while let Some(cmd) = cmd_rx.recv().await {
-            match cmd {
-                EngineCommand::Navigate { url } => {
-                    println!("Tab {:?} navigating to URL: {}", tab_id, url);
+        let fps = 60;
+        let mut state = TabTaskState {
+            drawing_enabled: false,
+            fps,
+            interval: tokio::time::interval(std::time::Duration::from_millis(1000/fps as u64)),
+            load: None,
+            viewport,
+            dirty: true,
+        };
 
-                    let pk = compute_partition_key(&url, &services.partition_policy);
-                    let origin = url.origin().clone();
-                    let local = services.storage.local_for(services.zone_id, &pk, &origin).expect("cannot get local storage for tab");
-                    let session = services.storage.session_for(services.zone_id, tab_id, &pk, &origin).expect("cannot get session storage for tab");
+        let _ = event_tx.send(EngineEvent::TabCreated { tab: tab_id }).await;
 
-                    let _ = event_tx.send(EngineEvent::ConnectionEstablished { tab: tab_id, url: url.clone() }).await;
-                    dirty = true;
+        loop {
+            tokio::select! {
+                // Tick interval for driving the redraws
+                _ = state.interval.tick(), if state.drawing_enabled => {
+                    if let Err(e) = drive_once(&mut tab, &backend, &event_tx, &mut state.dirty).await {
+                        tab.state = TabState::Failed(format!("Tab {:?} tick error: {}", tab_id, e));
+                        state.dirty = true;
+                    }
                 }
-                EngineCommand::ResumeDrawing { fps: wanted_fps } => {
-                    drawing_enabled = true;
-                    fps = wanted_fps;
-                    dirty = true;
-                    println!("Tab {:?} resumed drawing FPS: {} / {}", tab_id, fps, drawing_enabled);
-                }
-                EngineCommand::SuspendDrawing=> {
-                    drawing_enabled = false;
-                    println!("Tab {:?} suspended drawing: at fps: {} / {}", tab_id, fps, drawing_enabled);
-                }
-                EngineCommand::Resize { width, height } => {
-                    current_viewport.width = width;
-                    current_viewport.height = height;
-                    dirty = true;
-                    println!("Tab {:?} resized to {}x{}", tab_id, width, height);
-                }
-                EngineCommand::MouseMove { x, y } => {
-                    dirty = true;
-                }
-                _ => {
-                    println!("Tab {:?} received command: {:?}", tab_id, cmd);
-                    dirty = true;
-                }
-            }
 
-            if drawing_enabled && dirty {
-                let surface = ExternalSurface {
-                    width: current_viewport.width,
-                    height: current_viewport.height,
-                };
+                // Handle in-flight load completion
+                res = async {
+                    if let Some(load) = &mut state.load {
+                        load.rx.await
+                    } else {
+                        futures::future::pending().await
+                    }
+                } => {
+                    match res {
+                        Ok(Ok(resp)) => {
+                            if let Some(ref jar) = tab.cookie_jar {
+                                jar.write().unwrap().store_response_cookies(&resp.url, &resp.headers);
+                            }
 
-                let _ = event_tx.send(EngineEvent::Redraw { tab: tab_id, handle: surface  }).await;
-                dirty = false;
+                            tab.current_url = Some(resp.url.clone());
+                            tab.is_loading = false;
+                            tab.is_error = false;
+                            tab.pending_url = None;
+                            tab.state = TabState::Loaded;
+
+                            tab.context.set_raw_html(
+                                String::from_utf8_lossy(resp.body().as_slice()).as_ref()
+                            );
+
+                            let _ = event_tx.send(EngineEvent::PageCommitted { tab: tab_id, url: resp.url.clone() }).await;
+                            state.dirty = true;
+                        }
+                        Ok(Err(e)) => {
+                            tab.state = TabState::Failed(format!("Tab {:?} error: {}", tab_id, e));
+                            tab.is_loading = false;
+                            tab.is_error = true;
+                            state.dirty = true;
+                        }
+                        Err(_cancelled_or_replaced) => {
+                            // Load was cancelled or replaced, do nothing
+                            println!("Tab {:?} load was cancelled or replaced", tab_id);
+                        }
+                    }
+                }
+
+                // Handle incoming commands
+                msg = cmd_rx.recv() => {
+                    let Some(cmd) = msg else {
+                        // Channel closed, exit the loop
+                        break;
+                    };
+
+                    match cmd {
+                        EngineCommand::Navigate { url } => {
+                            println!("Tab {:?} navigating to URL: {}", tab_id, url);
+
+                            // Cancel any in-flight load
+                            if let Some(load) = state.load.take() {
+                                load.cancel.cancel();
+                            }
+
+                            // Compute storage and bind @TODO: do we need to do this for each navigation?
+                            let pk = compute_partition_key(&url, &services.partition_policy);
+                            let origin = url.origin().clone();
+                            let local = services.storage.local_for(services.zone_id, &pk, &origin).expect("cannot get local storage for tab");
+                            let session = services.storage.session_for(services.zone_id, tab_id, &pk, &origin).expect("cannot get session storage for tab");
+                            tab.bind_storage(StorageHandles { local, session });
+
+                            let cancel = CancellationToken::new();
+                            let (tx, rx) = oneshot::channel();
+
+                            let cancel_child = cancel.child_token();
+                            tokio::spawn(async move {
+                                let res = load_main_document(url.clone(), cancel_child).await;
+                                let _ = tx.send(res);
+                            });
+
+                            state.load = Some(InflightLoad { cancel, rx });
+                            tab.state = TabState::Loading;
+                            state.dirty = true;
+                            // let _ = event_tx.send(EngineEvent::ConnectionEstablished { tab: tab_id, url: url.clone() }).await;
+                        }
+                        EngineCommand::Reload(..) => {
+                            tab.execute_command(EngineCommand::Reload());
+                            state.dirty = true;
+                        }
+                        EngineCommand::Resize { width, height } => {
+                            state.viewport.width = width;
+                            state.viewport.height = height;
+                            tab.handle_event(EngineEvent::Resize { width, height });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::MouseMove { x, y } => {
+                            tab.handle_event(EngineEvent::MouseMove { x, y });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::MouseDown { button, x, y } => {
+                            tab.handle_event(EngineEvent::MouseDown { button, x, y });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::MouseUp { button, x, y } => {
+                            tab.handle_event(EngineEvent::MouseUp { button, x, y });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::KeyDown { key, code, modifiers } => {
+                            tab.handle_event(EngineEvent::KeyDown { key, code, modifiers });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::KeyUp { key, code, modifiers } => {
+                            tab.handle_event(EngineEvent::KeyUp { key, code, modifiers });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::InputChar { character } => {
+                            tab.handle_event(EngineEvent::InputChar { character });
+                            state.dirty = true;
+                        }
+
+                        EngineCommand::ResumeDrawing { fps: wanted_fps } => {
+                            state.drawing_enabled = true;
+                            state.fps = wanted_fps.max(1) as u32;
+                            state.interval = tokio::time::interval(Duration::from_millis(1000 / (state.fps as u64)));
+                            state.dirty = true;
+                            println!("Tab {:?} resumed drawing FPS: {} / {}", tab_id, state.fps, state.drawing_enabled);
+                        }
+                        EngineCommand::SuspendDrawing=> {
+                            state.drawing_enabled = false;
+                            println!("Tab {:?} suspended drawing: at fps: {} / {}", tab_id, state.fps, state.drawing_enabled);
+                        }
+                        _ => {
+                            println!("Tab {:?} received command: {:?}", tab_id, cmd);
+                            state.dirty = true;
+                        }
+                    }
+                }
             }
         }
 
         // Cleanup code here
         println!("Tab task for tab {:?} exiting", tab_id);
-
-        // Disconnect local/session storage
+        let _ = event_tx.send(EngineEvent::TabClosed { tab: tab_id }).await;
         services.storage.drop_tab(services.zone_id, tab_id);
     });
 }
 
+async fn drive_once(
+    tab: &mut Tab,
+    _backend: &Arc<Mutex<Box<dyn RenderBackend + Send>>>,
+    _event_tx: &Sender<EngineEvent>,
+    dirty: &mut bool,
+) -> anyhow::Result<()> {
 
+    match tab.state.clone() {
+        TabState::Idle => {
+            if *dirty {
+                tab.state = TabState::PendingRendering(*tab.context.viewport());
+            }
+        }
+
+        TabState::PendingLoad(url) => {
+            tab.state = TabState::Loading;
+            tab.is_loading = true;
+            tab.pending_url = Some(url.clone());
+            tab.context.start_loading(url.clone());
+        }
+        _ => {
+            // Handle other states as needed
+            println!("Tab {:?} in state: {:?}", tab.id, tab.state);
+        }
+    }
+
+    Ok(())
+}

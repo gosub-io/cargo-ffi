@@ -69,6 +69,12 @@ use std::sync::{Arc, RwLock};
 /// ```
 pub type CookieJarHandle = Arc<RwLock<dyn CookieJar + Send + Sync>>;
 
+impl std::fmt::Debug for dyn CookieJar + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CookieJar {{ ... }}")
+    }
+}
+
 /// A handle to a cookie store trait.
 ///
 /// This is a reference-counted pointer to a type-erased [`CookieStore`].
