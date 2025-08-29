@@ -1,6 +1,6 @@
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use crate::engine::cookies::cookie_jar::DefaultCookieJar;
 use crate::engine::cookies::store::CookieStore;
@@ -28,9 +28,9 @@ impl CookieStore for InMemoryCookieStore {
         let handle = match jars.entry(zone_id) {
             Entry::Occupied(o) => o.get().clone(),
             Entry::Vacant(v) => {
-                let jar: CookieJarHandle = Arc::new(RwLock::new(DefaultCookieJar::new()));
-                v.insert(jar.clone());
-                jar
+                let jar_handle: CookieJarHandle = DefaultCookieJar::new().into();
+                v.insert(jar_handle.clone());
+                jar_handle
             }
         };
         Some(handle)
@@ -48,6 +48,7 @@ impl CookieStore for InMemoryCookieStore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use super::*;
 
     #[test]

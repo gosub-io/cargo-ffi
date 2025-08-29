@@ -45,10 +45,13 @@
 //! };
 //! ```
 
+use std::fmt::Debug;
+use std::ops::Deref;
 use crate::engine::cookies::store::CookieStore;
 use crate::engine::cookies::CookieJar;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// A handle to a cookie jar trait.
 ///
@@ -67,13 +70,51 @@ use std::sync::{Arc, RwLock};
 ///     guard.clear();
 /// }
 /// ```
-pub type CookieJarHandle = Arc<RwLock<dyn CookieJar + Send + Sync>>;
+#[derive(Clone, Debug)]
+pub struct CookieJarHandle(Arc<RwLock<Box<dyn CookieJar + Send + Sync>>>);
 
 impl std::fmt::Debug for dyn CookieJar + Send + Sync {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CookieJar {{ ... }}")
     }
 }
+
+impl CookieJarHandle {
+    pub fn new<T>(jar: T) -> Self
+    where
+        T: CookieJar + Send + Sync + 'static,
+    {
+        Self(Arc::new(RwLock::new(Box::new(jar))))
+    }
+
+    pub fn read(&self) -> RwLockReadGuard<'_, Box<dyn CookieJar + Send + Sync>> {
+        self.0.read().expect("poisoned CookieJarHandle")
+    }
+    pub fn write(&self) -> RwLockWriteGuard<'_, Box<dyn CookieJar + Send + Sync>> {
+        self.0.write().expect("poisoned CookieJarHandle")
+    }
+}
+
+impl Deref for CookieJarHandle {
+    type Target = RwLock<Box<dyn CookieJar + Send + Sync>>;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+impl From<Box<dyn CookieJar + Send + Sync>> for CookieJarHandle {
+    fn from(jar: Box<dyn CookieJar + Send + Sync>) -> Self {
+        Self(Arc::new(RwLock::new(jar)))
+    }
+}
+
+impl<T> From<T> for CookieJarHandle
+where
+    T: CookieJar + Send + Sync + 'static,
+{
+    fn from(jar: T) -> Self {
+        Self::new(jar)
+    }
+}
+
 
 /// A handle to a cookie store trait.
 ///
@@ -82,7 +123,14 @@ impl std::fmt::Debug for dyn CookieJar + Send + Sync {
 /// since callers hold only `&self` when invoking trait methods.
 ///
 /// Typical use is at **build/initialization time** to mint a per-zone jar.
-pub type CookieStoreHandle = Arc<dyn CookieStore + Send + Sync>;
+#[derive(Clone)]
+pub struct CookieStoreHandle(Arc<dyn CookieStore + Send + Sync>);
+
+impl Debug for CookieStoreHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CookieStore {{ ... }}")
+    }
+}
 
 /// A cookie as stored/serialized by the engine.
 ///

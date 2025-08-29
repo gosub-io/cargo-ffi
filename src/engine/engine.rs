@@ -1,93 +1,132 @@
+//! Engine core: zones, commands, and run loop.
+//!
+//! The **host application / UA** creates a [`GosubEngine`] by providing a
+//! render backend and an engine-wide [`EngineConfig`]. The engine owns a
+//! command channel (`cmd_tx`, `cmd_rx`) used by handles (e.g. [`ZoneHandle`])
+//! to send control messages into the engine.
+//!
+//! The engine’s [`run`](GosubEngine::run) loop awaits inbound
+//! [`EngineCommand`]s. When it receives a zone command, it dispatches to
+//! [`handle_zone_command`](GosubEngine::handle_zone_command) which finds the
+//! target [`Zone`] and performs the requested action.
+//!
+//! New zones are created via [`GosubEngine::create_zone`]. You pass a
+//! [`ZoneConfig`], a pre-assembled [`ZoneServices`] bundle (cookies, storage,
+//! etc.), an optional [`ZoneId`] (or let the engine generate one), and an
+//! `event_tx` channel where the zone (and its tabs) can emit [`EngineEvent`]s
+//! back to the host. The function returns a [`ZoneHandle`] (just the id +
+//! a clone of the engine’s `cmd_tx`) that userland code can use to control the
+//! zone asynchronously.
+
 use std::collections::HashMap;
-use crate::render::backend::{RenderBackend};
+use crate::render::backend::RenderBackend;
 use crate::zone::{Zone, ZoneConfig, ZoneHandle, ZoneId, ZoneServices};
 use crate::EngineConfig;
-use std::sync::{Arc, Mutex};
-use tokio::runtime::Runtime;
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::engine::events::{EngineCommand, EngineEvent, ZoneCommand};
 use anyhow::Result;
+use crate::engine::handle::EngineHandle;
+use crate::tab::{OpenTabParams, TabHandle};
 
 /// Entry point to the Gosub engine.
 ///
-/// Create an engine, then create zones and open tabs.
+/// Typical usage:
 ///
-/// See [`Viewport`], [`ZoneId`], [`TabId`], [`EngineEvent`], [`EngineCommand`].
+/// ```
+/// # use gosub_engine as ge;
+/// let backend = ge::render::backends::null::NullBackend::new()
+///     .expect("null renderer cannot be created");
+/// let config = ge::EngineConfig::default();
+/// let engine = ge::GosubEngine::new(Some(config), Box::new(backend));
+/// ```
 pub struct GosubEngine {
-    /// Configuration for the whole engine
+    /// Configuration for the whole engine.
     config: Arc<EngineConfig>,
-    /// Tokio runtime for async operations
-    pub runtime: Arc<Runtime>,
-    // (Current) render backend for the engine
-    backend: Box<dyn RenderBackend + Send + Sync>,
-
+    /// Active render backend for the engine.
+    backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
+    /// Zones managed by this engine, indexed by [`ZoneId`].
     zones: HashMap<ZoneId, Arc<Mutex<Zone>>>,
+    /// Command sender (cloned into handles).
     cmd_tx: Sender<EngineCommand>,
+    /// Command receiver (owned by the engine run loop).
     cmd_rx: Receiver<EngineCommand>,
 }
 
 impl GosubEngine {
     /// Create a new engine.
     ///
-    /// If `config` is `None`, defaults are used.
+    /// If `config` is `None`, [`EngineConfig::default`] is used.
     ///
     /// ```
-    /// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-    /// let config = gosub_engine::EngineConfig::default();
-    /// let engine = gosub_engine::GosubEngine::new(Some(config), Box::new(backend));
+    /// # use gosub_engine as ge;
+    /// let backend = ge::render::backends::null::NullBackend::new().unwrap();
+    /// let engine = ge::GosubEngine::new(None, Box::new(backend));
     /// ```
     pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend + Send + Sync>) -> Self {
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create Tokio runtime"),
-        );
-
         let resolved_config = config.unwrap_or_else(EngineConfig::default);
-
-        let (cmd_tx, cmd_rx)
-            = tokio::sync::mpsc::channel(512);
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(512);
 
         Self {
             config: Arc::new(resolved_config),
-            runtime,
-            backend,
+            backend: Arc::new(RwLock::new(backend)),
             zones: HashMap::new(),
             cmd_tx,
             cmd_rx,
         }
     }
 
+    /// Create a new event channel for engine/zone → host messages.
+    ///
+    /// Returns `(Sender<EngineEvent>, Receiver<EngineEvent>)`.
     pub fn create_event_channel(&self, cap: usize) -> (Sender<EngineEvent>, Receiver<EngineEvent>) {
         tokio::sync::mpsc::channel(cap)
     }
 
-    pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
-        self.backend = new_backend;
+    pub fn engine_handle(&self) -> EngineHandle {
+        EngineHandle::new(
+            self.cmd_tx.clone(),
+            self.backend.clone()
+        )
     }
 
+    /// Replace the active render backend.
+    pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
+        self.backend = Arc::new(RwLock::new(new_backend));
+    }
+
+    /// Get a clone of the engine’s command sender (mainly for testing or
+    /// custom handles).
     pub fn command_sender(&self) -> Sender<EngineCommand> {
         self.cmd_tx.clone()
     }
 
-    /// Pump the engine's inbound command loop.
+    /// Run the engine’s inbound command loop.
+    ///
+    /// This awaits messages from handles (e.g., [`ZoneHandle`]) and dispatches
+    /// zone-related commands through [`handle_zone_command`](Self::handle_zone_command).
+    /// The loop ends when all senders are dropped and the channel closes.
     pub async fn run(mut self) -> Result<()> {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
+                EngineCommand::Shutdown => break, // graceful stop
                 EngineCommand::Zone(zc) => self.handle_zone_command(zc).await?,
-                _ => {}
+                _ => { /* engine-level commands can be handled here in the future */ }
             }
         }
         Ok(())
     }
 
+    /// Dispatch a [`ZoneCommand`] to the targeted zone, replying on the provided
+    /// responder channel contained in the command.
+    ///
+    /// Locks are held only for short, non-`await`ing critical sections to avoid
+    /// holding a mutex across `.await`.
     async fn handle_zone_command(&mut self, zc: ZoneCommand) -> Result<()> {
         match zc {
             ZoneCommand::SetTitle { zone, title, reply } => {
                 let res = (|| -> Result<()> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let mut z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let mut z = self.zone(zone)?;
                     z.set_title(&title);
                     Ok(())
                 })();
@@ -95,8 +134,7 @@ impl GosubEngine {
             }
             ZoneCommand::SetDescription { zone, description, reply } => {
                 let res = (|| -> Result<()> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let mut z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let mut z = self.zone(zone)?;
                     z.set_description(&description);
                     Ok(())
                 })();
@@ -104,8 +142,7 @@ impl GosubEngine {
             }
             ZoneCommand::SetIcon { zone, icon, reply } => {
                 let res = (|| -> Result<()> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let mut z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let mut z = self.zone(zone)?;
                     z.set_icon(icon);
                     Ok(())
                 })();
@@ -113,41 +150,41 @@ impl GosubEngine {
             }
             ZoneCommand::SetColor { zone, color, reply } => {
                 let res = (|| -> Result<()> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let mut z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let mut z = self.zone(zone)?;
                     z.set_color(color);
                     Ok(())
                 })();
                 let _ = reply.send(res);
             }
-            ZoneCommand::OpenTab { zone, title, viewport, reply } => {
-                let res = (|| -> Result<_> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
-                    z.create_tab(title, viewport).map_err(Into::into)
+            ZoneCommand::OpenTab { zone, title, viewport, url, reply } => {
+                let res = (|| -> Result<TabHandle> {
+                    let z = self.zone(zone)?;
+                    let handle = z.create_tab(OpenTabParams {
+                        initial_title: Some(title.unwrap_or_else(|| "New Tab".to_string())),
+                        url,
+                        viewport,
+                    })?;
+                    Ok(handle)
                 })();
                 let _ = reply.send(res);
             }
             ZoneCommand::CloseTab { zone, tab, reply } => {
                 let res = (|| -> Result<()> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let z = self.zone(zone)?;
                     if z.close_tab(tab) { Ok(()) } else { anyhow::bail!("no such tab") }
                 })();
                 let _ = reply.send(res);
             }
             ZoneCommand::ListTabs { zone, reply } => {
                 let res = (|| -> Result<_> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let z = self.zone(zone)?;
                     Ok(z.list_tabs())
                 })();
                 let _ = reply.send(res);
             }
             ZoneCommand::TabTitle { zone, tab, reply } => {
                 let res = (|| -> Result<_> {
-                    let z = self.zones.get(&zone).ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-                    let z = z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))?;
+                    let z = self.zone(zone)?;
                     Ok(z.tab_title(tab))
                 })();
                 let _ = reply.send(res);
@@ -156,6 +193,16 @@ impl GosubEngine {
         Ok(())
     }
 
+    /// Create and register a new zone, returning a [`ZoneHandle`] for userland code.
+    ///
+    /// - `config`: zone configuration (features, limits, identity)
+    /// - `services`: storage, cookie store/jar, partition policy, etc.
+    /// - `zone_id`: optional id; if `None`, a fresh one is generated
+    /// - `event_tx`: channel where the zone (and its tabs) will emit [`EngineEvent`]s
+    ///
+    /// The returned handle contains the [`ZoneId`] and a clone of the engine’s
+    /// command sender, allowing the caller to send zone commands without holding
+    /// a reference to the engine.
     pub fn create_zone(
         &mut self,
         config: ZoneConfig,
@@ -173,19 +220,26 @@ impl GosubEngine {
 
         Ok(ZoneHandle::new(zone_id, self.cmd_tx.clone()))
     }
-}
 
+    #[inline]
+    fn zone(&self, id: ZoneId) -> Result<std::sync::MutexGuard<'_, Zone>> {
+        let z = self
+            .zones
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
+        z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use tokio::time::timeout;
-    use crate::cookies::{DefaultCookieJar, InMemoryCookieStore};
+    use crate::cookies::DefaultCookieJar;
     use crate::render::backends::null::NullBackend;
     use crate::storage::{InMemoryLocalStore, InMemorySessionStore, StorageService};
     use crate::storage::types::PartitionPolicy;
     use super::*;
 
+    /// Ensure `create_zone` returns a handle and registers the zone internally.
     #[tokio::test]
     async fn create_zone_returns_handle_and_registers_zone() {
         let backend = Box::new(NullBackend::new().unwrap());
@@ -206,8 +260,8 @@ mod tests {
         let services = ZoneServices {
             zone_id,
             storage: storage.clone(),
-            cookie_store: None,
-            cookie_jar: Some(cookie_jar),
+            cookie_store: None,     // No cookie store needed; we do not persist cookies here
+            cookie_jar: Some(cookie_jar.into()),
             partition_policy: PartitionPolicy::TopLevelOrigin,
         };
 
@@ -216,14 +270,15 @@ mod tests {
         assert_eq!(handle.id(), zone_id);
     }
 
+    /// Demonstrate a handle call round-tripping through the engine’s command loop.
     #[tokio::test]
-    async fn zonehandle_set_title_round_trips_through_engine() {
+    async fn zone_handle_set_title_round_trips_through_engine() {
         let backend = Box::new(NullBackend::new().unwrap());
         let mut engine = GosubEngine::new(None, backend);
 
         let (ev_tx, _ev_rx) = engine.create_event_channel(16);
 
-        let cookie_store = InMemoryCookieStore::new();
+        let cookie_jar = DefaultCookieJar::new();
         let storage = Arc::new(StorageService::new(
             Arc::new(InMemoryLocalStore::new()),
             Arc::new(InMemorySessionStore::new()),
@@ -233,27 +288,26 @@ mod tests {
         let services = ZoneServices {
             zone_id: ZoneId::new(),
             storage: storage.clone(),
-            cookie_store: Some(cookie_store),
-            cookie_jar: None,
+            cookie_store: None,
+            cookie_jar: Some(cookie_jar.into()),
             partition_policy: PartitionPolicy::TopLevelOrigin,
         };
 
         let cfg = ZoneConfig::default();
-        let handle = engine.create_zone(cfg, services, None, ev_tx).unwrap();
+        let zone_handle = engine.create_zone(cfg, services, None, ev_tx).unwrap();
+
+        let engine_tx = engine.command_sender().clone();
 
         // spawn engine loop
         let engine_task = tokio::spawn(engine.run());
 
-        // call into handle
-        handle.set_title("Work".to_string()).await.unwrap();
+        // call into zone_handle
+        zone_handle.set_title("Work".to_string()).await.unwrap();
 
-        // To assert the title changed, access engine internals would require
-        // exposing a read API or listening to an event (recommended). For now, we just stop.
-        // You can add an EngineEvent::ZoneTitleChanged and assert via ev_rx.
+        // graceful shutdown
+        engine_tx.send(EngineCommand::Shutdown).await.unwrap();
 
-        // shut down engine loop by dropping sender or implement a shutdown command
-        drop(handle);
-        // cancel the engine task after a short delay
-        let _ = timeout(Duration::from_millis(50), engine_task).await;
+        // wait for loop to end
+        engine_task.await.unwrap().unwrap();
     }
 }

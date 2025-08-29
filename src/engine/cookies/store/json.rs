@@ -233,6 +233,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use http::HeaderMap;
+    use url::Url;
 
     fn mk_headers(set_cookie_lines: &[&str]) -> HeaderMap {
         let mut h = HeaderMap::new();

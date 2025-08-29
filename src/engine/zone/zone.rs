@@ -1,12 +1,8 @@
 use crate::engine::cookies::CookieJarHandle;
-use crate::engine::cookies::DefaultCookieJar;
 use crate::engine::storage::{
     PartitionKey, StorageArea, StorageService, Subscription,
 };
 use crate::engine::tab::TabId;
-use crate::engine::zone::password_store::PasswordStore;
-use crate::render::Viewport;
-use crate::zone::ZoneConfig;
 use crate::EngineError;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -17,9 +13,10 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{Sender, channel};
 use uuid::Uuid;
 use crate::cookies::CookieStoreHandle;
-use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::engine::events::{EngineCommand, EngineEvent, TabCommand};
 use crate::storage::types::PartitionPolicy;
-use crate::tab::{spawn_tab_task, TabHandle};
+use crate::tab::{spawn_tab_task, OpenTabParams, TabHandle};
+use crate::zone::ZoneConfig;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -44,33 +41,11 @@ use crate::tab::{spawn_tab_task, TabHandle};
 ///
 /// let id = ZoneId::new();
 /// println!("New zone ID: {:?}", id);
-/// ```
-///
-/// Creating a zone with a fixed ID:
-/// ```no_run
-/// use gosub_engine::GosubEngine;
-/// use gosub_engine::zone::ZoneId;
-///
-/// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-/// let mut engine = GosubEngine::new(None, Box::new(backend));
 ///
 /// let fixed_id = ZoneId::from("123e4567-e89b-12d3-a456-426614174000");
-/// let zone_id = engine.zone_builder()
-///     .id(fixed_id)
-///     .create()
-///     .unwrap();
-/// assert_eq!(zone_id, fixed_id);
+/// println!("Fixed zone ID: {}", fixed_id);
 /// ```
 ///
-/// Using `ZoneId` as a map key:
-/// ```
-/// use gosub_engine::zone::ZoneId;
-/// use std::collections::HashMap;
-///
-/// let mut zones: HashMap<ZoneId, String> = HashMap::new();
-/// let z1 = ZoneId::new();
-/// zones.insert(z1, "Profile 1".to_string());
-/// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ZoneId(Uuid);
 
@@ -99,7 +74,6 @@ impl Display for ZoneId {
     }
 }
 
-
 /// Internal record for a tab within a zone
 #[derive(Clone, Debug)]
 struct TabRecord {
@@ -119,8 +93,12 @@ pub struct ZoneServices {
     pub cookie_store: Option<CookieStoreHandle>,
     pub cookie_jar: Option<CookieJarHandle>,
     pub partition_policy: PartitionPolicy,
+    // pub runtime: Handle,
+    // pub backend: Arc<dyn RenderBackend + Send + Sync>,
 }
 
+/// This is the zone structure, which contains tabs and shared services. It is only known to the engine
+/// and can be controlled by the user via the engine API.
 pub struct Zone {
     /// ID of the zone
     pub id: ZoneId,
@@ -138,18 +116,23 @@ pub struct Zone {
     /// Tabs in the zone
     tabs: RwLock<HashMap<TabId, TabRecord>>,
 
-    /// Session storage for the zone (shared between all tabs in the zone)
-    pub storage: Arc<StorageService>,
+    /// Zone services (storage, cookies, etc)
+    services: ZoneServices,
+
+    // /// Session storage for the zone (shared between all tabs in the zone)
+    // pub storage: Arc<StorageService>,
     /// Subscription for session storage changes
     storage_rx: Subscription,
 
-    /// Where to load/store cookies within this zone
-    pub cookie_jar: CookieJarHandle,
-    /// Per-zone password storage
-    pub password_store: PasswordStore,
+    // /// Where to load/store cookies within this zone
+    // pub cookie_jar: CookieJarHandle,
+    // /// Per-zone password storage
+    // pub password_store: PasswordStore,
+
     /// Flags controlling which data is shared with other zones.
     pub shared_flags: SharedFlags,
 
+    /// Event channel to send events back to the UI
     event_tx: Sender<EngineEvent>,
 }
 
@@ -182,9 +165,13 @@ pub struct SharedFlags {
 impl Zone {
     /// Creates a new zone with a specific zone ID
     pub fn new_with_id(
+        // Unique ID for the zone
         zone_id: ZoneId,
+        // Configuration for the zone
         config: ZoneConfig,
+        // Services to provide to tabs within this zone
         services: ZoneServices,
+        // Event channel to send events back to the UI
         event_tx: Sender<EngineEvent>,
     ) -> Self {
         // We generate the color by using the zone id as a seed
@@ -198,8 +185,6 @@ impl Zone {
 
         let storage_rx = services.storage.subscribe();
 
-        let cookie_jar = services.cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
-
         let zone = Self {
             id: zone_id,
             title: "Untitled Zone".to_string(),
@@ -209,11 +194,9 @@ impl Zone {
             tabs:  RwLock::new(HashMap::new()),
             config,
 
-            storage,
+            services: services.clone(),
             storage_rx,
 
-            cookie_jar,
-            password_store: PasswordStore::new(),
             shared_flags: SharedFlags {
                 share_autocomplete: false,
                 share_bookmarks: false,
@@ -256,50 +239,44 @@ impl Zone {
         self.color = color;
     }
 
-    /// Sets the cookie jar for the zone
-    pub fn set_cookie_jar(&mut self, cookie_jar: CookieJarHandle) {
-        self.cookie_jar = cookie_jar;
-    }
+    // /// Sets the cookie jar for the zone
+    // pub fn set_cookie_jar(&mut self, cookie_jar: CookieJarHandle) {
+    //     self.cookie_jar = cookie_jar;
+    // }
 
     /// Returns the services available to tabs within this zone
-    pub fn services(&self) -> ZoneServices {
-        ZoneServices {
-            zone_id: self.id,
-            storage: self.storage.clone(),
-            cookie_jar: self.cookie_jar.clone(),
-            partition_policy: self.partition_policy,
-        }
-    }
+    pub fn services(&self) -> ZoneServices { self.services.clone() }
 
-    pub fn create_tab(
-        &self,
-        title: impl Into<String>,
-        viewport: Viewport,
-    ) -> Result<TabHandle, EngineError> {
+    pub fn create_tab(&self, params: OpenTabParams) -> Result<TabHandle, EngineError> {
         if self.tabs.read().unwrap().len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
-        let (cmd_tx, cmd_rx) = channel::<EngineCommand>(256);
+        // Channel to send and receive commands to and from the UI
+        let (tab_cmd_tx, tab_cmd_rx) = channel::<TabCommand>(256);
+
         let tab_id = TabId::new();
 
-        spawn_tab_task(
+        let join = spawn_tab_task(TabSpawnArgs {
             tab_id,
-            cmd_rx,
-            self.event_tx.clone(),
-            self.services(),
-            viewport,
-        );
+            cmd_rx: tab_cmd_rx,
+            event_tx: self.event_tx.clone(),
+            services: self.services(),
+            engine: self.engine_handle.clone(),
+            initial: params.clone(),
+        });
 
         {
             let mut tabs = self.tabs.write().unwrap();
-            tabs.insert(
-                tab_id,
-                TabRecord { id: tab_id, title: title.into(), cmd_tx: cmd_tx.clone() }
-            );
+            tabs.insert(tab_id, TabRecord {
+                id: tab_id,
+                title: params.initial_title.unwrap_or_else(|| "New Tab".into()),
+                cmd_tx: tab_cmd_tx.clone(),
+                join: Some(join),
+            });
         }
 
-        Ok(TabHandle { id: tab_id, cmd_tx })
+        Ok(TabHandle::new(tab_id, self.engine_tx.clone()))
     }
 
     /// Get the shared localStorage area for this (zone × partition × origin).
@@ -308,7 +285,7 @@ impl Zone {
         pk: &PartitionKey,
         origin: &url::Origin,
     ) -> anyhow::Result<Arc<dyn StorageArea>> {
-        self.storage.local_for(self.id, pk, origin)
+        self.services.storage.local_for(self.id, pk, origin)
     }
 
     /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
@@ -317,8 +294,8 @@ impl Zone {
         tab: TabId,
         pk: &PartitionKey,
         origin: &url::Origin,
-    ) -> Arc<dyn StorageArea> {
-        self.storage.session_for(self.id, tab, pk, origin)
+    ) -> anyhow::Result<Arc<dyn StorageArea>> {
+        self.services.storage.session_for(self.id, tab, pk, origin)
     }
 
 
@@ -343,10 +320,13 @@ impl Zone {
         });
     }
 
+    /// Closes a tab.
     pub fn close_tab(&self, tab_id: TabId) -> bool {
         if let Some(rec) = self.tabs.write().unwrap().remove(&tab_id) {
+            // Drop the command channel to signal the tab to close
             drop(rec.cmd_tx);
-            self.storage.drop_tab(self.id, tab_id);
+            // Also disconnect the session storage for this tab
+            self.services.storage.drop_tab(self.id, tab_id);
             true
         } else {
             false

@@ -64,8 +64,9 @@ impl ZoneHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::OpenTab {
             zone: self.zone,
-            title: title.into(),
-            viewport,
+            title: Some(title.into()),
+            viewport: Some(viewport),
+            url: None,
             reply: tx,
         })).await?;
         rx.await?

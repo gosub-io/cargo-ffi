@@ -33,43 +33,52 @@ pub enum Modifiers {
     Meta,
 }
 
+/// Commands related to zone management
 pub enum ZoneCommand {
+    /// Set the title of the zone
     SetTitle {
         zone: ZoneId,
         title: String,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
+    /// Set the icon of the zone (favicon)
     SetIcon {
         zone: ZoneId,
         icon: Vec<u8>,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
+    /// Set the description of the zone
     SetDescription {
         zone: ZoneId,
         description: String,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
+    /// Set the color of the zone (RGBA)
     SetColor {
         zone: ZoneId,
         color: [u8; 4],
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
-
+    /// Open a tab in the zone
     OpenTab {
         zone: ZoneId,
-        title: String,
-        viewport: Viewport,
+        title: Option<String>,
+        url: Option<Url>,
+        viewport: Option<Viewport>,
         reply: oneshot::Sender<anyhow::Result<TabHandle>>,
     },
+    /// Close a tab in the zone
     CloseTab {
         zone: ZoneId,
         tab: TabId,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
+    /// List all tabs in the zone
     ListTabs {
         zone: ZoneId,
         reply: oneshot::Sender<anyhow::Result<Vec<TabId>>>,
     },
+    /// Get the title of a specific tab in the zone
     TabTitle {
         zone: ZoneId,
         tab: TabId,
@@ -100,11 +109,9 @@ impl Debug for ZoneCommand {
                 .field("zone", zone)
                 .field("color", color)
                 .finish(),
-            ZoneCommand::OpenTab { zone, title, viewport, .. } => f
+            ZoneCommand::OpenTab { zone,  .. } => f
                 .debug_struct("OpenTab")
                 .field("zone", zone)
-                .field("title", title)
-                .field("viewport", viewport)
                 .finish(),
             ZoneCommand::CloseTab { zone, tab, .. } => f
                 .debug_struct("CloseTab")
@@ -124,12 +131,83 @@ impl Debug for ZoneCommand {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum TabCommand {
+    // ** Navigation / lifecycle
+    /// Navigate to specific URL
+    Navigate { url: Url },
+    /// Reload current URL (with or without cache)
+    Reload { ignore_cache: bool },
+    /// Cancel the current load (if any)
+    StopLoading,
+    /// Close tab
+    CloseTab,
+
+    // ** Rendering control
+    /// Resume sending draw events to the tab's event channel. Use fps as the refresh limit
+    ResumeDrawing { fps: u16 },
+    /// Suspend sending draw events
+    SuspendDrawing,
+    /// Resize viewport
+    Resize { width: u32, height: u32 },
+    /// Set viewport
+    SetViewport { x: i32, y: i32, width: u32, height: u32 },
+
+    // ** User input
+    /// Mouse moved to new position
+    MouseMove { x: f32, y: f32 },
+    /// Mouse button is pressed
+    MouseDown { x: f32, y: f32, button: MouseButton },
+    /// Mouse button is depressed
+    MouseUp { x: f32, y: f32, button: MouseButton },
+    /// Mouse scrolled up by delta
+    MouseScroll { delta_x: f32, delta_y: f32 },
+    /// Key has been pressed
+    KeyDown { key: String, code: String, modifiers: Modifiers },
+    /// Key has been depressed
+    KeyUp { key: String, code: String, modifiers: Modifiers },
+    /// Text input
+    TextInput { text: String },
+    /// Char input (@TODO: Needed since we have TextInput)?
+    CharInput { ch: char },
+
+    // ** Session / zone state
+    /// Set a specific cookie
+    SetCookie { cookie: Cookie },
+    /// Clear all cookies
+    ClearCookies,
+    /// Set storage item (@TODO: local / session??)
+    SetStorageItem { key: String, value: String },
+    /// Remove storage item
+    RemoveStorageItem { key: String },
+    /// Clear whole storage
+    ClearStorage,
+
+    // ** Media / scripting
+    /// Execute given javascript (how about lua?)
+    ExecuteScript { source: String },
+    /// Play media in element_id
+    PlayMedia { element_id: u64 },
+    /// Pause media in element_id
+    PauseMedia { element_id: u64 },
+
+    // ** Debug / devtools
+    /// Enable logging
+    EnableLogging { level: LogLevel },
+    /// Dump dom tree
+    DumpDomTree,
+}
+
 #[derive(Debug)]
 pub enum EngineCommand {
+    // ** Engine control
+    /// Gracefully shutdown the engine
+    Shutdown,
     // ** Zone management
-
     // Runtime configuration / settings for zones
     Zone(ZoneCommand),
+    // Tab Commands
+    Tab(TabCommand),
 
     // ** Navigation / lifecycle
     /// Navigate to specific URL
@@ -182,7 +260,7 @@ pub enum EngineCommand {
     ClearStorage,
 
     // ** Media / scripting
-    /// Excecute given javascript (how about lua?)
+    /// Execute given javascript (how about lua?)
     ExecuteScript { source: String },
     /// Play media in element_id
     PlayMedia { element_id: u64 },
@@ -260,7 +338,7 @@ pub enum EngineEvent {
     // Media / scripting
     /// Media has started
     MediaStarted { tab: TabId, element_id: u64 },
-    /// Media has pauzed
+    /// Media has paused
     MediaPaused { tab: TabId, element_id: u64 },
     /// Result of a script is returned (console stuff?)
     ScriptResult { tab: TabId, result: serde_json::Value },
