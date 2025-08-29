@@ -68,6 +68,7 @@ skrifa = "0.31.3"
 num_cpus = "1.17.0"
 time = "0.3.41"
 tokio-util = "0.7.16"
+tempfile = "3.21.0"
 
 [features]
 default = ["sqlite_cookie_store", "parley_layout"]

@@ -37,6 +37,7 @@
 //! ```
 mod json;
 mod sqlite;
+mod in_memory;
 
 use crate::engine::cookies::cookie_jar::DefaultCookieJar;
 use crate::engine::cookies::cookies::CookieJarHandle;
@@ -46,6 +47,8 @@ use crate::engine::zone::ZoneId;
 pub use json::JsonCookieStore;
 /// SQLite-backed cookie store (one database for all zones).
 pub use sqlite::SqliteCookieStore;
+/// In-memory cookie store
+pub use in_memory::InMemoryCookieStore;
 
 /// A cookie **store** mints per-zone cookie **jars** and (optionally) persists them.
 ///

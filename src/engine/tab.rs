@@ -364,7 +364,7 @@ pub(crate) fn spawn_tab_task(
     services: ZoneServices,
     viewport: Viewport,
     runtime: Arc<Runtime>,
-    backend: Arc<Mutex<Box<dyn RenderBackend + Send>>>,
+    backend: Arc<Mutex<Box<dyn RenderBackend + Send + Sync>>>,
 ) {
     tokio::spawn(async move {
         println!("Spawned tab task for tab {:?}", tab_id);
@@ -462,13 +462,21 @@ pub(crate) fn spawn_tab_task(
                             tab.bind_storage(StorageHandles { local, session });
 
                             let cancel = CancellationToken::new();
-                            let (tx, rx) = oneshot::channel();
+                            let fut = self.context.load(url.clone(), cancel.child_token());
 
-                            let cancel_child = cancel.child_token();
-                            tokio::spawn(async move {
-                                let res = load_main_document(url.clone(), cancel_child).await;
-                                let _ = tx.send(res);
-                            });
+                            tokio::select! {
+                                res = fut => {
+
+
+                                }
+                            }
+                            // let (tx, rx) = oneshot::channel();
+                            //
+                            // let cancel_child = cancel.child_token();
+                            // tokio::spawn(async move {
+                            //     let res = load_main_document(url.clone(), cancel_child).await;
+                            //     let _ = tx.send(res);
+                            // });
 
                             state.load = Some(InflightLoad { cancel, rx });
                             tab.state = TabState::Loading;
@@ -545,7 +553,7 @@ pub(crate) fn spawn_tab_task(
 
 async fn drive_once(
     tab: &mut Tab,
-    _backend: &Arc<Mutex<Box<dyn RenderBackend + Send>>>,
+    _backend: &Arc<Mutex<Box<dyn RenderBackend + Send + Sync>>>,
     _event_tx: &Sender<EngineEvent>,
     dirty: &mut bool,
 ) -> anyhow::Result<()> {

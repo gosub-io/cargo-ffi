@@ -6,7 +6,6 @@ mod context;
 mod engine;
 mod errors;
 mod events;
-mod zone_builder;
 
 pub mod cookies;
 pub mod tab;

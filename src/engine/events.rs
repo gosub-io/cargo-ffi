@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use tokio::sync::oneshot;
 use url::Url;
 use crate::config::LogLevel;
@@ -125,83 +126,128 @@ impl Debug for ZoneCommand {
 
 #[derive(Debug)]
 pub enum EngineCommand {
-    // Zone management
+    // ** Zone management
+
+    // Runtime configuration / settings for zones
     Zone(ZoneCommand),
 
-    // Navigation / lifecycle
+    // ** Navigation / lifecycle
+    /// Navigate to specific URL
     Navigate { url: Url },
+    /// Reload current URL (with or without cache)
     Reload { ignore_cache: bool },
+    /// Cancel the current load (if any)
     StopLoading,
+    /// Close tab
     CloseTab,
 
-    // Rendering control
+    // ** Rendering control
+    /// Resume sending draw events to the tab's event channel. Use fps as the refresh limit
     ResumeDrawing { fps: u16 },
+    /// Suspend sending draw events
     SuspendDrawing,
+    /// Resize viewport
     Resize { width: u32, height: u32 },
+    /// Set viewport
     SetViewport { x: i32, y: i32, width: u32, height: u32 },
 
-    // User input
+    // ** User input
+    /// Mouse moved to new position
     MouseMove { x: f32, y: f32 },
+    /// Mouse button is pressed
     MouseDown { x: f32, y: f32, button: MouseButton },
+    /// Mouse button is depressed
     MouseUp { x: f32, y: f32, button: MouseButton },
+    /// Mouse scrolled up by delta
     MouseScroll { delta_x: f32, delta_y: f32 },
+    /// Key has been pressed
     KeyDown { key: String, code: String, modifiers: Modifiers },
+    /// Key has been depressed
     KeyUp { key: String, code: String, modifiers: Modifiers },
+    /// Text input
     TextInput { text: String },
+    /// Char input (@TODO: Needed since we have TextInput)?
+    CharInput { ch: char },
 
-    // Session / zone state
+    // ** Session / zone state
+    /// Set a specific cookie
     SetCookie { cookie: Cookie },
+    /// Clear all cookies
     ClearCookies,
+    /// Set storage item (@TODO: local / session??)
     SetStorageItem { key: String, value: String },
+    /// Remove storage item
     RemoveStorageItem { key: String },
+    /// Clear whole storage
     ClearStorage,
 
-    // Media / scripting
+    // ** Media / scripting
+    /// Excecute given javascript (how about lua?)
     ExecuteScript { source: String },
+    /// Play media in element_id
     PlayMedia { element_id: u64 },
+    /// Pause media in element_id
     PauseMedia { element_id: u64 },
 
-    // Debug / devtools
+    // ** Debug / devtools
+    /// Enable logging
     EnableLogging { level: LogLevel },
+    /// Dump dom tree
     DumpDomTree,
-    InputChar,
 }
 
 
 #[derive(Debug)]
 pub enum EngineEvent {
-    // Rendering
+    // ** Rendering
+    /// A redraw frame is available
     Redraw { tab: TabId, handle: ExternalHandle },
+    /// Frame has been completed (@TODO: do we need this?)
     FrameComplete { tab: TabId, frame_id: u64 },
 
+    /// Title of the tab has changed
     TitleChanged { tab: TabId, title: String },
+    /// Favicon of tab has changed
     FavIconChanged { tab: TabId, favicon: Vec<u8> },
+    /// Location of the tab has changed
     LocationChanged { tab: TabId, url: Url },
 
-    // Navigation
+    // ** Navigation
+    /// Network connection has been established
     ConnectionEstablished { tab: TabId, url: Url },
+    /// Redirect occurred
     Redirect { tab: TabId, from: Url, to: Url },
+    /// Loading of the HTML started
     LoadStarted { tab: TabId, url: Url },
+    /// Progress of loading
     LoadProgress { tab: TabId, progress: f32 },
+    /// Loading of the HTML has finished
     LoadFinished { tab: TabId, url: Url },
+    /// Loading has failed
     LoadFailed { tab: TabId, url: Url, error: String },
+    /// Page committed (@TODO: needed? what for?)
     PageCommitted { tab: TabId, url: Url },
 
-    // Tab lifecycle
-    TabCreated { tab: TabId },
-    TabClosed { tab: TabId },
+    // ** Tab lifecycle
+    /// New tab created in zone
+    TabCreated { tab: TabId, zone_id: ZoneId },
+    /// Tab closed in zone
+    TabClosed { tab: TabId, zone_id: ZoneId },
 
-    // Input / interaction
-    FocusChanged { tab: TabId, focused: bool },
-    // CursorChanged { tab: TabId, cursor: CursorIcon },
-    KeyDown { key: String, code: String, modifiers: Modifiers },
-    KeyUp { key: String, code: String, modifiers: Modifiers },
-    MouseUp { button: MouseButton, x: f32, y: f32 },
-    MouseDown { button: MouseButton, x: f32, y: f32 },
-    InputChar { character: char },
+    // ** Input / interaction
+    // FocusChanged { tab: TabId, focused: bool },
+    // // CursorChanged { tab: TabId, cursor: CursorIcon },
+    // KeyDown { key: String, code: String, modifiers: Modifiers },
+    // KeyUp { key: String, code: String, modifiers: Modifiers },
+    // MouseUp { button: MouseButton, x: f32, y: f32 },
+    // MouseDown { button: MouseButton, x: f32, y: f32 },
+    // InputChar { character: char },
+    // InputText { character: char },
 
-    // Session / zone state
+    // ** Session / zone state
+    /// A cookie has been added
     CookieAdded { tab: TabId, cookie: Cookie },
+    /// Storage has changed
     StorageChanged {
         tab: Option<TabId>,
         zone: Option<ZoneId>,
@@ -212,16 +258,20 @@ pub enum EngineEvent {
     },
 
     // Media / scripting
+    /// Media has started
     MediaStarted { tab: TabId, element_id: u64 },
+    /// Media has pauzed
     MediaPaused { tab: TabId, element_id: u64 },
+    /// Result of a script is returned (console stuff?)
     ScriptResult { tab: TabId, result: serde_json::Value },
 
     // Errors / diagnostics
+    /// Network error occurred
     NetworkError { tab: TabId, url: Url, message: String },
+    /// Javascript (parse) error
     JavaScriptError { tab: TabId, message: String, line: u32, column: u32 },
+    /// Engine crashed
     EngineCrashed { tab: TabId, reason: String },
 
     // Uncategorized / generic
-
-
 }

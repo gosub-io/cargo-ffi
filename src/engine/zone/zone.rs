@@ -16,11 +16,10 @@ use std::fmt::{Debug, Display};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{Sender, channel};
 use uuid::Uuid;
+use crate::cookies::CookieStoreHandle;
 use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::storage::types::PartitionPolicy;
 use crate::tab::{spawn_tab_task, TabHandle};
-
-
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -117,7 +116,8 @@ struct TabRecord {
 pub struct ZoneServices {
     pub zone_id: ZoneId,
     pub storage: Arc<StorageService>,
-    pub cookie_jar: CookieJarHandle,
+    pub cookie_store: Option<CookieStoreHandle>,
+    pub cookie_jar: Option<CookieJarHandle>,
     pub partition_policy: PartitionPolicy,
 }
 
@@ -184,8 +184,7 @@ impl Zone {
     pub fn new_with_id(
         zone_id: ZoneId,
         config: ZoneConfig,
-        storage: Arc<StorageService>,
-        cookie_jar: Option<CookieJarHandle>,
+        services: ZoneServices,
         event_tx: Sender<EngineEvent>,
     ) -> Self {
         // We generate the color by using the zone id as a seed
@@ -197,10 +196,9 @@ impl Zone {
             0xff, // Fully opaque
         ];
 
-        let storage_rx = storage.subscribe();
+        let storage_rx = services.storage.subscribe();
 
-        let cookie_jar =
-            cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
+        let cookie_jar = services.cookie_jar.unwrap_or_else(|| Arc::new(RwLock::new(DefaultCookieJar::new())));
 
         let zone = Self {
             id: zone_id,
@@ -232,12 +230,10 @@ impl Zone {
     /// Creates a new zone with a random ID and the provided configuration
     pub fn new(
         config: ZoneConfig,
-        storage: Arc<StorageService>,
-        cookie_jar: Option<CookieJarHandle>,
+        services: ZoneServices,
         event_tx: Sender<EngineEvent>,
     ) -> Self {
-        let zone_id = ZoneId::new();
-        Self::new_with_id(zone_id, config, storage, cookie_jar, event_tx)
+        Self::new_with_id(ZoneId::new(), config, services, event_tx)
     }
 
     /// Sets the title of the zone

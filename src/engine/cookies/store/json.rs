@@ -76,15 +76,13 @@ impl JsonCookieStore {
     /// # Panics
     /// Panics if the initial write of an empty file fails.
     pub fn new(path: PathBuf) -> Arc<Self> {
-        // Try to create empty file if it doesn't exist
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         if !path.exists() {
-            let _ = fs::write(
-                &path,
-                serde_json::to_vec(&CookieStoreFile {
-                    zones: HashMap::new(),
-                })
-                .unwrap(),
-            );
+            let empty = CookieStoreFile { zones: HashMap::new() };
+            fs::write(&path, serde_json::to_vec(&empty).unwrap())
+                .expect("Failed to create cookie store file");
         }
 
         let store = Arc::new(Self {
@@ -93,11 +91,7 @@ impl JsonCookieStore {
             store_self: RwLock::new(None),
         });
 
-        {
-            let mut self_ref = store.store_self.write().unwrap();
-            *self_ref = Some(store.clone() as CookieStoreHandle);
-        }
-
+        *store.store_self.write().unwrap() = Some(store.clone() as CookieStoreHandle);
         store
     }
 
@@ -123,12 +117,12 @@ impl JsonCookieStore {
     /// # Panics
     /// Panics if serialization or writing fails.
     fn save_file(&self, store_file: &CookieStoreFile) {
-        let contents =
-            serde_json::to_string_pretty(store_file).expect("Failed to serialize cookies");
-        let mut file =
-            File::create(&self.path).expect("Failed to open cookie store file for writing");
-        file.write_all(contents.as_bytes())
-            .expect("Failed to write cookie store file");
+        let contents = serde_json::to_vec_pretty(store_file)
+            .expect("Failed to serialize cookies");
+        // atomic-ish: write to tmp then rename
+        let tmp = self.path.with_extension("json.tmp");
+        fs::write(&tmp, &contents).expect("Failed to write temp cookie store file");
+        fs::rename(&tmp, &self.path).expect("Failed to replace cookie store file");
     }
 }
 
@@ -233,3 +227,114 @@ impl CookieStore for JsonCookieStore {
         self.save_file(&file);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use http::HeaderMap;
+
+    fn mk_headers(set_cookie_lines: &[&str]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for sc in set_cookie_lines {
+            // multiple Set-Cookie lines are allowed by repeated headers;
+            // but HeaderMap overwrites by default; if your jar’s API accepts a single combined header
+            // you can join them. For this smoke test, one is enough.
+            h.append(http::header::SET_COOKIE, (*sc).parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn jar_for_memoizes_and_wraps_persistent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+        let store = JsonCookieStore::new(path);
+
+        let z = ZoneId::new();
+        let a = store.jar_for(z).unwrap();
+        let b = store.jar_for(z).unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "same zone should return same Arc");
+
+        // Downcast to persistent wrapper to ensure it’s wrapped
+        let guard = a.read().unwrap();
+        let any = guard.as_any();
+        assert!(any.downcast_ref::<PersistentCookieJar>().is_some());
+    }
+
+    #[test]
+    fn persist_all_writes_file_and_reload_restores_jar() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+        let store = JsonCookieStore::new(path.clone());
+
+        let zone = ZoneId::new();
+        let handle = store.jar_for(zone).unwrap();
+
+        // write a cookie via the inner jar
+        {
+            let jar_any = handle.read().unwrap();
+            let persist = jar_any.as_any().downcast_ref::<PersistentCookieJar>()
+                .expect("persistent wrapper expected");
+            let mut inner = persist.inner.write().unwrap(); // inner: Arc<RwLock<DefaultCookieJar>>
+            let mut inner_jar = inner.write().unwrap();
+
+            let url: Url = "https://example.com/".parse().unwrap();
+            let headers = mk_headers(&["id=123; Path=/; HttpOnly"]);
+            inner_jar.store_response_cookies(&url, &headers);
+        }
+
+        // snapshot everything
+        store.persist_all();
+
+        // Verify on-disk file has the zone entry
+        let mut f = File::open(&path).unwrap();
+        let mut s = String::new();
+        f.read_to_string(&mut s).unwrap();
+        let parsed: CookieStoreFile = serde_json::from_str(&s).unwrap();
+        assert!(parsed.zones.contains_key(&zone), "zone entry must exist after persist_all");
+
+        // New store instance should load the jar from disk
+        let store2 = JsonCookieStore::new(path.clone());
+        let h2 = store2.jar_for(zone).unwrap();
+
+        // Ensure it’s again a persistent wrapper
+        let guard2 = h2.read().unwrap();
+        assert!(guard2.as_any().downcast_ref::<PersistentCookieJar>().is_some());
+    }
+
+    #[test]
+    fn remove_zone_evicts_cache_and_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+        let store = JsonCookieStore::new(path.clone());
+
+        let z1 = ZoneId::new();
+        let z2 = ZoneId::new();
+
+        let _ = store.jar_for(z1).unwrap();
+        let _ = store.jar_for(z2).unwrap();
+
+        // Persist both
+        store.persist_all();
+
+        // Remove z1
+        store.remove_zone(z1);
+
+        // File should not contain z1 anymore
+        let mut s = String::new();
+        File::open(&path).unwrap().read_to_string(&mut s).unwrap();
+        let parsed: CookieStoreFile = serde_json::from_str(&s).unwrap();
+        assert!(!parsed.zones.contains_key(&z1));
+        assert!(parsed.zones.contains_key(&z2));
+
+        // Asking again should create a fresh jar for z1 (and persistable)
+        let _ = store.jar_for(z1).unwrap();
+        store.persist_all();
+        let mut s2 = String::new();
+        File::open(&path).unwrap().read_to_string(&mut s2).unwrap();
+        let parsed2: CookieStoreFile = serde_json::from_str(&s2).unwrap();
+        assert!(parsed2.zones.contains_key(&z1));
+    }
+}
+

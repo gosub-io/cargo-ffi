@@ -28,7 +28,7 @@ impl PartitionKey {
 }
 
 /// Partitioning policy for determining how to compute the partition key.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PartitionPolicy {
     /// No partitioning, uses a global state.
     None,

@@ -279,7 +279,7 @@ impl GosubApp {
             Ok(backend) => {
                 self.engine
                     .borrow_mut()
-                    .update_backend_renderer(Box::new(backend));
+                    .set_backend_renderer(Box::new(backend));
                 self.backend_initialized = true;
                 self.needs_redraw = true;
             }

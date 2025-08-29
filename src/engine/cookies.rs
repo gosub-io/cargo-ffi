@@ -78,3 +78,4 @@ pub use persistent_cookie_jar::PersistentCookieJar;
 pub use store::CookieStore;
 pub use store::JsonCookieStore;
 pub use store::SqliteCookieStore;
+pub use store::InMemoryCookieStore;

@@ -1,4 +1,4 @@
-//! Render backend abstraction.
+//! Render backend ab3action.
 //!
 //! This module defines the traits and data structures needed to implement
 //! different rendering backends (e.g. Cairo, Vello, Skia). Backends provide
@@ -19,7 +19,7 @@
 
 use crate::engine::BrowsingContext;
 use crate::render::Viewport;
-use std::{any::Any, ptr::NonNull};
+use std::any::Any;
 
 /// Size of a rendering surface in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,18 +103,18 @@ pub enum ExternalHandle {
         format: PixelFormat,
     },
 
-    /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
-    /// Valid for at least `height * stride` bytes until the next `render()` call on this surface.
-    CpuPixelsPtr {
-        /// Width of the image in pixels.
-        width: u32,
-        /// Height of the image in pixels.
-        height: u32,
-        /// Stride in bytes. This is the number of bytes per row of pixels.
-        stride: u32,
-        /// Raw pixel data pointer in RGBA8 format.
-        ptr: NonNull<u8>,
-    },
+    // /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
+    // /// Valid for at least `height * stride` bytes until the next `render()` call on this surface.
+    // CpuPixelsPtr {
+    //     /// Width of the image in pixels.
+    //     width: u32,
+    //     /// Height of the image in pixels.
+    //     height: u32,
+    //     /// Stride in bytes. This is the number of bytes per row of pixels.
+    //     stride: u32,
+    //     /// Raw pixel data pointer in RGBA8 format.
+    //     ptr: NonNull<[u8]>,
+    // },
 
     /// GL / GLES texture. `target` is usually GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES.
     /// Optional `frame_id` helps hosts avoid sampling stale frames.
@@ -231,7 +231,7 @@ pub trait ErasedSurface: Any {
 ///
 /// Implemented by all rendering backends. The engine calls these methods
 /// on the backend’s owning thread.
-pub trait RenderBackend {
+pub trait RenderBackend: Send + Sync {
     /// Create a new surface with the given size and present mode.
     fn create_surface(
         &self,

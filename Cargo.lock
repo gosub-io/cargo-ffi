@@ -2255,6 +2255,7 @@ dependencies = [
  "serde_json",
  "skia-safe",
  "skrifa 0.31.3",
+ "tempfile",
  "thiserror 1.0.69",
  "time",
  "tokio",
