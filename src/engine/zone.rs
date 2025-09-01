@@ -16,7 +16,6 @@
 //! Internally, the [`Zone`] type manages the full state and lifecycle.
 
 mod config;
-mod password_store;
 mod zone;
 mod handle;
 

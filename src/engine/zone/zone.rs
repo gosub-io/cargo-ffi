@@ -10,13 +10,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::mpsc::{Sender, channel};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use uuid::Uuid;
 use crate::cookies::CookieStoreHandle;
-use crate::engine::events::{EngineCommand, EngineEvent, TabCommand};
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
+use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::storage::types::PartitionPolicy;
-use crate::tab::{spawn_tab_task, OpenTabParams, TabHandle};
+use crate::tab::{spawn_tab_task, OpenTabParams, TabHandle, TabSpawnArgs};
 use crate::zone::ZoneConfig;
+
+const TAB_CREATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -75,7 +82,7 @@ impl Display for ZoneId {
 }
 
 /// Internal record for a tab within a zone
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TabRecord {
     /// Tab ID
     id: TabId,
@@ -83,12 +90,23 @@ struct TabRecord {
     title: String,
     /// Command channel to the tab task
     cmd_tx: Sender<EngineCommand>,
+    /// Join handle
+    join: Option<JoinHandle<()>>,
 }
+
+impl TabRecord {
+    // Returns true when the tab worker has finished
+    #[inline]
+    fn is_finished(&self) -> bool {
+        self.join.as_ref().map(|j| j.is_finished()).unwrap_or(true)
+    }
+}
+
 
 /// Services provided to tabs within a zone
 #[derive(Clone, Debug)]
 pub struct ZoneServices {
-    pub zone_id: ZoneId,
+    // pub zone_id: ZoneId,
     pub storage: Arc<StorageService>,
     pub cookie_store: Option<CookieStoreHandle>,
     pub cookie_jar: Option<CookieJarHandle>,
@@ -112,28 +130,18 @@ pub struct Zone {
     pub description: String,
     /// Tab color (RGBA)
     pub color: [u8; 4],
-
     /// Tabs in the zone
     tabs: RwLock<HashMap<TabId, TabRecord>>,
-
     /// Zone services (storage, cookies, etc)
     services: ZoneServices,
-
-    // /// Session storage for the zone (shared between all tabs in the zone)
-    // pub storage: Arc<StorageService>,
     /// Subscription for session storage changes
     storage_rx: Subscription,
-
-    // /// Where to load/store cookies within this zone
-    // pub cookie_jar: CookieJarHandle,
-    // /// Per-zone password storage
-    // pub password_store: PasswordStore,
-
     /// Flags controlling which data is shared with other zones.
     pub shared_flags: SharedFlags,
-
     /// Event channel to send events back to the UI
     event_tx: Sender<EngineEvent>,
+    // Handle to the engine
+    // engine_handle: EngineHandle,
 }
 
 impl Debug for Zone {
@@ -247,36 +255,55 @@ impl Zone {
     /// Returns the services available to tabs within this zone
     pub fn services(&self) -> ZoneServices { self.services.clone() }
 
-    pub fn create_tab(&self, params: OpenTabParams) -> Result<TabHandle, EngineError> {
+    pub async fn create_tab(&self, params: OpenTabParams) -> Result<TabHandle, EngineError> {
         if self.tabs.read().unwrap().len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
         // Channel to send and receive commands to and from the UI
-        let (tab_cmd_tx, tab_cmd_rx) = channel::<TabCommand>(256);
+        let (tab_cmd_tx, tab_cmd_rx) = channel::<EngineCommand>(DEFAULT_CHANNEL_CAPACITY);
 
         let tab_id = TabId::new();
+
+        let (ack_tx, ack_rx) = oneshot::channel::<anyhow::Result<()>>();
 
         let join = spawn_tab_task(TabSpawnArgs {
             tab_id,
             cmd_rx: tab_cmd_rx,
             event_tx: self.event_tx.clone(),
             services: self.services(),
-            engine: self.engine_handle.clone(),
+            // engine: self.engine_handle.clone(),
             initial: params.clone(),
-        });
+        }, ack_tx);
 
-        {
-            let mut tabs = self.tabs.write().unwrap();
-            tabs.insert(tab_id, TabRecord {
-                id: tab_id,
-                title: params.initial_title.unwrap_or_else(|| "New Tab".into()),
-                cmd_tx: tab_cmd_tx.clone(),
-                join: Some(join),
-            });
+        match timeout(TAB_CREATION_TIMEOUT, ack_rx).await {
+            Ok(Ok(Ok(()))) => {
+                let title = params.title.unwrap_or_else(|| "New Tab".to_string());
+                let mut tabs = self.tabs.write().unwrap();
+                tabs.insert(
+                    tab_id,
+                    TabRecord {
+                        id: tab_id,
+                        title,
+                        cmd_tx: tab_cmd_tx.clone(),
+                        join: Some(join),
+                    },
+                );
+                Ok(TabHandle::new(tab_id, self.engine_tx.clone()))
+            }
+            Ok(Ok(Err(e))) => {
+                join.abort();
+                Err(EngineError::TaskInitFailed(e.to_string()))
+            }
+            Ok(Err(_cancelled)) => {
+                join.abort();
+                Err(EngineError::TaskInitFailed("Cancelled".to_string()))
+            }
+            Err(_elapsed) => {
+                join.abort();
+                Err(EngineError::TaskInitFailed("timeout".to_string()))
+            }
         }
-
-        Ok(TabHandle::new(tab_id, self.engine_tx.clone()))
     }
 
     /// Get the shared localStorage area for this (zone × partition × origin).
@@ -301,18 +328,18 @@ impl Zone {
 
     /// Forwards storage events from the storage service to the engine event channel.
     fn spawn_storage_forward(&self) {
-        let mut rx = self.storage_rx.clone();
+        let rx = &self.storage_rx;
         let tx = self.event_tx.clone();
 
         let zone_id = self.id;
 
         tokio::spawn(async move {
-            while let Some(ev) = rx.recv().await {
+            while let Ok(ev) = rx.recv().await {
                 let _ = tx.send(EngineEvent::StorageChanged {
                     tab: ev.source_tab,
                     zone: Some(zone_id),
-                    key: ev.key,
-                    value: ev.value,
+                    key: ev.key.unwrap_or("".into()),
+                    value: ev.new_value,
                     scope: ev.scope,
                     origin: ev.origin.clone(),
                 }).await;
@@ -337,7 +364,7 @@ impl Zone {
         self.tabs.read().unwrap().keys().cloned().collect()
     }
 
-    pub fn tab_title(&self, tab_id: TabId) -> Option<String> {
-        self.tabs.read().unwrap().get(&tab_id).map(|rec| rec.title.clone())
-    }
+    // pub fn tab_title(&self, tab_id: TabId) -> Option<String> {
+    //     self.tabs.read().unwrap().get(&tab_id).map(|rec| rec.title.clone())
+    // }
 }

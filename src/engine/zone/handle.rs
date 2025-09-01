@@ -60,9 +60,9 @@ impl ZoneHandle {
         rx.await?
     }
 
-    pub async fn open_tab(&self, title: impl Into<String>, viewport: Viewport) -> Result<TabHandle> {
+    pub async fn create_tab(&self, title: impl Into<String>, viewport: Viewport) -> Result<TabHandle> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::OpenTab {
+        self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::CreateTab {
             zone: self.zone,
             title: Some(title.into()),
             viewport: Some(viewport),
@@ -91,13 +91,13 @@ impl ZoneHandle {
         rx.await?
     }
 
-    pub async fn tab_title(&self, tab: TabId) -> Result<Option<String>> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::TabTitle {
-            zone: self.zone,
-            tab,
-            reply: tx,
-        })).await?;
-        rx.await?
-    }
+    // pub async fn tab_title(&self, tab: TabId) -> Result<Option<String>> {
+    //     let (tx, rx) = oneshot::channel();
+    //     self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::TabTitle {
+    //         zone: self.zone,
+    //         tab,
+    //         reply: tx,
+    //     })).await?;
+    //     rx.await?
+    // }
 }

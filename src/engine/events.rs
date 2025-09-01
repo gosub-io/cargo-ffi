@@ -60,10 +60,10 @@ pub enum ZoneCommand {
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
     /// Open a tab in the zone
-    OpenTab {
+    CreateTab {
         zone: ZoneId,
         title: Option<String>,
-        url: Option<Url>,
+        url: Option<String>,    // String, not URL since it's not validated yet
         viewport: Option<Viewport>,
         reply: oneshot::Sender<anyhow::Result<TabHandle>>,
     },
@@ -77,12 +77,6 @@ pub enum ZoneCommand {
     ListTabs {
         zone: ZoneId,
         reply: oneshot::Sender<anyhow::Result<Vec<TabId>>>,
-    },
-    /// Get the title of a specific tab in the zone
-    TabTitle {
-        zone: ZoneId,
-        tab: TabId,
-        reply: oneshot::Sender<anyhow::Result<Option<String>>>,
     },
 }
 
@@ -109,7 +103,7 @@ impl Debug for ZoneCommand {
                 .field("zone", zone)
                 .field("color", color)
                 .finish(),
-            ZoneCommand::OpenTab { zone,  .. } => f
+            ZoneCommand::CreateTab { zone,  .. } => f
                 .debug_struct("OpenTab")
                 .field("zone", zone)
                 .finish(),
@@ -121,11 +115,6 @@ impl Debug for ZoneCommand {
             ZoneCommand::ListTabs { zone, .. } => f
                 .debug_struct("ListTabs")
                 .field("zone", zone)
-                .finish(),
-            ZoneCommand::TabTitle { zone, tab, .. } => f
-                .debug_struct("TabTitle")
-                .field("zone", zone)
-                .field("tab", tab)
                 .finish(),
         }
     }

@@ -188,7 +188,7 @@ impl Tab {
 
     /// Dispatch a storage event to same-origin documents in this tab (placeholder).
     /// Intended for HTML5 storage event semantics.
-    pub(crate) fn dispatch_storage_event_to_same_origin_docs(
+    pub(crate) fn dispatch_storage_events(
         &mut self,
         _origin: &url::Origin,
         _include_iframes: bool,
@@ -226,7 +226,6 @@ impl Tab {
         self.surface = Some(backend.create_surface(size, self.present_mode)?);
         Ok(())
     }
-
 
     pub fn handle_event(_event: EngineEvent) -> anyhow::Result<()> {
         Ok(())

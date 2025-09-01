@@ -3,31 +3,31 @@ mod worker;
 mod tab;
 mod structs;
 
+use tokio::sync::oneshot;
 pub use tab::TabId;
 pub use handle::TabHandle;
 pub use structs::OpenTabParams;
+pub use structs::TabSpawnArgs;
 
-use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
-use crate::tab::structs::TabSpawnArgs;
 use crate::tab::worker::TabWorker;
 
 
 /// Spawn a new tab task and acknowledge when it's ready via the provided oneshot channel.
-pub(crate) fn spawn_tab_task(args: TabSpawnArgs, ack_channel: Sender<anyhow::Result<()>>) -> JoinHandle<()> {
+pub(crate) fn spawn_tab_task(
+    args: TabSpawnArgs,
+    ack_channel: oneshot::Sender<anyhow::Result<()>>
+) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let worker = match TabWorker::new(args).await {
-            Ok(w) => {
+        match TabWorker::new(args).await {
+            Ok(worker) => {
                 let _ = ack_channel.send(Ok(()));
-                w
+                worker.run().await;
             }
             Err(e) => {
                 let _ = ack_channel.send(Err(e));
-                return;
             }
         };
-
-        worker.run().await;
     })
 }
 

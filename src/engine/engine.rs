@@ -21,12 +21,13 @@
 use std::collections::HashMap;
 use crate::render::backend::RenderBackend;
 use crate::zone::{Zone, ZoneConfig, ZoneHandle, ZoneId, ZoneServices};
-use crate::EngineConfig;
-use std::sync::{Arc, Mutex, RwLock};
+use crate::{EngineConfig, EngineError};
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::engine::events::{EngineCommand, EngineEvent, ZoneCommand};
 use anyhow::Result;
-use crate::engine::handle::EngineHandle;
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
+use crate::render::Viewport;
 use crate::tab::{OpenTabParams, TabHandle};
 
 /// Entry point to the Gosub engine.
@@ -46,7 +47,7 @@ pub struct GosubEngine {
     /// Active render backend for the engine.
     backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
     /// Zones managed by this engine, indexed by [`ZoneId`].
-    zones: HashMap<ZoneId, Arc<Mutex<Zone>>>,
+    zones: RwLock<HashMap<ZoneId, Arc<Zone>>>,
     /// Command sender (cloned into handles).
     cmd_tx: Sender<EngineCommand>,
     /// Command receiver (owned by the engine run loop).
@@ -65,12 +66,12 @@ impl GosubEngine {
     /// ```
     pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend + Send + Sync>) -> Self {
         let resolved_config = config.unwrap_or_else(EngineConfig::default);
-        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(512);
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(DEFAULT_CHANNEL_CAPACITY);
 
         Self {
             config: Arc::new(resolved_config),
             backend: Arc::new(RwLock::new(backend)),
-            zones: HashMap::new(),
+            zones: RwLock::new(HashMap::new()),
             cmd_tx,
             cmd_rx,
         }
@@ -83,12 +84,12 @@ impl GosubEngine {
         tokio::sync::mpsc::channel(cap)
     }
 
-    pub fn engine_handle(&self) -> EngineHandle {
-        EngineHandle::new(
-            self.cmd_tx.clone(),
-            self.backend.clone()
-        )
-    }
+    // pub fn engine_handle(&self) -> EngineHandle {
+    //     EngineHandle::new(
+    //         self.cmd_tx.clone(),
+    //         self.backend.clone()
+    //     )
+    // }
 
     /// Replace the active render backend.
     pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
@@ -97,7 +98,8 @@ impl GosubEngine {
 
     /// Get a clone of the engine’s command sender (mainly for testing or
     /// custom handles).
-    pub fn command_sender(&self) -> Sender<EngineCommand> {
+    #[cfg(test)]
+    fn command_sender(&self) -> Sender<EngineCommand> {
         self.cmd_tx.clone()
     }
 
@@ -126,7 +128,7 @@ impl GosubEngine {
         match zc {
             ZoneCommand::SetTitle { zone, title, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone(zone)?;
+                    let mut z = self.zone_by_id(zone)?;
                     z.set_title(&title);
                     Ok(())
                 })();
@@ -134,7 +136,7 @@ impl GosubEngine {
             }
             ZoneCommand::SetDescription { zone, description, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone(zone)?;
+                    let mut z = self.zone_by_id(zone)?;
                     z.set_description(&description);
                     Ok(())
                 })();
@@ -142,7 +144,7 @@ impl GosubEngine {
             }
             ZoneCommand::SetIcon { zone, icon, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone(zone)?;
+                    let mut z = self.zone_by_id(zone)?;
                     z.set_icon(icon);
                     Ok(())
                 })();
@@ -150,45 +152,37 @@ impl GosubEngine {
             }
             ZoneCommand::SetColor { zone, color, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone(zone)?;
+                    let mut z = self.zone_by_id(zone)?;
                     z.set_color(color);
                     Ok(())
                 })();
                 let _ = reply.send(res);
             }
-            ZoneCommand::OpenTab { zone, title, viewport, url, reply } => {
-                let res = (|| -> Result<TabHandle> {
-                    let z = self.zone(zone)?;
-                    let handle = z.create_tab(OpenTabParams {
-                        initial_title: Some(title.unwrap_or_else(|| "New Tab".to_string())),
-                        url,
-                        viewport,
-                    })?;
-                    Ok(handle)
-                })();
+            ZoneCommand::CreateTab { zone, title, viewport, url, reply } => {
+                let res = self.create_tab_in_zone(zone, title, viewport, url).await;
                 let _ = reply.send(res);
             }
             ZoneCommand::CloseTab { zone, tab, reply } => {
                 let res = (|| -> Result<()> {
-                    let z = self.zone(zone)?;
+                    let z = self.zone_by_id(zone)?;
                     if z.close_tab(tab) { Ok(()) } else { anyhow::bail!("no such tab") }
                 })();
                 let _ = reply.send(res);
             }
             ZoneCommand::ListTabs { zone, reply } => {
                 let res = (|| -> Result<_> {
-                    let z = self.zone(zone)?;
+                    let z = self.zone_by_id(zone)?;
                     Ok(z.list_tabs())
                 })();
                 let _ = reply.send(res);
             }
-            ZoneCommand::TabTitle { zone, tab, reply } => {
-                let res = (|| -> Result<_> {
-                    let z = self.zone(zone)?;
-                    Ok(z.tab_title(tab))
-                })();
-                let _ = reply.send(res);
-            }
+            // ZoneCommand::TabTitle { zone, tab, reply } => {
+            //     let res = (|| -> Result<_> {
+            //         let z = self.zone_by_id(zone)?;
+            //         Ok(z.tab_title(tab))
+            //     })();
+            //     let _ = reply.send(res);
+            // }
         }
         Ok(())
     }
@@ -216,18 +210,41 @@ impl GosubEngine {
         };
 
         let zone_id = zone.id;
-        self.zones.insert(zone.id, Arc::new(Mutex::new(zone)));
+        self.zones.write().unwrap().insert(zone.id, Arc::new(zone));
 
         Ok(ZoneHandle::new(zone_id, self.cmd_tx.clone()))
     }
 
     #[inline]
-    fn zone(&self, id: ZoneId) -> Result<std::sync::MutexGuard<'_, Zone>> {
-        let z = self
+    fn zone_by_id(&self, id: ZoneId) -> Result<Arc<Zone>, EngineError> {
+        let guard = self.zones.read().map_err(|_| EngineError::Poisoned)?;
+        guard.get(&id).cloned().ok_or(EngineError::ZoneNotFound)
+    }
+
+    async fn create_tab_in_zone(
+        &self,
+        zone_id: ZoneId,
+        title: Option<String>,
+        viewport: Option<Viewport>,
+        url: Option<String>,
+    ) -> Result<TabHandle, EngineError> {
+        let zone = self
             .zones
-            .get(&id)
-            .ok_or_else(|| anyhow::anyhow!("unknown zone"))?;
-        z.lock().map_err(|_| anyhow::anyhow!("zone lock poisoned"))
+            .read().unwrap()
+            .get(&zone_id)
+            .cloned()
+            .ok_or(EngineError::ZoneNotFound)?;
+
+        // Build your open params; adjust names to match your struct
+        let params = OpenTabParams {
+            title,
+            viewport,
+            url,
+            ..Default::default()
+        };
+
+        // This calls Zone::create_tab(..) which does the spawn + ack oneshot internally
+        zone.create_tab(params).await
     }
 }
 
@@ -258,7 +275,6 @@ mod tests {
 
         // stub services
         let services = ZoneServices {
-            zone_id,
             storage: storage.clone(),
             cookie_store: None,     // No cookie store needed; we do not persist cookies here
             cookie_jar: Some(cookie_jar.into()),
@@ -286,7 +302,6 @@ mod tests {
 
         // stub services
         let services = ZoneServices {
-            zone_id: ZoneId::new(),
             storage: storage.clone(),
             cookie_store: None,
             cookie_jar: Some(cookie_jar.into()),

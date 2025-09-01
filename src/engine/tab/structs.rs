@@ -2,7 +2,6 @@ use tokio::sync::mpsc::{Sender, Receiver};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::engine::events::{EngineCommand, EngineEvent};
-use crate::engine::handle::EngineHandle;
 use crate::net::Response;
 use crate::render::Viewport;
 use crate::tab::TabId;
@@ -42,8 +41,8 @@ pub struct TabSpawnArgs {
     pub event_tx: Sender<EngineEvent>,
     /// Services available to the tab
     pub services: ZoneServices,
-    /// Handle to the engine for shared resources
-    pub engine: EngineHandle,
+    // Handle to the engine for shared resources
+    // pub engine: EngineHandle,
     /// Initial parameters for the tab
     pub initial: OpenTabParams,
 }
@@ -106,21 +105,19 @@ pub enum TabActivityMode {
 pub struct OpenTabParams {
     /// Optional initial title (e.g. "New Tab").
     /// The engine will later override this when a document sets `<title>`.
-    pub initial_title: Option<String>,
-
+    pub title: Option<String>,
     /// Optional viewport to use at creation.
     /// If `None`, the tab starts with a default and can be updated later
     /// by calling `TabHandle::set_viewport()`.
     pub viewport: Option<Viewport>,
-
-    /// Optional initial URL to navigate to (like `about:blank` or a real page).
-    pub url: Option<Url>,
+    /// Optional URL string to navigate to (like `about:blank` or a real page).
+    pub url: Option<String>,
 }
 
 impl Default for OpenTabParams {
     fn default() -> Self {
         Self {
-            initial_title: Some("New Tab".to_string()),
+            title: Some("New Tab".to_string()),
             viewport: None,
             url: None,
         }

@@ -48,4 +48,11 @@ pub enum EngineError {
     /// An invalid configuration was provided for the engine or zone
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),
+
+    /// Task/Tab creation failed
+    #[error("Tab creation failed: {0}")]
+    TaskInitFailed(String),
+
+    #[error("poisoned")]
+    Poisoned,
 }

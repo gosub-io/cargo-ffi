@@ -1,46 +1,106 @@
-use std::str::FromStr;
-use std::thread::sleep;
-use url::Url;
-use gosub_engine::render::Viewport;
+use gosub_engine::{
+    EngineConfig,
+    GosubEngine,
+    EngineError,
+    cookies::DefaultCookieJar,
+    events::EngineCommand,
+    events::EngineEvent,
+    render::Viewport,
+    storage::{InMemoryLocalStore, InMemorySessionStore, StorageService},
+    storage::types::PartitionPolicy,
+    tab::TabHandle,
+    zone::ZoneConfig,
+    zone::ZoneServices,
+};
 
-fn main() -> Result<(), gosub_engine::EngineError> {
-    // Null backend means that we don't actually render anything.
-    let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null backend cannot be created (!?)");
-    let mut engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
+use std::sync::Arc;
+use tokio::sync::mpsc::{channel, Sender};
+use winit::event::MouseButton;
 
-    // Create a zone (with all default settings)
-    let zone_id = engine.zone_builder().create()?;
+#[tokio::main]
+async fn main() -> Result<(), EngineError> {
+    // ---- 1) Configure the engine -------------------------------------------------
+    // Start with sane defaults; tweak as needed (JS/images, UA string, limits, etc.)
+    let engine_cfg = EngineConfig::builder()
+        .max_zones(5)
+        .build().expect("Configuration is not valid")
+    ;
 
-    // Open a tab in the zone
-    let viewport = Viewport::new(0, 0, 800, 600);
-    let tab_id = engine.open_tab_in_zone(zone_id, viewport)?;
+    // ---- 2) Choose a rendering backend -------------------------------------------
+    // Headless/“no-op” backend
+    let backend = gosub_engine::render::backends::null::NullBackend::new();
 
-    // Create the compositor that connects the frame rendered by the engine to your UI.
-    let compositor = &mut gosub_engine::render::DefaultCompositor::new(
-        || {
-            println!("Callback from the compositor is called. We can now draw the frame on the screen.");
-        });
+    // ---- 4) Create the engine instance -------------------------------------------
+    let engine = GosubEngine::new(Some(engine_cfg), Box::new(backend))?;
+    let (event_tx, event_rx) = engine.create_event_channel(1024);
 
-    // // Send events/commands
-    engine.execute_command(tab_id, gosub_engine::EngineCommand::Navigate(Url::from_str("https://example.com").expect("url")))?;
+    // ---- 5) Create a zone (profile/container) ------------------------------------
+    let zone_cfg = ZoneConfig::builder()
+        .do_not_track(true)
+        .accept_languages("fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
+        .build()
+    ;
+    // Create the services that will be connected to the zone (and its tabs)
+    let zone_services = ZoneServices {
+        storage: Arc::new(StorageService::new(
+            Arc::new(InMemoryLocalStore::new()),
+            Arc::new(InMemorySessionStore::new())
+        )),
+        cookie_store: None,
+        cookie_jar: Some(DefaultCookieJar::new().into()),
+        partition_policy: PartitionPolicy::None,
+    };
+    let zone_handle = engine.create_zone(Some(zone_cfg), zone_services, None, event_tx).await?;
 
-    loop {
-        // Tick is the main driving force of the engine. It will iterate all tabs from all zones and do the necessary work.
-        // The result of the tick is a map of tab_id -> TickResult, which tells us what happened in each tab during this
-        // tick so we can update the UI accordingly.
-        let results = engine.tick(compositor);
-        for (_tab_id, tick_result) in &results {
+    // ---- 6) Create a tab in that zone --------------------------------------------
+    let mut tab_handle: TabHandle = engine.create_tab(&zone_handle).await?;
 
-            // If true, a page has been loaded during this tick. It may or may not be rendered yet.
-            if tick_result.page_loaded {
-                println!("Page has been loaded: {}", tick_result.commited_url.clone().unwrap().to_string());
+    // ---- 7) Drive the tab with a few commands ------------------------------------
+    // Resize the tab’s viewport so the backend knows its render size
+    tab_handle.send(EngineCommand::Resize(Viewport::new(0, 0, 1024, 768))).await?;
+
+    // Navigate somewhere (your engine likely supports about:blank and/or http(s))
+    tab_handle.send(EngineCommand::Navigate("about:blank".into())).await?;
+
+    // Simulate a little user input (mouse move + click at 100,100)
+    tab_handle.send(EngineCommand::MouseMove { x: 100.0, y: 100.0 }).await?;
+    tab_handle.send(EngineCommand::MouseDown { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
+    tab_handle.send(EngineCommand::MouseUp { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
+
+
+    // ---- 8) Read and print engine events -----------------------------------------
+    // In a real app you’d route these to your UI; for now, just println!.
+    // Break out after we’ve seen a couple of interesting events.
+    let mut seen_frames = 0usize;
+    while let Some(ev) = event_rx.recv().await {
+        match ev {
+            EngineEvent::ZoneCreated { zone } => {
+                println!("[event] ZoneCreated: {zone}");
             }
-
-            // If true, the page has been rendered and can be drawn on the screen.
-            if tick_result.needs_redraw {
-                println!("Page is rendered and can be drawn on the screen");
+            EngineEvent::TabCreated { tab } => {
+                println!("[event] TabCreated: {tab}");
+            }
+            EngineEvent::NavigationStarted { tab, url } => {
+                println!("[event] NavigationStarted: tab={tab}, url={url}");
+            }
+            EngineEvent::NavigationFinished { tab, url, ok } => {
+                println!("[event] NavigationFinished: tab={tab}, url={url}, ok={ok}");
+            }
+            EngineEvent::FrameReady { tab, .. } => {
+                // With a real backend, you might get a handle/texture to present here.
+                println!("[event] FrameReady for tab={tab}");
+                seen_frames += 1;
+                if seen_frames >= 2 {
+                    break;
+                }
+            }
+            other => {
+                // Keep this to see what else your engine is emitting right now.
+                println!("[event] {:?}", other);
             }
         }
-        sleep(std::time::Duration::from_millis(100));
     }
+
+    println!("Done. Exiting.");
+    Ok(())
 }

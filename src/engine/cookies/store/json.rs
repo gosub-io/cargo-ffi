@@ -31,7 +31,7 @@
 //! ```
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -91,7 +91,7 @@ impl JsonCookieStore {
             store_self: RwLock::new(None),
         });
 
-        *store.store_self.write().unwrap() = Some(store.clone() as CookieStoreHandle);
+        *store.store_self.write().unwrap() = Some(CookieStoreHandle::from(store.clone()));
         store
     }
 
@@ -139,41 +139,32 @@ impl CookieStore for JsonCookieStore {
     /// Always returns `Some(_)` for valid inputs; `None` is reserved for stores
     /// that may intentionally refuse provisioning.
     fn jar_for(&self, zone_id: ZoneId) -> Option<CookieJarHandle> {
-        {
-            // Fast path: already in memory
-            let jars = self.jars.read().unwrap();
-            if let Some(jar) = jars.get(&zone_id) {
-                return Some(jar.clone());
-            }
+        // Fast path: already in memory
+        if let Some(jar) = self.jars.read().unwrap().get(&zone_id) {
+            return Some(jar.clone());
         }
 
-        // Load from disk
+        // load from disk (or empty)
         let mut file = self.load_file();
-        let jar = file
-            .zones
-            .remove(&zone_id)
-            .unwrap_or_else(DefaultCookieJar::new);
-        let arc_jar: CookieJarHandle = Arc::new(RwLock::new(jar));
+        let jar = file.zones.remove(&zone_id).unwrap_or_else(DefaultCookieJar::new);
+        let arc_jar: CookieJarHandle = jar.into(); // assuming you have From<DefaultCookieJar> for CookieJarHandle
 
-        let store_ref = self.store_self.read().unwrap();
-        let store = store_ref
+
+        let store = self
+            .store_self
+            .read()
+            .unwrap()
             .as_ref()
             .expect("store_self not initialized")
             .clone();
 
-        // Wrap in PersistentCookieJar
-        let persistent = Arc::new(RwLock::new(PersistentCookieJar::new(
-            zone_id,
-            arc_jar.clone(),
-            store,
-        )));
 
-        self.jars
-            .write()
-            .unwrap()
-            .insert(zone_id, persistent.clone());
+        // Wrap in PersistentCookieJar and then into a CookieJarHandle
+        let persistent = PersistentCookieJar::new(zone_id, arc_jar.clone(), store);
+        let handle = CookieJarHandle::new(persistent);
 
-        Some(persistent)
+        self.jars.write().unwrap().insert(zone_id, handle.clone());
+        Some(handle)
     }
 
     /// Persists a snapshot of `zone_id`'s jar to disk.
@@ -212,14 +203,12 @@ impl CookieStore for JsonCookieStore {
         let jars = self.jars.read().unwrap();
 
         let mut file = self.load_file();
-        for (zone_id, jar) in jars.iter() {
-            if let Ok(jar) = jar.read() {
-                if let Some(persist) = jar.as_any().downcast_ref::<PersistentCookieJar>() {
-                    if let Ok(inner) = persist.inner.read() {
-                        if let Some(default) = inner.as_any().downcast_ref::<DefaultCookieJar>() {
-                            file.zones.insert(*zone_id, default.clone());
-                        }
-                    }
+        for (zone_id, jar_handle) in jars.iter() {
+            let jar = jar_handle.read();
+            if let Some(persist) = jar.as_any().downcast_ref::<PersistentCookieJar>() {
+                let inner = persist.inner.read();
+                if let Some(default) = inner.as_any().downcast_ref::<DefaultCookieJar>() {
+                    file.zones.insert(*zone_id, default.clone());
                 }
             }
         }
@@ -255,12 +244,10 @@ mod tests {
         let z = ZoneId::new();
         let a = store.jar_for(z).unwrap();
         let b = store.jar_for(z).unwrap();
-        assert!(Arc::ptr_eq(&a, &b), "same zone should return same Arc");
+        assert!(CookieJarHandle::ptr_eq(&a, &b), "same zone should return same Arc");
 
         // Downcast to persistent wrapper to ensure it’s wrapped
-        let guard = a.read().unwrap();
-        let any = guard.as_any();
-        assert!(any.downcast_ref::<PersistentCookieJar>().is_some());
+        assert!(a.read().as_any().downcast_ref::<PersistentCookieJar>().is_some());
     }
 
     #[test]
@@ -274,15 +261,14 @@ mod tests {
 
         // write a cookie via the inner jar
         {
-            let jar_any = handle.read().unwrap();
-            let persist = jar_any.as_any().downcast_ref::<PersistentCookieJar>()
+            let binding = handle.read();
+            let persist = binding.as_any().downcast_ref::<PersistentCookieJar>()
                 .expect("persistent wrapper expected");
-            let mut inner = persist.inner.write().unwrap(); // inner: Arc<RwLock<DefaultCookieJar>>
-            let mut inner_jar = inner.write().unwrap();
+            let mut inner = persist.inner.write(); // inner: Arc<RwLock<DefaultCookieJar>>
 
             let url: Url = "https://example.com/".parse().unwrap();
             let headers = mk_headers(&["id=123; Path=/; HttpOnly"]);
-            inner_jar.store_response_cookies(&url, &headers);
+            inner.store_response_cookies(&url, &headers);
         }
 
         // snapshot everything
@@ -300,8 +286,7 @@ mod tests {
         let h2 = store2.jar_for(zone).unwrap();
 
         // Ensure it’s again a persistent wrapper
-        let guard2 = h2.read().unwrap();
-        assert!(guard2.as_any().downcast_ref::<PersistentCookieJar>().is_some());
+        assert!(h2.read().as_any().downcast_ref::<PersistentCookieJar>().is_some());
     }
 
     #[test]

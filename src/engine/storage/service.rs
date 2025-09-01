@@ -7,6 +7,7 @@ use crate::zone::ZoneId;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 
 /// A handle for receiving storage change notifications.
 pub type Subscription = broadcast::Receiver<StorageEvent>;
@@ -18,7 +19,7 @@ struct StorageBus {
 
 impl Default for StorageBus {
     fn default() -> Self {
-        let (tx, _rx) = broadcast::channel(1024);
+        let (tx, _rx) = broadcast::channel(DEFAULT_CHANNEL_CAPACITY);
         Self { tx }
     }
 }

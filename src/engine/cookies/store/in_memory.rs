@@ -48,7 +48,6 @@ impl CookieStore for InMemoryCookieStore {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
 
     #[test]
@@ -60,19 +59,18 @@ mod tests {
         let b = store.jar_for(z).unwrap();
 
         // Same Arc target
-        assert!(Arc::ptr_eq(&a, &b));
+        assert!(CookieJarHandle::ptr_eq(&a, &b));
 
         // Can write a cookie and read it back via the other handle
         {
-            let mut jar = a.write().unwrap();
-            jar.store_response_cookies(
+            a.write().store_response_cookies(
                 &"https://example.com/".parse().unwrap(),
                 &http::HeaderMap::new(),
             );
             // (No actual Set-Cookie here; we’re just ensuring it is writable without panicking)
         }
         // second handle should still be valid
-        let _ = b.read().unwrap();
+        let _ = b.read();
     }
 
     #[test]
@@ -84,7 +82,7 @@ mod tests {
         let a = store.jar_for(z1).unwrap();
         let b = store.jar_for(z2).unwrap();
 
-        assert!(!Arc::ptr_eq(&a, &b));
+        assert!(!CookieJarHandle::ptr_eq(&a, &b));
     }
 
     #[test]
@@ -100,6 +98,6 @@ mod tests {
 
         // z1 should allocate a fresh jar now
         let a2 = store.jar_for(z1).unwrap();
-        assert!(!Arc::ptr_eq(&a, &a2));
+        assert!(!CookieJarHandle::ptr_eq(&a, &a2));
     }
 }

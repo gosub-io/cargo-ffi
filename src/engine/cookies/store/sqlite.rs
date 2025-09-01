@@ -97,7 +97,7 @@ impl SqliteCookieStore {
 
         {
             let mut self_ref = store.store_self.write().unwrap();
-            *self_ref = Some(store.clone() as CookieStoreHandle);
+            *self_ref = Some(CookieStoreHandle::from(store.clone()));
         }
 
         store
@@ -228,7 +228,7 @@ impl CookieStore for SqliteCookieStore {
         }
 
         let jar = self.load_zone(zone_id);
-        let arc_jar: CookieJarHandle = Arc::new(RwLock::new(jar));
+        let arc_jar: CookieJarHandle = jar.into();
 
         let store_ref = self.store_self.read().unwrap();
         let store = store_ref
@@ -236,18 +236,15 @@ impl CookieStore for SqliteCookieStore {
             .expect("store_self not initialized")
             .clone();
 
-        let persistent = Arc::new(RwLock::new(PersistentCookieJar::new(
-            zone_id,
-            arc_jar.clone(),
-            store,
-        )));
+        let persistent = PersistentCookieJar::new(zone_id, arc_jar.clone(), store);
+        let handle = CookieJarHandle::new(persistent);
 
         self.jars
             .write()
             .unwrap()
-            .insert(zone_id, persistent.clone());
+            .insert(zone_id, handle.clone());
 
-        Some(persistent)
+        Some(handle)
     }
 
     /// Persists a snapshot of `zone_id`'s jar to SQLite.
@@ -270,14 +267,12 @@ impl CookieStore for SqliteCookieStore {
     fn persist_all(&self) {
         let jars = self.jars.read().unwrap();
 
-        for (zone_id, jar) in jars.iter() {
-            if let Ok(jar) = jar.read() {
-                if let Some(persist) = jar.as_any().downcast_ref::<PersistentCookieJar>() {
-                    if let Ok(inner) = persist.inner.read() {
-                        if let Some(default) = inner.as_any().downcast_ref::<DefaultCookieJar>() {
-                            self.save_zone(*zone_id, default);
-                        }
-                    }
+        for (zone_id, jar_handle) in jars.iter() {
+            let jar = jar_handle.read();
+            if let Some(persist) = jar.as_any().downcast_ref::<PersistentCookieJar>() {
+                let inner = persist.inner.read();
+                if let Some(default) = inner.as_any().downcast_ref::<DefaultCookieJar>() {
+                    self.save_zone(*zone_id, default);
                 }
             }
         }

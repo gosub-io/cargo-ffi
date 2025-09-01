@@ -50,8 +50,9 @@ use std::ops::Deref;
 use crate::engine::cookies::store::CookieStore;
 use crate::engine::cookies::CookieJar;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use crate::cookies::DefaultCookieJar;
+use crate::zone::ZoneId;
 
 /// A handle to a cookie jar trait.
 ///
@@ -73,11 +74,25 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 #[derive(Clone, Debug)]
 pub struct CookieJarHandle(Arc<RwLock<Box<dyn CookieJar + Send + Sync>>>);
 
-impl std::fmt::Debug for dyn CookieJar + Send + Sync {
+impl Debug for dyn CookieJar + Send + Sync {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CookieJar {{ ... }}")
     }
 }
+
+impl CookieJarHandle {
+    /// Pointer equality: are these two handles backed by the same Arc?
+    pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+        Arc::ptr_eq(&this.0, &other.0)
+    }
+}
+
+impl PartialEq for CookieJarHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for CookieJarHandle {}
 
 impl CookieJarHandle {
     pub fn new<T>(jar: T) -> Self
@@ -123,12 +138,44 @@ where
 /// since callers hold only `&self` when invoking trait methods.
 ///
 /// Typical use is at **build/initialization time** to mint a per-zone jar.
-#[derive(Clone)]
 pub struct CookieStoreHandle(Arc<dyn CookieStore + Send + Sync>);
+
+impl Clone for CookieStoreHandle {
+    fn clone(&self) -> Self { Self(self.0.clone()) }
+
+    fn clone_from(&mut self, source: &Self)
+    where
+        Self:
+    {
+        self.0.clone_from(&source.0);
+    }
+}
+
+impl<T> From<Arc<T>> for CookieStoreHandle
+where
+    T: CookieStore + Send + Sync + 'static,
+{
+    fn from(a: Arc<T>) -> Self { Self(a) }
+}
 
 impl Debug for CookieStoreHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CookieStore {{ ... }}")
+    }
+}
+
+impl CookieStoreHandle {
+    pub fn persist_zone_from_snapshot(&self, zone: ZoneId, snap: &DefaultCookieJar) {
+        self.0.persist_zone_from_snapshot(zone, snap);
+    }
+    pub fn remove_zone(&self, zone: ZoneId) {
+        self.0.remove_zone(zone);
+    }
+    pub fn persist_all(&self) {
+        self.0.persist_all();
+    }
+    pub fn jar_for(&self, zone: ZoneId) -> Option<CookieJarHandle> {
+        self.0.jar_for(zone)
     }
 }
 

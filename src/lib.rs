@@ -79,6 +79,7 @@ pub mod render;
 
 pub use engine::{EngineError, GosubEngine};
 
+
 #[doc(inline)]
 pub use engine::tab;
 
@@ -95,8 +96,16 @@ pub use engine::storage;
 #[doc(inline)]
 pub use crate::engine::config::EngineConfig;
 
-// Public `config` namespace with the enums/structs:
+pub mod events {
+    pub use crate::engine::events::{
+        TabCommand,
+        EngineEvent,
+        EngineCommand,
+        ZoneCommand,
+    };
+}
 
+// Public `config` namespace with the enums/structs:
 /// Configuration options for the Gosub engine.
 pub mod config {
     pub use crate::engine::config::{
