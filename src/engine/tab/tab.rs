@@ -40,8 +40,6 @@ impl TabId {
     }
 }
 
-
-
 pub struct Tab {
     /// ID of the tab
     pub id: TabId,

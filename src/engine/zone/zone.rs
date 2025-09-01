@@ -20,7 +20,7 @@ use crate::cookies::CookieStoreHandle;
 use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::storage::types::PartitionPolicy;
-use crate::tab::{spawn_tab_task, OpenTabParams, TabHandle, TabSpawnArgs};
+use crate::tab::{spawn_tab_task, EffectiveTabServices, TabHandle, TabSpawnArgs};
 use crate::zone::ZoneConfig;
 
 const TAB_CREATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -255,14 +255,13 @@ impl Zone {
     /// Returns the services available to tabs within this zone
     pub fn services(&self) -> ZoneServices { self.services.clone() }
 
-    pub async fn create_tab(&self, params: OpenTabParams) -> Result<TabHandle, EngineError> {
+    pub async fn create_tab(&self, tab_services: EffectiveTabServices, opts: TabOptions) -> Result<TabHandle, EngineError> {
         if self.tabs.read().unwrap().len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
         // Channel to send and receive commands to and from the UI
         let (tab_cmd_tx, tab_cmd_rx) = channel::<EngineCommand>(DEFAULT_CHANNEL_CAPACITY);
-
         let tab_id = TabId::new();
 
         let (ack_tx, ack_rx) = oneshot::channel::<anyhow::Result<()>>();
@@ -271,9 +270,9 @@ impl Zone {
             tab_id,
             cmd_rx: tab_cmd_rx,
             event_tx: self.event_tx.clone(),
-            services: self.services(),
+            services: tab_services,
             // engine: self.engine_handle.clone(),
-            initial: params.clone(),
+            initial: opts.initial(),
         }, ack_tx);
 
         match timeout(TAB_CREATION_TIMEOUT, ack_rx).await {

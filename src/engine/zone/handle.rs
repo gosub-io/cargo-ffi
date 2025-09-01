@@ -9,21 +9,21 @@ use crate::zone::ZoneId;
 
 #[derive(Clone)]
 pub struct ZoneHandle {
-    zone: ZoneId,
+    zone_id: ZoneId,
     cmd_tx: Sender<EngineCommand>,
 }
 
 impl ZoneHandle {
-    pub fn new(zone: ZoneId, cmd_tx: Sender<EngineCommand>) -> Self {
-        Self { zone, cmd_tx }
+    pub fn new(zone_id: ZoneId, cmd_tx: Sender<EngineCommand>) -> Self {
+        Self { zone_id, cmd_tx }
     }
 
-    pub fn id(&self) -> ZoneId { self.zone }
+    pub fn zone_id(&self) -> ZoneId { self.zone_id }
 
     pub async fn set_title(&self, title: impl Into<String>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetTitle {
-            zone: self.zone,
+            zone_id: self.zone_id,
             title: title.into(),
             reply: tx,
         })).await?;
@@ -33,7 +33,7 @@ impl ZoneHandle {
     pub async fn set_icon(&self, icon: Vec<u8>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetIcon {
-            zone: self.zone,
+            zone_id: self.zone_id,
             icon,
             reply: tx,
         })).await?;
@@ -43,7 +43,7 @@ impl ZoneHandle {
     pub async fn set_description(&self, description: impl Into<String>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetDescription {
-            zone: self.zone,
+            zone_id: self.zone_id,
             description: description.into(),
             reply: tx,
         })).await?;
@@ -53,7 +53,7 @@ impl ZoneHandle {
     pub async fn set_color(&self, color: [u8; 4]) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::SetColor {
-            zone: self.zone,
+            zone_id: self.zone_id,
             color,
             reply: tx,
         })).await?;
@@ -63,7 +63,7 @@ impl ZoneHandle {
     pub async fn create_tab(&self, title: impl Into<String>, viewport: Viewport) -> Result<TabHandle> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::CreateTab {
-            zone: self.zone,
+            zone_id: self.zone_id,
             title: Some(title.into()),
             viewport: Some(viewport),
             url: None,
@@ -72,11 +72,11 @@ impl ZoneHandle {
         rx.await?
     }
 
-    pub async fn close_tab(&self, tab: TabId) -> Result<()> {
+    pub async fn close_tab(&self, tab_id: TabId) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::CloseTab {
-            zone: self.zone,
-            tab,
+            zone_id: self.zone_id,
+            tab_id,
             reply: tx,
         })).await?;
         rx.await?
@@ -85,7 +85,7 @@ impl ZoneHandle {
     pub async fn list_tabs(&self) -> Result<Vec<TabId>> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::ListTabs {
-            zone: self.zone,
+            zone_id: self.zone_id,
             reply: tx,
         })).await?;
         rx.await?
@@ -94,7 +94,7 @@ impl ZoneHandle {
     // pub async fn tab_title(&self, tab: TabId) -> Result<Option<String>> {
     //     let (tx, rx) = oneshot::channel();
     //     self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::TabTitle {
-    //         zone: self.zone,
+    //         zone_id: self.zone_id,
     //         tab,
     //         reply: tx,
     //     })).await?;

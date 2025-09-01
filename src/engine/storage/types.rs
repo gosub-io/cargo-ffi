@@ -1,4 +1,5 @@
 use url::{Origin, Url};
+use crate::zone::ZoneId;
 
 /// Partitioning key (future-proof for state partitioning).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -24,6 +25,11 @@ impl PartitionKey {
             let url = Url::parse(s).expect("valid URL for PartitionKey");
             PartitionKey::TopLevel(url.origin())
         }
+    }
+
+    pub fn from_zone(zone_id: ZoneId) -> Self {
+        let url_str = format!("https://zone-{}.local", zone_id.to_string());
+        Self::from_str(&url_str)
     }
 }
 

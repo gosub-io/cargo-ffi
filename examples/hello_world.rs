@@ -19,28 +19,34 @@ use winit::event::MouseButton;
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
-    // ---- 1) Configure the engine -------------------------------------------------
-    // Start with sane defaults; tweak as needed (JS/images, UA string, limits, etc.)
+    // Configure the engine through the engineconfig builder. This will setup the main runtime
+    // configuration of the engine. It's possible for some values to be changed at runtime, but
+    // not all of them
     let engine_cfg = EngineConfig::builder()
         .max_zones(5)
         .build().expect("Configuration is not valid")
     ;
 
-    // ---- 2) Choose a rendering backend -------------------------------------------
-    // Headless/“no-op” backend
+    // Set up a render backend. In this example we use the NullBackend which does not render
+    // anything.
     let backend = gosub_engine::render::backends::null::NullBackend::new();
 
-    // ---- 4) Create the engine instance -------------------------------------------
+    // Instantiate the engine
     let engine = GosubEngine::new(Some(engine_cfg), Box::new(backend))?;
+
+    // Create a channel to receive events from and to the engine
     let (event_tx, event_rx) = engine.create_event_channel(1024);
 
-    // ---- 5) Create a zone (profile/container) ------------------------------------
+    // Configure a zone. This works the same way as the engine config, using a builder
+    // pattern to set up the configuration before building it.
     let zone_cfg = ZoneConfig::builder()
         .do_not_track(true)
         .accept_languages("fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
         .build()
     ;
-    // Create the services that will be connected to the zone (and its tabs)
+
+    // Create the services for this zone. These services are automatically provided to the tabs
+    // created in the zone, but can be overridden on a per-tab basis if needed.
     let zone_services = ZoneServices {
         storage: Arc::new(StorageService::new(
             Arc::new(InMemoryLocalStore::new()),
@@ -50,17 +56,22 @@ async fn main() -> Result<(), EngineError> {
         cookie_jar: Some(DefaultCookieJar::new().into()),
         partition_policy: PartitionPolicy::None,
     };
+
+    // Create the zone. Note that we can define our own zone ID to keep zones deterministic
+    // (like a user profile), and we give the zone handle to the event channel so we can
+    // receive events related to the zone.
     let zone_handle = engine.create_zone(Some(zone_cfg), zone_services, None, event_tx).await?;
 
-    // ---- 6) Create a tab in that zone --------------------------------------------
-    let mut tab_handle: TabHandle = engine.create_tab(&zone_handle).await?;
 
-    // ---- 7) Drive the tab with a few commands ------------------------------------
-    // Resize the tab’s viewport so the backend knows its render size
+    // Next, we create a tab in the zone. For now, we don't provide anything, but we should
+    // be able to provide tab-specific services (like a different cookie jar, etc).
+    let tab_handle: TabHandle = engine.create_tab(&zone_handle, TabOptions::default()).await?;
+
+    // From the tab handle, we can now send commands to the engine to control the tab.
     tab_handle.send(EngineCommand::Resize(Viewport::new(0, 0, 1024, 768))).await?;
 
-    // Navigate somewhere (your engine likely supports about:blank and/or http(s))
-    tab_handle.send(EngineCommand::Navigate("about:blank".into())).await?;
+    // Navigate somewhere
+    tab_handle.send(EngineCommand::Navigate("https://gosub.io".into())).await?;
 
     // Simulate a little user input (mouse move + click at 100,100)
     tab_handle.send(EngineCommand::MouseMove { x: 100.0, y: 100.0 }).await?;
@@ -68,9 +79,28 @@ async fn main() -> Result<(), EngineError> {
     tab_handle.send(EngineCommand::MouseUp { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
 
 
-    // ---- 8) Read and print engine events -----------------------------------------
-    // In a real app you’d route these to your UI; for now, just println!.
-    // Break out after we’ve seen a couple of interesting events.
+    // Open a private tab inside the zone. Note that we override some of the tab options to
+    // make it private (ephemeral storage, cookie jar, cache, etc). We also set an initial URL that
+    // is automatically loaded when the tab is created.
+    let private_tab_handle = engine.create_tab(&zone_handle, TabOptions {
+        overrides: TabOverrides {
+            partition_key: Some(PartitionKey::new_random()),
+            cookie_jar: TabCookieJar::Ephemeral,
+            storage_scope: TabStorageScope::Ephemeral,
+            cache_mode: TabCacheMode::Ephemeral,
+            persist_history: Some(false),
+            persist_downloads: Some(false),
+            ..Default::default()
+        },
+        initial_url: Some("https://example.com".into()),
+        ..Default::default()
+    }).await?;
+
+
+
+    // This is the application's main loop, where we receive events from the engine and
+    // act on them. In a real application, you would probably want to run this in
+    // a separate task/thread, and not block the main thread.
     let mut seen_frames = 0usize;
     while let Some(ev) = event_rx.recv().await {
         match ev {

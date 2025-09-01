@@ -1,11 +1,13 @@
+use std::sync::Arc;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use crate::cookies::CookieJarHandle;
 use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::net::Response;
 use crate::render::Viewport;
-use crate::tab::TabId;
-use crate::zone::ZoneServices;
+use crate::storage::{PartitionKey, StorageService};
+use crate::tab::{TabDefaults, TabId};
 
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
 /// the load is no longer needed (e.g., user navigated away).
@@ -40,11 +42,11 @@ pub struct TabSpawnArgs {
     /// Send channel for events from the tab to the UA
     pub event_tx: Sender<EngineEvent>,
     /// Services available to the tab
-    pub services: ZoneServices,
+    pub services: EffectiveTabServices,
     // Handle to the engine for shared resources
     // pub engine: EngineHandle,
     /// Initial parameters for the tab
-    pub initial: OpenTabParams,
+    pub initial: TabDefaults,
 }
 
 /// Current state of the tab. This is a state machine that defines what the tab is doing at the moment.
@@ -97,29 +99,38 @@ pub enum TabActivityMode {
 }
 
 
-/// Parameters for creating a new tab.
-///
-/// This lets the UA specify an optional title, viewport size, and/or URL
-/// when calling `ZoneHandle::create_tab()`.
-#[derive(Debug, Clone)]
-pub struct OpenTabParams {
-    /// Optional initial title (e.g. "New Tab").
-    /// The engine will later override this when a document sets `<title>`.
-    pub title: Option<String>,
-    /// Optional viewport to use at creation.
-    /// If `None`, the tab starts with a default and can be updated later
-    /// by calling `TabHandle::set_viewport()`.
-    pub viewport: Option<Viewport>,
-    /// Optional URL string to navigate to (like `about:blank` or a real page).
-    pub url: Option<String>,
-}
+// /// Parameters for creating a new tab.
+// ///
+// /// This lets the UA specify an optional title, viewport size, and/or URL
+// /// when calling `ZoneHandle::create_tab()`.
+// #[derive(Debug, Clone)]
+// pub struct OpenTabParams {
+//     /// Optional initial title (e.g. "New Tab").
+//     /// The engine will later override this when a document sets `<title>`.
+//     pub title: Option<String>,
+//     /// Optional viewport to use at creation.
+//     /// If `None`, the tab starts with a default and can be updated later
+//     /// by calling `TabHandle::set_viewport()`.
+//     pub viewport: Option<Viewport>,
+//     /// Optional URL string to navigate to (like `about:blank` or a real page).
+//     pub url: Option<String>,
+// }
+//
+// impl Default for OpenTabParams {
+//     fn default() -> Self {
+//         Self {
+//             title: Some("New Tab".to_string()),
+//             viewport: None,
+//             url: None,
+//         }
+//     }
+// }
 
-impl Default for OpenTabParams {
-    fn default() -> Self {
-        Self {
-            title: Some("New Tab".to_string()),
-            viewport: None,
-            url: None,
-        }
-    }
+
+/// The effective services for a tab after applying zone defaults and tab overrides.
+#[derive(Clone, Debug)]
+pub struct EffectiveTabServices {
+    pub partition_key: PartitionKey,
+    pub storage: Arc<StorageService>,
+    pub cookie_jar: CookieJarHandle,
 }

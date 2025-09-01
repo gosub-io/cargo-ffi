@@ -2,14 +2,13 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::tab::structs::{TabSpawnArgs, TabState};
-use crate::tab::TabId;
-use crate::zone::ZoneServices;
+use crate::tab::{EffectiveTabServices, TabId};
 
 pub struct TabWorker {
     tab_id: TabId,
     cmd_rx: Receiver<EngineCommand>,
     event_tx: Sender<EngineEvent>,
-    services: ZoneServices,
+    services: EffectiveTabServices,
     // engine: EngineHandle,
     state: TabState,
 }

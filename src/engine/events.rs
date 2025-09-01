@@ -37,31 +37,31 @@ pub enum Modifiers {
 pub enum ZoneCommand {
     /// Set the title of the zone
     SetTitle {
-        zone: ZoneId,
+        zone_id: ZoneId,
         title: String,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
     /// Set the icon of the zone (favicon)
     SetIcon {
-        zone: ZoneId,
+        zone_id: ZoneId,
         icon: Vec<u8>,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
     /// Set the description of the zone
     SetDescription {
-        zone: ZoneId,
+        zone_id: ZoneId,
         description: String,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
     /// Set the color of the zone (RGBA)
     SetColor {
-        zone: ZoneId,
+        zone_id: ZoneId,
         color: [u8; 4],
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
     /// Open a tab in the zone
     CreateTab {
-        zone: ZoneId,
+        zone_id: ZoneId,
         title: Option<String>,
         url: Option<String>,    // String, not URL since it's not validated yet
         viewport: Option<Viewport>,
@@ -69,13 +69,13 @@ pub enum ZoneCommand {
     },
     /// Close a tab in the zone
     CloseTab {
-        zone: ZoneId,
-        tab: TabId,
+        zone_id: ZoneId,
+        tab_id: TabId,
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
     /// List all tabs in the zone
     ListTabs {
-        zone: ZoneId,
+        zone_id: ZoneId,
         reply: oneshot::Sender<anyhow::Result<Vec<TabId>>>,
     },
 }
@@ -83,38 +83,38 @@ pub enum ZoneCommand {
 impl Debug for ZoneCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ZoneCommand::SetTitle { zone, title, .. } => f
+            ZoneCommand::SetTitle { zone_id, title, .. } => f
                 .debug_struct("SetTitle")
-                .field("zone", zone)
+                .field("zone_id", zone_id)
                 .field("title", title)
                 .finish(),
-            ZoneCommand::SetIcon { zone, icon, .. } => f
+            ZoneCommand::SetIcon { zone_id, icon, .. } => f
                 .debug_struct("SetIcon")
-                .field("zone", zone)
+                .field("zone_id", zone_id)
                 .field("icon_len", &icon.len())
                 .finish(),
-            ZoneCommand::SetDescription { zone, description, .. } => f
+            ZoneCommand::SetDescription { zone_id, description, .. } => f
                 .debug_struct("SetDescription")
-                .field("zone", zone)
+                .field("zone_id", zone_id)
                 .field("description", description)
                 .finish(),
-            ZoneCommand::SetColor { zone, color, .. } => f
+            ZoneCommand::SetColor { zone_id, color, .. } => f
                 .debug_struct("SetColor")
-                .field("zone", zone)
+                .field("zone_id", zone_id)
                 .field("color", color)
                 .finish(),
-            ZoneCommand::CreateTab { zone,  .. } => f
+            ZoneCommand::CreateTab { zone_id,  .. } => f
                 .debug_struct("OpenTab")
-                .field("zone", zone)
+                .field("zone_id", zone_id)
                 .finish(),
-            ZoneCommand::CloseTab { zone, tab, .. } => f
+            ZoneCommand::CloseTab { zone_id, tab_id, .. } => f
                 .debug_struct("CloseTab")
-                .field("zone", zone)
-                .field("tab", tab)
+                .field("zone_id", zone_id)
+                .field("tab_id", tab_id)
                 .finish(),
-            ZoneCommand::ListTabs { zone, .. } => f
+            ZoneCommand::ListTabs { zone_id, .. } => f
                 .debug_struct("ListTabs")
-                .field("zone", zone)
+                .field("zone_id", zone_id)
                 .finish(),
         }
     }
