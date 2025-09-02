@@ -55,4 +55,10 @@ pub enum EngineError {
 
     #[error("poisoned")]
     Poisoned,
+
+    #[error("Failed to create tab: {0}")]
+    CreateTab(String),
+
+    #[error("Channel closed")]
+    ChannelClosed,
 }

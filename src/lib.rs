@@ -13,7 +13,7 @@
 //! use std::str::FromStr;
 //! use std::thread::sleep;
 //! use url::Url;
-//! use gosub_engine::{EngineConfig, EngineError, MouseButton};
+//! use gosub_engine::{EngineConfig, EngineError};
 //! use gosub_engine::render::Viewport;
 //!
 //! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
@@ -34,7 +34,7 @@
 //! );
 //!
 //! // Send events/commands
-//! engine.handle_event(tab_id, gosub_engine::EngineEvent::MouseDown{ button: MouseButton::Left, x: 10.0, y: 10.0})?;
+//! engine.handle_event(tab_id, gosub_engine::events::EngineEvent::Redraw { tab_id, handle })?;
 //! engine.execute_command(tab_id, gosub_engine::EngineCommand::Navigate(Url::from_str("https://example.com").expect("url")))?;
 //!
 //! loop {
@@ -102,6 +102,7 @@ pub mod events {
         EngineEvent,
         EngineCommand,
         ZoneCommand,
+        MouseButton,
     };
 }
 

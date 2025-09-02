@@ -1,12 +1,14 @@
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
-use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::engine::events::EngineEvent;
+use crate::events::TabCommand;
 use crate::tab::structs::{TabSpawnArgs, TabState};
 use crate::tab::{EffectiveTabServices, TabId};
 
+#[allow(unused)]
 pub struct TabWorker {
     tab_id: TabId,
-    cmd_rx: Receiver<EngineCommand>,
+    cmd_rx: Receiver<TabCommand>,
     event_tx: Sender<EngineEvent>,
     services: EffectiveTabServices,
     // engine: EngineHandle,
@@ -20,7 +22,6 @@ impl TabWorker {
             cmd_rx: args.cmd_rx,
             event_tx: args.event_tx,
             services: args.services,
-            // engine: args.engine,
             state: TabState::Idle,
         })
     }
@@ -42,7 +43,7 @@ impl TabWorker {
     }
 
 
-    pub async fn handle_command(&mut self, cmd: EngineCommand) {
+    pub async fn handle_command(&mut self, cmd: TabCommand) {
         println!("Handling tab command: {:?}", cmd);
     }
 

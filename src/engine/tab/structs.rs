@@ -3,20 +3,23 @@ use tokio::sync::mpsc::{Sender, Receiver};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::cookies::CookieJarHandle;
-use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::engine::events::EngineEvent;
+use crate::events::TabCommand;
 use crate::net::Response;
 use crate::render::Viewport;
 use crate::storage::{PartitionKey, StorageService};
-use crate::tab::{TabDefaults, TabId};
+use crate::tab::TabId;
 
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
 /// the load is no longer needed (e.g., user navigated away).
+#[allow(unused)]
 struct InflightLoad {
     cancel: CancellationToken,
     rx: tokio::sync::oneshot::Receiver<anyhow::Result<Response>>,
 }
 
 /// State for the tab task driving a single tab.
+#[allow(unused)]
 struct TabTaskState {
     /// Is drawing enabled (vs suspended)
     drawing_enabled: bool,
@@ -38,19 +41,20 @@ pub struct TabSpawnArgs {
     /// Tab ID
     pub tab_id: TabId,
     /// Receive channel for commands for the tab
-    pub cmd_rx: Receiver<EngineCommand>,
+    pub cmd_rx: Receiver<TabCommand>,
     /// Send channel for events from the tab to the UA
     pub event_tx: Sender<EngineEvent>,
     /// Services available to the tab
     pub services: EffectiveTabServices,
     // Handle to the engine for shared resources
     // pub engine: EngineHandle,
-    /// Initial parameters for the tab
-    pub initial: TabDefaults,
+    // Initial parameters for the tab
+    // pub initial: TabDefaults,
 }
 
 /// Current state of the tab. This is a state machine that defines what the tab is doing at the moment.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[allow(unused)]
 pub enum TabState {
     /// Tab is idle (no pending network, animations, or rendering).
     #[default]
@@ -84,6 +88,7 @@ pub enum TabState {
 
 /// Activity mode for a [`Tab`]. Schedulers can allocate CPU/time by mode.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(unused)]
 pub enum TabActivityMode {
     /// Foreground: fully active (network, layout, paint, animations ~60 Hz).
     Active,

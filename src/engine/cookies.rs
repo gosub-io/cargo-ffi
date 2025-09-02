@@ -1,67 +1,104 @@
 //! Cookie management system for the Gosub engine.
 //!
-//! This module provides the core traits and implementations for storing,
-//! retrieving, and persisting HTTP cookies. It defines the main
-//! [`CookieJar`] interface used by zones, various backend [`CookieStore`]
-//! implementations, and persistent wrappers.
+//! This module defines the core types for storing, retrieving, and persisting HTTP
+//! cookies. Zones use a [`CookieJar`] (via a cheap, cloneable [`CookieJarHandle`])
+//! and can optionally persist jar mutations to a backend [`CookieStore`].
 //!
-//! # Overview
+//! ## Overview
 //!
-//! - [`Cookie`] — Represents a single HTTP cookie (name, value, domain, path, expiry, etc.).
-//! - [`CookieJar`] — In-memory cookie jar with full RFC 6265 handling.
-//! - [`DefaultCookieJar`] — The engine's default [`CookieJar`] implementation.
-//! - [`PersistentCookieJar`] — A [`CookieJar`] wrapper that persists its state
-//!   to a [`CookieStore`] backend.
-//! - [`CookieStore`] — Abstract trait for reading/writing cookies to persistent storage.
-//! - [`JsonCookieStore`] — Simple JSON-based cookie store (human-readable, easy to debug).
-//! - [`SqliteCookieStore`] — SQLite-based cookie store (efficient for large sets).
+//! - [`Cookie`] — A single HTTP cookie (name, value, domain, path, expiry, SameSite, etc.).
+//! - [`CookieJar`] — Thread-safe, in-memory cookie jar implementing RFC 6265 semantics.
+//! - [`DefaultCookieJar`] — The engine’s default in-memory [`CookieJar`] (ephemeral).
+//! - [`PersistentCookieJar`] — A [`CookieJar`] wrapper that snapshots changes to a
+//!   persistent [`CookieStore`] backend.
+//! - [`CookieStore`] — Trait for durable storage backends.
+//!   - [`InMemoryCookieStore`] — Non-persistent store (useful for tests).
+//!   - [`JsonCookieStore`] — Human-readable JSON files (handy for debugging).
+//!   - [`SqliteCookieStore`] — SQLite-backed store (scales to many cookies).
 //!
-//! Internally, `CookieJarHandle` and `CookieStoreHandle` are reference-counted handles
-//! used to share jars and stores safely between threads/zones.
+//! Internally, `CookieJarHandle` (and `CookieStoreHandle`) are cloneable, thread-safe
+//! handles you can pass between engine tasks/zones. The jar itself is safe to read
+//! concurrently; mutations are synchronized inside the jar implementation.
 //!
-//! # Integration with Zones
+//! ## How zones get a cookie jar
 //!
-//! Each [`Zone`](crate::zone::Zone) has its own [`CookieJar`]. You can provide a
-//! [`PersistentCookieJar`] to store cookies between sessions, or use an in-memory
-//! [`DefaultCookieJar`] for ephemeral cookies (e.g., private mode).
+//! Each [`Zone`](crate::zone::Zone) uses **exactly one** [`CookieJar`]. You wire this up
+//! through `ZoneServices` when creating the zone:
 //!
-//! Example of attaching a persistent SQLite cookie jar to a zone:
+//! 1. **Ephemeral (private) cookies** — supply a direct `cookie_jar`:
 //!
 //! ```no_run
-//! use std::sync::{Arc, RwLock};
-//! use gosub_engine::GosubEngine;
-//! use gosub_engine::zone::ZoneId;
-//! use gosub_engine::cookies::{CookieJarHandle, SqliteCookieStore, PersistentCookieJar, DefaultCookieJar};
+//! # use std::sync::Arc;
+//! # use tokio::sync::mpsc;
+//! use gosub_engine::render::Viewport;
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices, PartitionPolicy};
+//! use gosub_engine::cookies::{DefaultCookieJar};
 //!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
+//! # async fn demo(mut engine: gosub_engine::GosubEngine, event_tx: mpsc::Sender<gosub_engine::engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! let services = ZoneServices {
+//!     storage: Arc::new(gosub_engine::engine::storage::StorageService::new(
+//!         Arc::new(gosub_engine::engine::storage::InMemoryLocalStore::new()),
+//!         Arc::new(gosub_engine::engine::storage::InMemorySessionStore::new()),
+//!     )),
+//!     cookie_store: None,
+//!     cookie_jar: Some(DefaultCookieJar::new().into()),
+//!     partition_policy: PartitionPolicy::None,
+//! };
 //!
-//! // Open or create the SQLite cookie store
-//! let cookie_store = SqliteCookieStore::new("cookies.db".into());
-//!
-//! // Create the zone with a persistent cookie jar taken from the sqlite cookie store
-//! let zone_id = engine.zone_builder().cookie_store(cookie_store).create().unwrap();
-//!
+//! let zone_cfg = ZoneConfig::default();
+//! let _zone = engine.create_zone(Some(zone_cfg), services, None, event_tx).await?;
+//! # Ok(()) }
 //! ```
 //!
-//! # Choosing a backend
+//! 2. **Persistent cookies** — supply a `cookie_store` and omit `cookie_jar`. The engine
+//!    will attach a `PersistentCookieJar` for this zone that snapshots on every mutation:
 //!
-//! - [`JsonCookieStore`]: Easy to inspect and debug, slower for large volumes.
-//! - [`SqliteCookieStore`]: Scales well to thousands of cookies, supports indexing,
-//!   suitable for long-lived profiles.
+//! ```no_run
+//! # use std::sync::Arc;
+//! # use tokio::sync::mpsc;
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices, PartitionPolicy};
+//! use gosub_engine::cookies::{SqliteCookieStore};
 //!
-//! # See also
+//! # async fn demo(mut engine: gosub_engine::GosubEngine, event_tx: mpsc::Sender<gosub_engine::engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! let store = SqliteCookieStore::new("cookies.db".into());
 //!
-//! - [`Zone`](crate::zone::Zone) for how cookie jars are stored and used.
-//! - [`CookieStore`] for implementing your own storage backend.
-//! - RFC 6265 for HTTP cookie semantics.
+//! let services = ZoneServices {
+//!     storage: Arc::new(gosub_engine::engine::storage::StorageService::new(
+//!         Arc::new(gosub_engine::engine::storage::InMemoryLocalStore::new()),
+//!         Arc::new(gosub_engine::engine::storage::InMemorySessionStore::new()),
+//!     )),
+//!     cookie_store: Some(store.into()),
+//!     cookie_jar: None, // engine will wrap with PersistentCookieJar per zone
+//!     partition_policy: PartitionPolicy::None,
+//! };
 //!
-//! # Available types
+//! let zone_cfg = ZoneConfig::default();
+//! let _zone = engine.create_zone(Some(zone_cfg), services, None, event_tx).await?;
+//! # Ok(()) }
+//! ```
 //!
-//! - [`Cookie`]
-//! - [`CookieJar`], [`DefaultCookieJar`], [`PersistentCookieJar`]
-//! - [`CookieStore`], [`JsonCookieStore`], [`SqliteCookieStore`]
+//! > **Note:** A persistent store can serve **all zones** from a single backend
+//! > (e.g., one SQLite DB). Each zone still operates on its own jar; the store
+//! > takes care of mapping a zone’s jar to durable rows/records behind the scenes.
 //!
+//! ## Choosing a backend
+//!
+//! - [`InMemoryCookieStore`] — Zero I/O, great for tests and benches.
+//! - [`JsonCookieStore`] — Easy to inspect; slower for large volumes.
+//! - [`SqliteCookieStore`] — Durable and efficient for long-lived profiles.
+//!
+//! ## Concurrency & safety
+//!
+//! - `CookieJarHandle` is cloneable (`Send + Sync`). Reads are concurrent; writes are
+//!   serialized internally. If using a persistent jar, each mutation triggers a snapshot
+//!   to the store so state stays consistent across restarts.
+//!
+//! ## See also
+//!
+//! - [`Zone`](crate::zone::Zone) — where jars are attached/used.
+//! - [`CookieStore`] — implement this trait to add your own persistence backend.
+//! - RFC 6265 — for cookie parsing/matching semantics (domain/path, expiration,
+//!   HttpOnly, Secure, SameSite, etc.).
 mod cookie_jar;
 mod cookies;
 mod persistent_cookie_jar;

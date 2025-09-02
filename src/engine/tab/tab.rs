@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use tokio::runtime::Runtime;
 use url::Url;
 use uuid::Uuid;
 use crate::cookies::CookieJarHandle;
@@ -40,6 +38,7 @@ impl TabId {
     }
 }
 
+#[allow(unused)]
 pub struct Tab {
     /// ID of the tab
     pub id: TabId,
@@ -88,6 +87,7 @@ pub struct Tab {
     dirty_after_inflight: bool,
 }
 
+#[allow(unused)]
 impl Tab {
     /// Create a new tab bound to `zone_id`, with a runtime, initial viewport,
     /// and an optional zone-shared cookie jar handle.
@@ -96,7 +96,6 @@ impl Tab {
     /// [`PartitionKey::None`]/[`PartitionPolicy::TopLevelOrigin`].
     pub fn new(
         zone_id: ZoneId,
-        runtime: Arc<Runtime>,
         viewport: Viewport,
         cookie_jar: Option<CookieJarHandle>,
     ) -> Self {
@@ -104,7 +103,7 @@ impl Tab {
             id: TabId::new(),
             zone_id,
             state: TabState::Idle,
-            context: BrowsingContext::new(runtime),
+            context: BrowsingContext::new(),
 
             favicon: vec![],              // Placeholder for favicon data
             title: "New Tab".to_string(), // Title of the new tab

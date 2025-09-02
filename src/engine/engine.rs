@@ -43,6 +43,7 @@ use crate::tab::services::resolve_tab_services;
 /// ```
 pub struct GosubEngine {
     /// Configuration for the whole engine.
+    #[allow(unused)]
     config: Arc<EngineConfig>,
     /// Active render backend for the engine.
     backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
@@ -128,7 +129,7 @@ impl GosubEngine {
         match zc {
             ZoneCommand::SetTitle { zone_id, title, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone_by_id(zone_id)?;
+                    let z = self.zone_by_id(zone_id)?;
                     z.set_title(&title);
                     Ok(())
                 })();
@@ -136,7 +137,7 @@ impl GosubEngine {
             }
             ZoneCommand::SetDescription { zone_id, description, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone_by_id(zone_id)?;
+                    let z = self.zone_by_id(zone_id)?;
                     z.set_description(&description);
                     Ok(())
                 })();
@@ -144,7 +145,7 @@ impl GosubEngine {
             }
             ZoneCommand::SetIcon { zone_id, icon, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone_by_id(zone_id)?;
+                    let z = self.zone_by_id(zone_id)?;
                     z.set_icon(icon);
                     Ok(())
                 })();
@@ -152,14 +153,18 @@ impl GosubEngine {
             }
             ZoneCommand::SetColor { zone_id, color, reply } => {
                 let res = (|| -> Result<()> {
-                    let mut z = self.zone_by_id(zone_id)?;
+                    let z = self.zone_by_id(zone_id)?;
                     z.set_color(color);
                     Ok(())
                 })();
                 let _ = reply.send(res);
             }
-            ZoneCommand::CreateTab { zone_id, title, viewport, url, reply } => {
-                let res = self.create_tab_in_zone(zone_id, title, viewport, url).await;
+            ZoneCommand::CreateTab { zone_id, initial, overrides, reply } => {
+                let res = match self.create_tab_in_zone(zone_id, initial, overrides).await {
+                    Ok(res) => Ok(res),
+                    Err(e) => Err(EngineError::CreateTab(e.to_string()))
+                };
+
                 let _ = reply.send(res);
             }
             ZoneCommand::CloseTab { zone_id, tab_id, reply } => {
@@ -223,21 +228,13 @@ impl GosubEngine {
 
     async fn create_tab_in_zone(
         &self,
-        zone_handle: ZoneHandle,
+        zone_id: ZoneId,
         initial: TabDefaults,
         overrides: Option<TabOverrides>,
     ) -> Result<TabHandle, EngineError> {
-        let zone = self
-            .zones
-            .read().unwrap()
-            .get(&zone_handle.zone_id())
-            .cloned()
-            .ok_or(EngineError::ZoneNotFound)?;
-
-        let eff: EffectiveTabServices = resolve_tab_services(zone_handle.zone_id(), &zone.services(), &overrides.unwrap_or_default());
-
-        // This calls Zone::create_tab(..) which does the spawn + ack oneshot internally
-        zone.create_tab(eff, &initial).await
+        let zone = self.zone_by_id(zone_id)?;
+        let eff: EffectiveTabServices = resolve_tab_services(zone_id, &zone.services(), &overrides.unwrap_or_default());
+        zone.create_tab(eff, initial).await
     }
 }
 

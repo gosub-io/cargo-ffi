@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use crate::engine::events::EngineCommand;
 use crate::render::backend::RenderBackend;
 
+#[allow(unused)]
 #[derive(Clone)]
 pub struct EngineHandle {
     /// Engine-wide command sender (for e.g. shutdown, logging, etc.)
@@ -21,6 +22,7 @@ impl std::fmt::Debug for EngineHandle {
     }
 }
 
+#[allow(unused)]
 impl EngineHandle {
     pub fn new(
         cmd_tx: Sender<EngineCommand>,

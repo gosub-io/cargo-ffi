@@ -70,7 +70,7 @@ mod tests {
             // (No actual Set-Cookie here; we’re just ensuring it is writable without panicking)
         }
         // second handle should still be valid
-        let _ = b.read();
+        drop(b.read());
     }
 
     #[test]

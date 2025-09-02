@@ -91,7 +91,7 @@ impl Default for ZoneConfig {
             font_scale: 1.0,
             default_font_family: None,
             default_font_size: 16,
-            minimum_font_size: 16,
+            minimum_font_size: 0,
             enable_local_file_access: false,
             partition_policy: PartitionPolicy::TopLevelOrigin,
         }

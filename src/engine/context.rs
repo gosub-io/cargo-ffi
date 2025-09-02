@@ -3,7 +3,6 @@ use crate::net::{fetch, Response};
 use crate::render::{Color, DisplayItem, RenderList, Viewport};
 use std::sync::Arc;
 use http::header::CONTENT_TYPE;
-use tokio::runtime::Runtime;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -29,8 +28,8 @@ pub struct BrowsingContext {
     /// True when the tab has failed loading (mostly net issues)
     failed: bool,
 
-    /// Tokio runtime for async operations
-    runtime: Arc<Runtime>,
+    // Tokio runtime for async operations
+    // runtime: Arc<Runtime>,
 
     /// Storage handles for local and session storage
     storage: Option<StorageHandles>,
@@ -54,11 +53,10 @@ pub struct BrowsingContext {
 
 impl BrowsingContext {
     /// Creates a new runtime browsing context.
-    pub(crate) fn new(runtime: Arc<Runtime>) -> BrowsingContext {
+    pub(crate) fn new() -> BrowsingContext {
         Self {
             current_url: None,
             raw_html: String::new(),
-            runtime,
             failed: false,
             storage: None, // Default no storage unless binding manually by a tab
             render_list: RenderList::new(),
@@ -246,16 +244,6 @@ fn decode_response_body(headers: &http::HeaderMap, body: &[u8]) -> String {
 mod tests {
     use super::*;
     use tokio_util::sync::CancellationToken;
-    use tokio::runtime::Builder;
-
-    fn test_runtime() -> Arc<Runtime> {
-        Arc::new(
-            Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("test runtime"),
-        )
-    }
 
     fn list_texts(ctx: &BrowsingContext) -> Vec<String> {
         let mut out = Vec::new();
@@ -269,8 +257,7 @@ mod tests {
 
     #[test]
     fn set_raw_html_marks_dirty_and_builds_scene() {
-        let rt = test_runtime();
-        let mut ctx = BrowsingContext::new(rt);
+        let mut ctx = BrowsingContext::new();
 
         // initially nothing rendered
         assert_eq!(ctx.scene_epoch(), 0);
@@ -293,8 +280,7 @@ mod tests {
 
     #[test]
     fn changing_viewport_invalidates_render() {
-        let rt = test_runtime();
-        let mut ctx = BrowsingContext::new(rt);
+        let mut ctx = BrowsingContext::new();
 
         ctx.set_raw_html("hi");
         ctx.rebuild_render_list_if_needed();
@@ -309,8 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_cancel_sets_failed_and_error_stub() {
-        let rt = test_runtime();
-        let mut ctx = BrowsingContext::new(rt.clone());
+        let mut ctx = BrowsingContext::new();
 
         let url = Url::parse("https://example.com/").unwrap();
         let cancel = CancellationToken::new();
@@ -361,8 +346,7 @@ mod tests {
     // Optional: a smoke test that current_url tracks what we set
     #[test]
     fn current_url_starts_none_and_is_set_by_callers() {
-        let rt = test_runtime();
-        let mut ctx = BrowsingContext::new(rt);
+        let mut ctx = BrowsingContext::new();
         assert!(ctx.current_url().is_none());
         // Simulate a caller updating it (load sets it internally; we avoid network here)
         let _url = Url::parse("https://example.com/").unwrap();

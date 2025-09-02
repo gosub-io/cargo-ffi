@@ -2,9 +2,8 @@ use anyhow::Result;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 use crate::engine::events::{EngineCommand, ZoneCommand};
-
-use crate::render::Viewport;
-use crate::tab::{TabHandle, TabId};
+use crate::EngineError;
+use crate::tab::{TabDefaults, TabHandle, TabId, TabOverrides};
 use crate::zone::ZoneId;
 
 #[derive(Clone)]
@@ -60,16 +59,20 @@ impl ZoneHandle {
         rx.await?
     }
 
-    pub async fn create_tab(&self, title: impl Into<String>, viewport: Viewport) -> Result<TabHandle> {
-        let (tx, rx) = oneshot::channel();
+    pub async fn create_tab(&self, initial: TabDefaults, overrides: Option<TabOverrides>) -> Result<TabHandle, EngineError> {
+        let (tx, rx) = oneshot::channel::<Result<TabHandle, EngineError>>();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::CreateTab {
             zone_id: self.zone_id,
-            title: Some(title.into()),
-            viewport: Some(viewport),
-            url: None,
+            initial,
+            overrides,
             reply: tx,
-        })).await?;
-        rx.await?
+        })).await
+            .map_err(|_| EngineError::ChannelClosed)?;
+
+        match rx.await {
+            Ok(res) => res,
+            Err(e) => Err(EngineError::CreateTab(e.to_string()))
+        }
     }
 
     pub async fn close_tab(&self, tab_id: TabId) -> Result<()> {

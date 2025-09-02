@@ -1,4 +1,5 @@
 use url::{Origin, Url};
+use uuid::Uuid;
 use crate::zone::ZoneId;
 
 /// Partitioning key (future-proof for state partitioning).
@@ -17,6 +18,11 @@ impl Default for PartitionKey {
 }
 
 impl PartitionKey {
+    pub fn random() -> Self {
+        let random = Uuid::new_v4();
+        Self::from_str(&random.to_string())
+    }
+
     /// Creates a new `PartitionKey` from a URL string.
     pub fn from_str(s: &str) -> Self {
         if s.is_empty() {

@@ -15,6 +15,9 @@ use crate::tab::worker::TabWorker;
 
 pub use options::TabDefaults;
 pub use options::TabOverrides;
+pub use options::TabCookieJar;
+pub use options::TabCacheMode;
+pub use options::TabStorageScope;
 pub use structs::EffectiveTabServices;
 
 
