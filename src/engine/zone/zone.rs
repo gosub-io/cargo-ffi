@@ -1,7 +1,5 @@
 use crate::engine::cookies::CookieJarHandle;
-use crate::engine::storage::{
-    PartitionKey, StorageArea, StorageService, Subscription,
-};
+use crate::engine::storage::{StorageService, Subscription};
 use crate::engine::tab::TabId;
 use crate::EngineError;
 use rand::rngs::StdRng;
@@ -9,7 +7,7 @@ use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot, mpsc};
 use tokio::task::JoinHandle;
@@ -17,6 +15,7 @@ use tokio::time::timeout;
 use uuid::Uuid;
 use crate::cookies::CookieStoreHandle;
 use crate::engine::DEFAULT_CHANNEL_CAPACITY;
+use crate::engine::engine::SharedEngineState;
 use crate::engine::events::EngineEvent;
 use crate::events::TabCommand;
 use crate::storage::types::PartitionPolicy;
@@ -117,7 +116,57 @@ pub struct ZoneServices {
     // pub backend: Arc<dyn RenderBackend + Send + Sync>,
 }
 
-pub struct ZoneState {
+// pub struct ZoneState {
+//     /// Configuration for the zone (like max tabs allowed)
+//     config: ZoneConfig,
+//     /// Title of the zone (ie: Home, Work)
+//     pub title: String,
+//     /// Icon of the zone (could be a base64 encoded image)
+//     pub icon: Vec<u8>,
+//     /// Description of the zone
+//     pub description: String,
+//     /// Tab color (RGBA)
+//     pub color: [u8; 4],
+// }
+
+
+// pub struct SharedZoneState {
+//     pub shared_flags: SharedFlags,
+// }
+
+// Things that the tab shares with the zone (or anyone else)
+pub struct SharedTabState {
+    cmd_tx: mpsc::Sender<TabCommand>,
+}
+
+// Things that the Zone shares with the Tab
+pub struct ZoneSharedTabState {
+    /// Zone services (storage, cookies, etc)
+    services: ZoneServices,
+    /// Subscription for session storage changes
+    storage_rx: Subscription,
+    /// Flags controlling which data is shared with other zones.
+    pub shared_flags: SharedFlags,
+    /// Event channel to send events back to the UI
+    event_tx: broadcast::Sender<EngineEvent>,
+}
+
+// Things that the zone shares with the engine (or anyone else)
+pub struct ZoneSharedEngineState {
+    metrics: bool,
+}
+
+/// This is the zone structure, which contains tabs and shared services. It is only known to the engine
+/// and can be controlled by the user via the engine API.
+pub struct Zone {
+    pub shared_engine: SharedEngineState,
+    pub zone_shared_engine: Arc<ZoneSharedEngineState>,
+    pub shared_tabs: Arc<ZoneSharedTabState>,
+    /// ID of the zone
+    pub id: ZoneId,
+    // List of tabs
+    tabs: HashMap<TabId, Arc<SharedTabState>>,
+
     /// Configuration for the zone (like max tabs allowed)
     config: ZoneConfig,
     /// Title of the zone (ie: Home, Work)
@@ -130,36 +179,15 @@ pub struct ZoneState {
     pub color: [u8; 4],
 }
 
-/// This is the zone structure, which contains tabs and shared services. It is only known to the engine
-/// and can be controlled by the user via the engine API.
-pub struct Zone {
-    /// ID of the zone
-    pub id: ZoneId,
-    // List of tabs
-    tabs: RwLock<HashMap<TabId, TabRecord>>,
-    /// Zone services (storage, cookies, etc)
-    services: ZoneServices,
-    /// Subscription for session storage changes
-    storage_rx: Subscription,
-    /// Flags controlling which data is shared with other zones.
-    pub shared_flags: SharedFlags,
-    /// Event channel to send events back to the UI
-    event_tx: broadcast::Sender<EngineEvent>,
-    // Mutable state
-    state: RwLock<ZoneState>,
-}
-
 impl Debug for Zone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.read().expect("state read lock");
         f.debug_struct("Zone")
             .field("id", &self.id)
-            .field("title", &state.title)
-            .field("description", &state.description)
-            .field("color", &state.color)
-            .field("config", &state.config)
-            .field("tabs", &self.tabs.read().unwrap().keys().collect::<Vec<_>>())
-            .field("shared_flags", &self.shared_flags)
+            .field("title", &self.title)
+            .field("description", &self.description)
+            .field("color", &self.color)
+            .field("config", &self.config)
+            .field("shared_flags", &self.shared_tabs.shared_flags)
             .finish()
     }
 }
@@ -188,6 +216,7 @@ impl Zone {
         services: ZoneServices,
         // Event channel to send events back to the UI
         event_tx: broadcast::Sender<EngineEvent>,
+        shared_engine: SharedEngineState,
     ) -> Self {
         // We generate the color by using the zone id as a seed
         let mut rng = StdRng::seed_from_u64(zone_id.0.as_u64_pair().0);
@@ -201,26 +230,28 @@ impl Zone {
         let storage_rx = services.storage.subscribe();
 
         let zone = Self {
-            id: zone_id,
-            state: RwLock::new(ZoneState{
-                title: "Untitled Zone".to_string(),
-                icon: vec![],
-                description: "".to_string(),
-                color: random_color,
-                config,
+            shared_engine,
+            zone_shared_engine: Arc::new(ZoneSharedEngineState {
+                metrics: false,
             }),
-            tabs:  RwLock::new(HashMap::new()),
-
-            services: services.clone(),
-            storage_rx,
-
-            shared_flags: SharedFlags {
-                share_autocomplete: false,
-                share_bookmarks: false,
-                share_passwords: false,
-                share_cookiejar: false,
-            },
-            event_tx,
+            shared_tabs: Arc::new(ZoneSharedTabState {
+                services,
+                storage_rx,
+                shared_flags: SharedFlags {
+                    share_autocomplete: false,
+                    share_bookmarks: false,
+                    share_passwords: false,
+                    share_cookiejar: false,
+                },
+                event_tx,
+            }),
+            id: zone_id,
+            tabs: HashMap::new(),
+            title: "Untitled Zone".to_string(),
+            icon: vec![],
+            description: "".to_string(),
+            color: random_color,
+            config,
         };
 
         zone.spawn_storage_forward();
@@ -232,36 +263,37 @@ impl Zone {
         config: ZoneConfig,
         services: ZoneServices,
         event_tx: broadcast::Sender<EngineEvent>,
+        shared_engine: SharedEngineState,
     ) -> Self {
-        Self::new_with_id(ZoneId::new(), config, services, event_tx)
+        Self::new_with_id(ZoneId::new(), config, services, event_tx, shared_engine)
     }
 
     /// Sets the title of the zone
-    pub fn set_title(&self, title: &str) {
-        self.state.write().expect("state write lock").title = title.to_string();
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
     }
 
     /// Sets the icon of the zone
-    pub fn set_icon(&self, icon: Vec<u8>) {
-        self.state.write().expect("state write lock").icon = icon;
+    pub fn set_icon(&mut self, icon: Vec<u8>) {
+        self.icon = icon;
     }
 
     /// Sets the description of the zone
-    pub fn set_description(&self, description: &str) {
-        self.state.write().expect("state write lock").description = description.to_string();
+    pub fn set_description(&mut self, description: impl Into<String>) {
+        self.description = description.into();
     }
 
     /// Sets the color of the zone (RGBA)
-    pub fn set_color(&self, color: [u8; 4]) {
-        self.state.write().expect("state write lock").color = color;
+    pub fn set_color(&mut self, color: [u8; 4]) {
+        self.color = color;
     }
 
-    /// Returns the services available to tabs within this zone
-    pub fn services(&self) -> ZoneServices { self.services.clone() }
+    // /// Returns the services available to tabs within this zone
+    // pub fn services(&self) -> ZoneServices { self.services.clone() }
 
     /// This function does the actual creation of the tab
-    pub(crate) async fn create_tab(&self, tab_services: EffectiveTabServices, initial: TabDefaults) -> Result<TabHandle, EngineError> {
-        if self.tabs.read().unwrap().len() >= self.state.read().expect("state read lock").config.max_tabs {
+    pub(crate) async fn create_tab(&mut self, tab_services: EffectiveTabServices, initial: TabDefaults) -> Result<TabHandle, EngineError> {
+        if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
@@ -274,24 +306,34 @@ impl Zone {
         let tab_args = TabSpawnArgs {
             tab_id,
             cmd_rx: tab_cmd_rx,
-            event_tx: self.event_tx.clone(),
+            event_tx: self.shared_tabs.event_tx.clone(),
             services: tab_services,
         };
+
+        // We need to create tab here...
+        //                 TabRecord {
+        //                         id: tab_id,
+        //                         title,
+        //                         cmd_tx: tab_cmd_tx.clone(),
+        //                         join: Some(join),
+        //                     },
+        // @TODO: fix this later
+        // let tab = Tab::new(tab_cmd_tx)
+        // tab.shared.tab_rx
+
+        let tab: Tab = todo!();
+
         let join = spawn_tab_task(tab_args, ack_tx);
 
         match timeout(TAB_CREATION_TIMEOUT, ack_rx).await {
             Ok(Ok(Ok(()))) => {
                 let title = initial.clone().title.unwrap_or_else(|| "New Tab".to_string());
-                let mut tabs = self.tabs.write().unwrap();
-                tabs.insert(
+                self.tabs.insert(
                     tab_id,
-                    TabRecord {
-                        id: tab_id,
-                        title,
-                        cmd_tx: tab_cmd_tx.clone(),
-                        join: Some(join),
-                    },
+                    tab.shared_state.clone(),
                 );
+
+                self.shared_tabs.event_tx.send(EngineEvent::TabCreated { tab_id, zone_id: self.id }).unwrap();
                 Ok(TabHandle::new(tab_id, tab_cmd_tx.clone()))
             }
             Ok(Ok(Err(e))) => {
@@ -309,32 +351,32 @@ impl Zone {
         }
     }
 
-    /// Get the shared localStorage area for this (zone × partition × origin).
-    #[allow(unused)]
-    pub fn local_area(
-        &self,
-        pk: &PartitionKey,
-        origin: &url::Origin,
-    ) -> anyhow::Result<Arc<dyn StorageArea>> {
-        self.services.storage.local_for(self.id, pk, origin)
-    }
+    // /// Get the shared localStorage area for this (zone × partition × origin).
+    // #[allow(unused)]
+    // pub fn local_area(
+    //     &self,
+    //     pk: &PartitionKey,
+    //     origin: &url::Origin,
+    // ) -> anyhow::Result<Arc<dyn StorageArea>> {
+    //     self.services.storage.local_for(self.id, pk, origin)
+    // }
 
-    /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
-    #[allow(unused)]
-    pub fn session_area(
-        &self,
-        tab: TabId,
-        pk: &PartitionKey,
-        origin: &url::Origin,
-    ) -> anyhow::Result<Arc<dyn StorageArea>> {
-        self.services.storage.session_for(self.id, tab, pk, origin)
-    }
+    // /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
+    // #[allow(unused)]
+    // pub fn session_area(
+    //     &self,
+    //     tab: TabId,
+    //     pk: &PartitionKey,
+    //     origin: &url::Origin,
+    // ) -> anyhow::Result<Arc<dyn StorageArea>> {
+    //     self.services.storage.session_for(self.id, tab, pk, origin)
+    // }
 
 
     /// Forwards storage events from the storage service to the engine event channel.
     fn spawn_storage_forward(&self) {
-        let mut rx = self.storage_rx.resubscribe();
-        let tx = self.event_tx.clone();
+        let mut rx = self.shared_tabs.storage_rx.resubscribe();
+        let tx = self.shared_tabs.event_tx.clone();
         let zone_id = self.id;
 
         tokio::spawn(async move {
@@ -352,12 +394,13 @@ impl Zone {
     }
 
     /// Closes a tab.
-    pub fn close_tab(&self, tab_id: TabId) -> bool {
-        if let Some(rec) = self.tabs.write().unwrap().remove(&tab_id) {
+    pub fn close_tab(&mut self, tab_id: TabId) -> bool {
+        if let Some(_) = self.tabs.remove(&tab_id) {
             // Drop the command channel to signal the tab to close
-            drop(rec.cmd_tx);
+            // drop(shared_state.cmd_tx);
+
             // Also disconnect the session storage for this tab
-            self.services.storage.drop_tab(self.id, tab_id);
+            self.shared_tabs.services.storage.drop_tab(self.id, tab_id);
             true
         } else {
             false
@@ -365,7 +408,7 @@ impl Zone {
     }
 
     pub fn list_tabs(&self) -> Vec<TabId> {
-        self.tabs.read().unwrap().keys().cloned().collect()
+        self.tabs.keys().cloned().collect()
     }
 
     // pub fn tab_title(&self, tab_id: TabId) -> Option<String> {

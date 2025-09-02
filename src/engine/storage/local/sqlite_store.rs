@@ -67,6 +67,7 @@ impl LocalStore for SqliteLocalStore {
             partition: match part {
                 PartitionKey::None => "".to_string(),
                 PartitionKey::TopLevel(o) => format!("top:{}", o.ascii_serialization()),
+                PartitionKey::Custom(s) => s.to_string(),
             },
             origin: origin.ascii_serialization(),
         }))

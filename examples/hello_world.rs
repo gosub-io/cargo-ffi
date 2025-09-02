@@ -11,7 +11,7 @@ use gosub_engine::{
 };
 
 use std::sync::Arc;
-use gosub_engine::events::{MouseButton, TabCommand};
+use gosub_engine::events::{EngineCommand, MouseButton, TabCommand, ZoneCommand};
 use gosub_engine::storage::PartitionKey;
 use gosub_engine::tab::{TabCacheMode, TabCookieJar, TabDefaults, TabOverrides, TabStorageScope};
 
@@ -25,7 +25,7 @@ async fn main() -> Result<(), EngineError> {
     let engine_cfg = EngineConfig::builder()
         .max_zones(5)
         .build().expect("Configuration is not valid")
-    ;
+        ;
 
     // Set up a render backend. In this example we use the NullBackend which does not render
     // anything.
@@ -44,7 +44,7 @@ async fn main() -> Result<(), EngineError> {
         .do_not_track(true)
         .accept_languages("fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
         .build().expect("ZoneConfig is not valid")
-    ;
+        ;
 
     // Create the services for this zone. These services are automatically provided to the tabs
     // created in the zone, but can be overridden on a per-tab basis if needed.
@@ -61,7 +61,35 @@ async fn main() -> Result<(), EngineError> {
     // Create the zone. Note that we can define our own zone ID to keep zones deterministic
     // (like a user profile), and we give the zone handle to the event channel so we can
     // receive events related to the zone.
-    let zone_handle = engine_handle.create_zone(zone_cfg, zone_services, None).await?;
+    let mut zone = engine_handle.create_zone(zone_cfg, zone_services, None)?;
+
+    // struct ZoneSharedState {
+    //     localstorage: Arc<InMemoryLocalStore>,
+    //     sessionstorage: Arc<InMemorySessionStore>,
+    //     event_tx: Sender<EngineEvent>,
+    // }
+    //
+    // struct Zone {
+    //     description: String,
+    //     shared: Arc<ZoneSharedState>,
+    // }
+    //
+    // impl GosubEngine {
+    //     fn create_zone(&self, services: ZoneServices) -> Zone {
+    //         let zone = Zone::new(self.shared_engine: state, services);
+    //         self.zones.insert(zone.id(), Arc::clone(zone.shared_state()));
+    //         zone
+    //     }
+    // }
+    //
+    //
+    // impl Zone {
+    //     fn create_tab(&self, def_values: TabDefaults) -> Tab {
+    //         let tab = Tab::new(self.shared.clone(), def_values);
+    //         self.tabs.insert(tab.id(), Arc::clone(tab.shared_state()));
+    //         tab
+    //     }
+    // }
 
     // Next, we create a tab in the zone. For now, we don't provide anything, but we should
     // be able to provide tab-specific services (like a different cookie jar, etc).
@@ -71,20 +99,22 @@ async fn main() -> Result<(), EngineError> {
         viewport: Some(Viewport::new(0, 0, 800, 600)),
     };
     println!("User: zone_handle.create_tab");
-    let tab_handle = zone_handle.create_tab(def_values, None).await.expect("cannot create tab");
+    let mut tab = zone.create_tab(def_values, None).await.expect("cannot create tab");
     println!("User: zone_handle.create_tab completed");
 
     // From the tab handle, we can now send commands to the engine to control the tab.
-    tab_handle.send(TabCommand::Resize{width: 1024, height: 768}).await?;
+    tab.send(TabCommand::Resize{width: 1024, height: 768}).await?;
 
     // Navigate somewhere
-    tab_handle.send(TabCommand::Navigate{url: "https://gosub.io".into()}).await?;
+    tab.send(TabCommand::Navigate{url: "https://gosub.io".into()}).await?;
 
     // Simulate a little user input (mouse move + click at 100,100)
-    tab_handle.send(TabCommand::MouseMove { x: 100.0, y: 100.0 }).await?;
-    tab_handle.send(TabCommand::MouseDown { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
-    tab_handle.send(TabCommand::MouseUp { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
+    tab.send(TabCommand::MouseMove { x: 100.0, y: 100.0 }).await?;
+    tab.send(TabCommand::MouseDown { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
+    tab.send(TabCommand::MouseUp { x: 100.0, y: 100.0, button: MouseButton::Left }).await?;
 
+    zone.set_description("This is the new description");
+    zone.set_color(Color::Black);
 
     // Open a private tab inside the zone. Note that we override some of the tab options to
     // make it private (ephemeral storage, cookie jar, cache, etc). We also set an initial URL that
@@ -95,7 +125,7 @@ async fn main() -> Result<(), EngineError> {
         viewport: Some(Viewport::new(0, 0, 800, 600)),
     };
 
-    let _private_tab_handle = zone_handle.create_tab(def_values, Some(TabOverrides {
+    let _private_tab_handle = zone.create_tab(def_values, Some(TabOverrides {
         partition_key: Some(PartitionKey::random()),
         cookie_jar: TabCookieJar::Ephemeral,
         storage_scope: TabStorageScope::Ephemeral,
@@ -116,6 +146,7 @@ async fn main() -> Result<(), EngineError> {
             //     println!("[event] ZoneCreated: {zone}");
             // }
             EngineEvent::TabCreated { tab_id, .. } => {
+                let tab = self.tabs.get(&tab_id).expect("Unknown tab");
                 println!("[event] TabCreated: {tab_id:?}");
             }
             EngineEvent::LoadStarted { tab_id, url } => {

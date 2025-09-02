@@ -34,6 +34,7 @@ impl SessionStore for InMemorySessionStore {
             match part {
                 PartitionKey::None => "".to_string(),
                 PartitionKey::TopLevel(o) => format!("top:{}", o.ascii_serialization()),
+                PartitionKey::Custom(s) => s.to_string(),
             },
             origin.ascii_serialization(),
         );

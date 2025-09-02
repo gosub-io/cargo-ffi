@@ -7,7 +7,7 @@ use crate::EngineError;
 use crate::render::backend::ExternalHandle;
 use crate::storage::event::StorageScope;
 use crate::tab::{TabDefaults, TabHandle, TabId, TabOverrides};
-use crate::zone::{ZoneConfig, ZoneHandle, ZoneId, ZoneServices};
+use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices};
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone)]
@@ -200,7 +200,7 @@ pub enum EngineCommand {
         services: ZoneServices,
         zone_id: Option<ZoneId>,
         event_tx: broadcast::Sender<EngineEvent>,
-        reply: oneshot::Sender<anyhow::Result<ZoneHandle, EngineError>>
+        reply: oneshot::Sender<anyhow::Result<Zone, EngineError>>
     },
     /// Destroy a zone
     DestroyZone{
@@ -209,7 +209,7 @@ pub enum EngineCommand {
     },
 
     /// Send a command to a specific zone
-    Zone(ZoneCommand),
+    // Zone(ZoneCommand),
 
     // ** Debug / devtools
     /// Enable logging

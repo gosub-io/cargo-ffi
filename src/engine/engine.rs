@@ -1,35 +1,38 @@
 use std::collections::HashMap;
 use crate::render::backend::RenderBackend;
-use crate::zone::{Zone, ZoneConfig, ZoneHandle, ZoneId, ZoneServices};
+use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices, ZoneSharedEngineState};
 use crate::{EngineConfig, EngineError};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, broadcast};
-use crate::engine::events::{EngineCommand, EngineEvent, ZoneCommand};
+use crate::engine::events::{EngineCommand, EngineEvent};
 use anyhow::Result;
 use tokio::task::JoinHandle;
 use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 use crate::engine::handle::EngineHandle;
-use crate::tab::{EffectiveTabServices, TabDefaults, TabHandle, TabOverrides};
-use crate::tab::services::resolve_tab_services;
 
 #[allow(unused)]
 pub struct GosubEngine {
+    shared: SharedEngineState,
     /// Configuration for the whole engine.
     config: Arc<EngineConfig>,
-    /// Active render backend for the engine.
-    backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
     /// Zones managed by this engine, indexed by [`ZoneId`].
-    zones: RwLock<HashMap<ZoneId, Arc<Zone>>>,
+    zones: HashMap<ZoneId, Arc<ZoneSharedEngineState>>,
     // /// Command sender (cloned into handles).
     cmd_tx: mpsc::Sender<EngineCommand>,
     /// Command receiver (owned by the engine run loop).
     cmd_rx: mpsc::Receiver<EngineCommand>,
-    /// Event sender
-    event_tx: broadcast::Sender<EngineEvent>,
     /// Is the engine running?
     running: bool,
     /// Join handle when the event loop is spawned
-    join_handle: Option<tokio::task::JoinHandle<()>>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+pub struct SharedEngineState {
+    /// Active render backend for the engine.
+    backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
+    /// Event sender
+    event_tx: broadcast::Sender<EngineEvent>,
 }
 
 impl GosubEngine {
@@ -52,12 +55,14 @@ impl GosubEngine {
         let (event_tx, _first_rx) = broadcast::channel::<EngineEvent>(DEFAULT_CHANNEL_CAPACITY);
 
         Self {
+            shared : SharedEngineState {
+                backend: Arc::new(RwLock::new(backend)),
+                event_tx: event_tx.clone(),
+            },
             config: Arc::new(resolved_config),
-            backend: Arc::new(RwLock::new(backend)),
-            zones: RwLock::new(HashMap::new()),
+            zones: HashMap::new(),
             cmd_tx,
             cmd_rx,
-            event_tx,
             running: false,
             join_handle: None,
         }
@@ -81,7 +86,7 @@ impl GosubEngine {
             return Err(EngineError::AlreadyRunning);
         }
 
-        let engine_handle = EngineHandle::new(self.cmd_tx.clone(), self.event_tx.clone(), self.backend.clone());
+        let engine_handle = EngineHandle::new(self.cmd_tx.clone(), self.shared.event_tx.clone(), self.shared.backend.clone());
         let join_handle = tokio::spawn(self.run());
 
         Ok((engine_handle, join_handle))
@@ -91,18 +96,18 @@ impl GosubEngine {
     /// Replace the active render backend.
     pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
         {
-            let binding = self.backend.read().unwrap();
+            let binding = self.shared.backend.read().unwrap();
             let old_name = binding.name();
-            let _ = self.event_tx.send(EngineEvent::BackendChanged { old: old_name.to_string(), new: new_backend.name().to_string() });
+            let _ = self.shared.event_tx.send(EngineEvent::BackendChanged { old: old_name.to_string(), new: new_backend.name().to_string() });
         }
 
-        self.backend = Arc::new(RwLock::new(new_backend));
+        self.shared.backend = Arc::new(RwLock::new(new_backend));
     }
 
     /// Get a clone of the engine’s command sender (mainly for testing or
     /// custom handles).
     #[cfg(test)]
-    fn command_sender(&self) -> Sender<EngineCommand> {
+    fn command_sender(&self) -> mpsc::Sender<EngineCommand> {
         self.cmd_tx.clone()
     }
 
@@ -114,21 +119,31 @@ impl GosubEngine {
     pub async fn run(mut self) {
         self.running = true;
 
-        let _ = self.event_tx.send(EngineEvent::EngineStarted);
+        let _ = self.shared.event_tx.send(EngineEvent::EngineStarted);
 
-        println!("Run() is started!");
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
-                EngineCommand::Shutdown { reply } => {
-                    let res = self.shutdown_impl().await;
-                    let _ = reply.send(res);
-                    break;
+                // EngineCommand::Shutdown { reply } => {
+                //     let res = self.shutdown_impl().await;
+                //     let _ = reply.send(res);
+                //     break;
+                // }
+                // EngineCommand::CreateZone { config, services, zone_id, event_tx, reply  } => {
+                //     match self.create_zone(config, services, zone_id, event_tx) {
+                //         Ok(zone_handle) => {
+                //             let _ = reply.send(Ok(zone));
+                //         }
+                //         Err(e) => {
+                //             let _ = reply.send(Err(EngineError::CreateZone(e)));
+                //         }
+                //     }
+                // },
+                // EngineCommand::Zone(zc) => self.handle_zone_command(zc).await.unwrap(),
+                _ => {
+                    unimplemented!("unhandled engine command: {:?}", cmd);
                 }
-                EngineCommand::Zone(zc) => self.handle_zone_command(zc).await.unwrap(),
-                _ => { /* engine-level commands can be handled here in the future */ }
             }
         }
-        println!("Run() is ending!");
     }
 
     pub async fn shutdown_impl(&mut self) -> Result<(), EngineError> {
@@ -160,7 +175,7 @@ impl GosubEngine {
         //     while let Some(_res) = joins.join_next().await {}
         // }).await;
         //
-        // // Flush any outstanding cookies, storage etc
+        // // Flush any outstanding cookies, storage etc.
         // self.flush_persistence();
 
         Ok(())
@@ -182,74 +197,71 @@ impl GosubEngine {
     ///
     /// Locks are held only for short, non-`await`ing critical sections to avoid
     /// holding a mutex across `.await`.
-    async fn handle_zone_command(&mut self, zc: ZoneCommand) -> Result<()> {
-        match zc {
-            ZoneCommand::SetTitle { zone_id, title, reply } => {
-                let res = (|| -> Result<()> {
-                    let z = self.zone_by_id(zone_id)?;
-                    z.set_title(&title);
-                    Ok(())
-                })();
-                let _ = reply.send(res);
-            }
-            ZoneCommand::SetDescription { zone_id, description, reply } => {
-                let res = (|| -> Result<()> {
-                    let z = self.zone_by_id(zone_id)?;
-                    z.set_description(&description);
-                    Ok(())
-                })();
-                let _ = reply.send(res);
-            }
-            ZoneCommand::SetIcon { zone_id, icon, reply } => {
-                let res = (|| -> Result<()> {
-                    let z = self.zone_by_id(zone_id)?;
-                    z.set_icon(icon);
-                    Ok(())
-                })();
-                let _ = reply.send(res);
-            }
-            ZoneCommand::SetColor { zone_id, color, reply } => {
-                let res = (|| -> Result<()> {
-                    let z = self.zone_by_id(zone_id)?;
-                    z.set_color(color);
-                    Ok(())
-                })();
-                let _ = reply.send(res);
-            }
-            ZoneCommand::CreateTab { zone_id, initial, overrides, reply } => {
-                println!("Engine: calling self.create_tab_in_zone");
-                let res = match self.create_tab_in_zone(zone_id, initial, overrides).await {
-                    Ok(res) => Ok(res),
-                    Err(e) => Err(EngineError::CreateTab(e.into()))
-                };
-
-                println!("Engine: sending back reply");
-                let _ = reply.send(res);
-            }
-            ZoneCommand::CloseTab { zone_id, tab_id, reply } => {
-                let res = (|| -> Result<()> {
-                    let z = self.zone_by_id(zone_id)?;
-                    if z.close_tab(tab_id) { Ok(()) } else { anyhow::bail!("no such tab") }
-                })();
-                let _ = reply.send(res);
-            }
-            ZoneCommand::ListTabs { zone_id, reply } => {
-                let res = (|| -> Result<_> {
-                    let z = self.zone_by_id(zone_id)?;
-                    Ok(z.list_tabs())
-                })();
-                let _ = reply.send(res);
-            }
-            // ZoneCommand::TabTitle { zone, tab, reply } => {
-            //     let res = (|| -> Result<_> {
-            //         let z = self.zone_by_id(zone)?;
-            //         Ok(z.tab_title(tab))
-            //     })();
-            //     let _ = reply.send(res);
-            // }
-        }
-        Ok(())
-    }
+    // async fn handle_zone_command(&mut self, zc: ZoneCommand) -> Result<()> {
+    //     match zc {
+    //         ZoneCommand::SetTitle { zone_id, title, reply } => {
+    //             let res = (|| -> Result<()> {
+    //                 let z = self.zone_by_id(zone_id)?;
+    //                 z.set_title(&title);
+    //                 Ok(())
+    //             })();
+    //             let _ = reply.send(res);
+    //         }
+    //         ZoneCommand::SetDescription { zone_id, description, reply } => {
+    //             let res = (|| -> Result<()> {
+    //                 let z = self.zone_by_id(zone_id)?;
+    //                 z.set_description(&description);
+    //                 Ok(())
+    //             })();
+    //             let _ = reply.send(res);
+    //         }
+    //         ZoneCommand::SetIcon { zone_id, icon, reply } => {
+    //             let res = (|| -> Result<()> {
+    //                 let z = self.zone_by_id(zone_id)?;
+    //                 z.set_icon(icon);
+    //                 Ok(())
+    //             })();
+    //             let _ = reply.send(res);
+    //         }
+    //         ZoneCommand::SetColor { zone_id, color, reply } => {
+    //             let res = (|| -> Result<()> {
+    //                 let z = self.zone_by_id(zone_id)?;
+    //                 z.set_color(color);
+    //                 Ok(())
+    //             })();
+    //             let _ = reply.send(res);
+    //         }
+    //         ZoneCommand::CreateTab { zone_id, initial, overrides, reply } => {
+    //             let res = match self.create_tab_in_zone(zone_id, initial, overrides).await {
+    //                 Ok(res) => Ok(res),
+    //                 Err(e) => Err(EngineError::CreateTab(e.into()))
+    //             };
+    //             let _ = reply.send(res);
+    //         }
+    //         ZoneCommand::CloseTab { zone_id, tab_id, reply } => {
+    //             let res = (|| -> Result<()> {
+    //                 let z = self.zone_by_id(zone_id)?;
+    //                 if z.close_tab(tab_id) { Ok(()) } else { anyhow::bail!("no such tab") }
+    //             })();
+    //             let _ = reply.send(res);
+    //         }
+    //         ZoneCommand::ListTabs { zone_id, reply } => {
+    //             let res = (|| -> Result<_> {
+    //                 let z = self.zone_by_id(zone_id)?;
+    //                 Ok(z.list_tabs())
+    //             })();
+    //             let _ = reply.send(res);
+    //         }
+    //         // ZoneCommand::TabTitle { zone, tab, reply } => {
+    //         //     let res = (|| -> Result<_> {
+    //         //         let z = self.zone_by_id(zone)?;
+    //         //         Ok(z.tab_title(tab))
+    //         //     })();
+    //         //     let _ = reply.send(res);
+    //         // }
+    //     }
+    //     Ok(())
+    // }
 
     /// Create and register a new zone, returning a [`ZoneHandle`] for userland code.
     ///
@@ -261,40 +273,42 @@ impl GosubEngine {
     /// The returned handle contains the [`ZoneId`] and a clone of the engine’s
     /// command sender, allowing the caller to send zone commands without holding
     /// a reference to the engine.
-    pub fn create_zone(
+    fn create_zone(
         &mut self,
         config: ZoneConfig,
         services: ZoneServices,
         zone_id: Option<ZoneId>,
         event_tx: broadcast::Sender<EngineEvent>
-    ) -> Result<ZoneHandle> {
+    ) -> Result<Zone> {
         let zone = match zone_id {
-            Some(zone_id) => Zone::new_with_id(zone_id, config, services, event_tx.clone()),
-            None => Zone::new(config, services, event_tx.clone()),
+            Some(zone_id) => Zone::new_with_id(zone_id, config, services, event_tx.clone(), self.shared.clone()),
+            None => Zone::new(config, services, event_tx.clone(), self.shared.clone()),
         };
 
         let zone_id = zone.id;
-        self.zones.write().unwrap().insert(zone.id, Arc::new(zone));
+        self.zones.insert(zone.id, zone.zone_shared_engine.clone());
 
-        Ok(ZoneHandle::new(zone_id, self.cmd_tx.clone()))
+        event_tx.send(EngineEvent::ZoneCreated { zone_id })?;
+
+        Ok(zone)
     }
 
-    #[inline]
-    fn zone_by_id(&self, id: ZoneId) -> Result<Arc<Zone>, EngineError> {
-        let guard = self.zones.read().map_err(|_| EngineError::Poisoned)?;
-        guard.get(&id).cloned().ok_or(EngineError::ZoneNotFound)
-    }
+    // #[inline]
+    // fn zone_by_id(&self, id: ZoneId) -> Result<Arc<Zone>, EngineError> {
+    //     let guard = self.zones.read().map_err(|_| EngineError::Poisoned)?;
+    //     guard.get(&id).cloned().ok_or(EngineError::ZoneNotFound)
+    // }
 
-    async fn create_tab_in_zone(
-        &self,
-        zone_id: ZoneId,
-        initial: TabDefaults,
-        overrides: Option<TabOverrides>,
-    ) -> Result<TabHandle, EngineError> {
-        let zone = self.zone_by_id(zone_id)?;
-        let eff: EffectiveTabServices = resolve_tab_services(zone_id, &zone.services(), &overrides.unwrap_or_default());
-        zone.create_tab(eff, initial).await
-    }
+    // async fn create_tab_in_zone(
+    //     &self,
+    //     zone: &Zone,
+    //     initial: TabDefaults,
+    //     overrides: Option<TabOverrides>,
+    // ) -> Result<TabHandle, EngineError> {
+    //     // let zone = self.zone_by_id(zone_id)?;
+    //     let eff: EffectiveTabServices = resolve_tab_services(zone.id, &zone.services(), &overrides.unwrap_or_default());
+    //     zone.create_tab(eff, initial).await
+    // }
 }
 
 #[cfg(test)]
@@ -330,8 +344,8 @@ mod tests {
         };
 
         let cfg = ZoneConfig::default();
-        let handle = engine.create_zone(cfg, services, Some(zone_id), ev_tx).unwrap();
-        assert_eq!(handle.zone_id(), zone_id);
+        let zone = engine.create_zone(cfg, services, Some(zone_id), ev_tx).unwrap();
+        assert_eq!(zone.id, zone_id);
     }
 
     /// Demonstrate a handle call round-tripping through the engine’s command loop.
@@ -361,17 +375,17 @@ mod tests {
         };
 
         let cfg = ZoneConfig::default();
-        let zone_handle = engine.create_zone(cfg, services, None, ev_tx).unwrap();
+        let mut zone = engine.create_zone(cfg, services, None, ev_tx).unwrap();
 
         let engine_tx = engine.command_sender().clone();
 
         // call into zone_handle
-        zone_handle.set_title("Work".to_string()).await.unwrap();
+        zone.set_title("Work".to_string());
 
         // graceful shutdown
-        engine_tx.send(EngineCommand::Shutdown).await.unwrap();
+        engine_tx.send(EngineCommand::Shutdown("Normal shutdown")).await.unwrap();
 
         // wait for loop to end
-        engine_task.await.unwrap().unwrap();
+        engine_task.await.unwrap();
     }
 }

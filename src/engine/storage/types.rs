@@ -9,6 +9,8 @@ pub enum PartitionKey {
     None,
     /// Top-level partitioning key based on the origin of the URL.
     TopLevel(Origin),
+    /// Custom partition key
+    Custom(String)
 }
 
 impl Default for PartitionKey {
@@ -20,7 +22,7 @@ impl Default for PartitionKey {
 impl PartitionKey {
     pub fn random() -> Self {
         let random = Uuid::new_v4();
-        Self::from_str(&random.to_string())
+        PartitionKey::Custom(random.to_string())
     }
 
     /// Creates a new `PartitionKey` from a URL string.
@@ -28,7 +30,10 @@ impl PartitionKey {
         if s.is_empty() {
             PartitionKey::None
         } else {
-            let url = Url::parse(s).expect("valid URL for PartitionKey");
+            let Ok(url) = Url::parse(s) else {
+                return PartitionKey::Custom(s.to_string());
+            };
+
             PartitionKey::TopLevel(url.origin())
         }
     }

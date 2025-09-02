@@ -48,7 +48,7 @@ impl TabWorker {
     }
 
     pub async fn tick(&mut self) {
-        println!("Doing a tab tick()")
+        // println!("Doing a tab tick()")
     }
 }
 
