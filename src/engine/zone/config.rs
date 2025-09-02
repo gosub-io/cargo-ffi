@@ -59,7 +59,7 @@
 //! or `max_tabs == 0`).
 
 use std::fmt;
-use crate::storage::types::PartitionPolicy;
+use crate::storage::PartitionPolicy;
 
 #[derive(Debug, Clone)]
 pub struct ZoneConfig {

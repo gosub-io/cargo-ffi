@@ -5,8 +5,7 @@ use gosub_engine::{
     cookies::DefaultCookieJar,
     events::EngineEvent,
     render::Viewport,
-    storage::{InMemoryLocalStore, InMemorySessionStore, StorageService},
-    storage::types::PartitionPolicy,
+    storage::{InMemoryLocalStore, InMemorySessionStore, StorageService, PartitionPolicy},
     zone::ZoneConfig,
     zone::ZoneServices,
 };
@@ -18,6 +17,8 @@ use gosub_engine::tab::{TabCacheMode, TabCookieJar, TabDefaults, TabOverrides, T
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
+    console_subscriber::init();
+
     // Configure the engine through the engineconfig builder. This will setup the main runtime
     // configuration of the engine. It's possible for some values to be changed at runtime, but
     // not all of them
@@ -68,7 +69,9 @@ async fn main() -> Result<(), EngineError> {
         title: Some("New Tab".into()),
         viewport: Some(Viewport::new(0, 0, 800, 600)),
     };
+    println!("Creating a new tab...");
     let tab_handle = zone_handle.create_tab(def_values, None).await.expect("cannot create tab");
+    println!("Tab created: {:?}", tab_handle.id());
 
     // From the tab handle, we can now send commands to the engine to control the tab.
     tab_handle.send(TabCommand::Resize{width: 1024, height: 768}).await?;

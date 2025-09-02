@@ -242,8 +242,7 @@ impl GosubEngine {
 mod tests {
     use crate::cookies::DefaultCookieJar;
     use crate::render::backends::null::NullBackend;
-    use crate::storage::{InMemoryLocalStore, InMemorySessionStore, StorageService};
-    use crate::storage::types::PartitionPolicy;
+    use crate::storage::{InMemoryLocalStore, InMemorySessionStore, StorageService, PartitionPolicy};
     use super::*;
 
     /// Ensure `create_zone` returns a handle and registers the zone internally.

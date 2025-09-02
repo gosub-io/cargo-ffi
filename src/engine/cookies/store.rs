@@ -1,40 +1,100 @@
 //! Cookie store infrastructure.
 //!
-//! A **cookie store** is a provisioner and persistence layer for per-zone cookie jars.
-//! - A **Zone** only *holds a [`CookieJarHandle`]*, never a store.
-//! - A **CookieStore** can *mint* a jar for a given [`ZoneId`] and optionally
-//!   persist/flush all zone jars in one place (e.g., a single JSON file or SQLite DB).
+//! A **cookie store** is a persistence backend for per-zone cookie jars. Zones
+//! themselves only hold a [`CookieJarHandle`]; they never hold a store.
 //!
-//! Typical usage patterns:
-//! - Set an engine-wide default store so new zones automatically get a jar from it.
-//! - Or, during zone building, pass a specific store to mint that zone’s jar.
-//! - For ephemeral/private zones, skip the store and use an in-memory jar.
+//! When you create a zone, you can:
+//! - Provide a **`cookie_store`** in `ZoneServices`. The engine will obtain (or
+//!   initialize) the zone’s jar via [`CookieStore::jar_for`] and wrap it in a
+//!   [`PersistentCookieJar`](crate::engine::cookies::PersistentCookieJar) so that
+//!   **every mutation** snapshots to the store.
+//! - Or provide a **`cookie_jar`** directly (e.g., [`DefaultCookieJar`]) for
+//!   ephemeral/private zones with no persistence.
 //!
-//! This module exports two reference implementations:
-//! - [`JsonCookieStore`]: file-backed JSON store (good for simple setups).
-//! - [`SqliteCookieStore`]: SQLite-backed store (good for concurrency and scale).
+//! ## Typical usage
+//!
+//! **Persistent cookies (SQLite):**
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use gosub_engine::GosubEngine;
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
+//! use gosub_engine::cookies::SqliteCookieStore;
+//! # use tokio::sync::mpsc;
+//!
+//! # async fn demo(mut engine: GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! let services = ZoneServices {
+//!     storage: Arc::new(StorageService::new(
+//!         Arc::new(InMemoryLocalStore::new()),
+//!         Arc::new(InMemorySessionStore::new()),
+//!     )),
+//!     cookie_store: Some(SqliteCookieStore::new("cookies.db".into()).into()),
+//!     cookie_jar: None, // engine will attach a PersistentCookieJar that snapshots to the store
+//!     partition_policy: PartitionPolicy::None,
+//! };
+//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! # Ok(()) }
+//! ```
+//!
+//! **Ephemeral/private cookies (in-memory jar, no persistence):**
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use gosub_engine::GosubEngine;
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
+//! use gosub_engine::cookies::DefaultCookieJar;
+//! # use tokio::sync::mpsc;
+//!
+//! # async fn demo(mut engine: GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! let services = ZoneServices {
+//!     storage: Arc::new(StorageService::new(
+//!         Arc::new(InMemoryLocalStore::new()),
+//!         Arc::new(InMemorySessionStore::new()),
+//!     )),
+//!     cookie_store: None,
+//!     cookie_jar: Some(DefaultCookieJar::new().into()),
+//!     partition_policy: PartitionPolicy::None,
+//! };
+//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! # Ok(()) }
+//! ```
+//!
+//! **Per-zone override (e.g., JSON file for a “private” profile):**
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use gosub_engine::GosubEngine;
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
+//! use gosub_engine::cookies::JsonCookieStore;
+//! # use tokio::sync::mpsc;
+//!
+//! # async fn demo(mut engine: GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! let services = ZoneServices {
+//!     storage: Arc::new(StorageService::new(
+//!         Arc::new(InMemoryLocalStore::new()),
+//!         Arc::new(InMemorySessionStore::new()),
+//!     )),
+//!     cookie_store: Some(JsonCookieStore::new("private-cookies.json".into()).into()),
+//!     cookie_jar: None,
+//!     partition_policy: PartitionPolicy::None,
+//! };
+//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! # Ok(()) }
+//! ```
 //!
 //! ## Design notes
-//! - Stores are **not** kept in zones; they are *only used at build time* to obtain a jar.
-//! - Implementations should be `Send + Sync` and safe for concurrent access.
-//! - `CookieStore::jar_for(zone_id)` should return the *same logical jar instance* for a zone for
-//!   the lifetime of the store, so all handles observe consistent state.
+//! - Stores are **backend components** (JSON/SQLite/in-memory). Zones only see a jar handle.
+//! - Implementations must be `Send + Sync` and safe for concurrent use.
+//! - [`CookieStore::jar_for`] should return the **same logical jar** for a given
+//!   `ZoneId` across calls, so all holders observe consistent state.
+//! - With a [`PersistentCookieJar`], the engine will call
+//!   [`CookieStore::persist_zone_from_snapshot`] after each mutation to keep durable
+//!   state in sync.
 //!
-//! ## Example: per-zone store override
-//! ```rust,no_run
-//!
-//! use gosub_engine::GosubEngine;
-//! use gosub_engine::cookies::{JsonCookieStore, SqliteCookieStore};
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! let cookie_store = SqliteCookieStore::new("cookies.db".into());
-//! let zone_id = engine.zone_builder().cookie_store(cookie_store).create().unwrap();
-//!
-//! let cookie_store = JsonCookieStore::new("private-cookies.json".into());
-//! let private_zone_id = engine.zone_builder().cookie_store(cookie_store).create().unwrap();
-//! ```
+//! ## Provided backends
+//! - [`JsonCookieStore`]: file-backed JSON (easy to inspect/debug).
+//! - [`SqliteCookieStore`]: SQLite (scales to many cookies, concurrent friendly).
+//! - [`InMemoryCookieStore`]: non-persistent (tests, disposable profiles).
 mod json;
 mod sqlite;
 mod in_memory;

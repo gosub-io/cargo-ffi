@@ -3,68 +3,95 @@
 
 //! # Gosub Engine
 //!
-//! Gosub is a (work-in-progress) browser engine you can embed in your own custom user agent.
+//! Gosub is a work-in-progress, embeddable browser engine for building your own User Agent (UA).
+//! It uses **async channels** and **handles**:
+//! - `EngineEvent` flows from the engine → UA over an event channel.
+//! - You control things via `EngineCommand` (engine/zone scoped) and `TabCommand` (tab scoped).
 //!
-//! ## Quick start
+//! ## Quick start (async, handles & channels)
 //!
 //! ```rust,no_run
-//!
-//! # fn main() -> Result<(), gosub_engine::EngineError> {
-//! use std::str::FromStr;
-//! use std::thread::sleep;
+//! use std::sync::Arc;
 //! use url::Url;
-//! use gosub_engine::{EngineConfig, EngineError};
+//!
+//! use gosub_engine::{EngineConfig, GosubEngine};
 //! use gosub_engine::render::Viewport;
+//! use gosub_engine::render::backends::null::NullBackend;
+//! use gosub_engine::events::{EngineEvent, TabCommand};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
+//! use gosub_engine::cookies::DefaultCookieJar;
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
 //!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     // 1) Engine + backend
+//!     let backend = NullBackend::new().expect("null renderer cannot be created (!?)");
+//!     let mut engine = GosubEngine::new(Some(EngineConfig::default()), Box::new(backend));
 //!
-//! let mut engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
+//!     // 2) Event channel: UA keeps `event_rx` to receive EngineEvent;
+//!     //    engine/zones/tabs clone `event_tx` to send events.
+//!     let (event_tx, mut event_rx) = engine.create_event_channel(1024);
 //!
-//! // Create a zone (with all default settings)
-//! let zone_id = engine.zone_builder().create()?;
+//!     // 3) Zone services (ephemeral cookies here; use a CookieStore for persistence)
+//!     let services = ZoneServices {
+//!         storage: Arc::new(StorageService::new(
+//!             Arc::new(InMemoryLocalStore::new()),
+//!             Arc::new(InMemorySessionStore::new()),
+//!         )),
+//!         cookie_store: None,
+//!         cookie_jar: Some(DefaultCookieJar::new().into()),
+//!         partition_policy: PartitionPolicy::None,
+//!     };
 //!
-//! // Open a tab in the zone
-//! let viewport = Viewport::new(0, 0, 800, 600);
+//!     // 4) Create a zone (ZoneHandle)
+//!     let zone = engine
+//!         .create_zone(ZoneConfig::default(), services, None, event_tx)?;
 //!
-//! let tab_id = engine.open_tab_in_zone(zone_id, viewport)?;
+//!     // 5) Create a tab (TabHandle)
+//!     let tab = zone.create_tab(Default::default(), None).await?;
 //!
-//! // Drive the engine and let it render stuff into the compositor
-//! let compositor = &mut gosub_engine::render::DefaultCompositor::new(
-//!     || { println!("Frame is ready and can be drawn") }
-//! );
+//!     // 6) Drive the tab
+//!     tab.send(TabCommand::Navigate{ url: "https://example.com".to_string() }).await?;
+//!     tab.send(TabCommand::SetViewport{ x: 0, y: 0, width: 1280, height: 800 }).await?;
 //!
-//! // Send events/commands
-//! engine.handle_event(tab_id, gosub_engine::events::EngineEvent::Redraw { tab_id, handle })?;
-//! engine.execute_command(tab_id, gosub_engine::EngineCommand::Navigate(Url::from_str("https://example.com").expect("url")))?;
+//!     // 7) Handle engine events in your UA
+//!     while let Some(ev) = event_rx.recv().await {
+//!         match ev {
+//!             EngineEvent::LoadStarted { tab_id, url } => {
+//!                 println!("[{tab_id:?}] Starting loading: {url}");
+//!             }
+//!             EngineEvent::Redraw { tab_id, .. } => {
+//!                 // Composite `handle` into your UI
+//!                 println!("[{tab_id:?}] Redraw requested");
+//!             }
+//!             _ => {}
+//!         }
+//!     }
 //!
-//! loop {
-//!    let results = engine.tick(compositor);
-//!    for (_tab_id, tick_result) in &results {
-//!        if tick_result.page_loaded {
-//!            println!("Page has been loaded: {}", tick_result.commited_url.clone().unwrap().to_string());
-//!        }
-//!        if tick_result.needs_redraw {
-//!            println!("Page is rendered and can be drawn on the screen");
-//!        }
-//!    }
-//!    sleep(std::time::Duration::from_millis(100));
-//!  }
-//! # Ok(())
-//! # }
-//!
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ## Concepts
-//! - [`GosubEngine`] — the main entry point
-//! - [`Zone`](crate::zone::Zone) — user/session context (cookie jar, storage, tabs)
-//! - [`Tab`](crate::tab::Tab) — a single tab with a dedicated browsing context
-//! - [`Viewport`](crate::render::Viewport) — target surface size/information
-//! - [`EngineEvent`], [`EngineCommand`] — how you drive tabs
-//! - `BrowsingContext` — per-tab state (history, active URL, etc.)
+//! - [`GosubEngine`] — engine entry point; creates zones, owns backend and event bus.
+//! - **Event channel** — `(event_tx, event_rx) = engine.create_event_channel()`; UA keeps `event_rx`.
+//! - [`Zone`](crate::engine::zone::Zone) / **ZoneHandle** — per-profile/session state (cookies, storage, tabs).
+//! - **Tab task** / **TabHandle** — a single browsing context controlled via [`TabCommand`](crate::events::TabCommand).
+//! - [`Viewport`](crate::render::Viewport) — target surface description for rendering.
+//! - [`RenderBackend`](crate::render::backend::RenderBackend) — pluggable renderer (e.g., Null, Cairo, Vello).
+//!
+//! ## Persistence
+//! To persist cookies, pass a [`CookieStore`](crate::cookies::CookieStore) in
+//! `ZoneServices::cookie_store` and omit `cookie_jar`; the engine will attach a per-zone
+//! [`PersistentCookieJar`](crate::cookies::PersistentCookieJar).
 //!
 //! ## Modules
-//! - [`zone`] — zones, ids, zone manager
-//! - [`tab`] — tabs and tab ids
+//! - [`engine::zone`](crate::engine::zone)
+//! - [`engine::tab`](crate::engine::tab)
+//! - [`engine::cookies`](crate::engine::cookies)
+//! - [`engine::storage`](crate::engine::storage)
+//! - [`render`](crate::render)
+//! - [`net`](crate::net)
 //!
 //! ## Building docs
 //! `cargo doc --open`

@@ -66,8 +66,7 @@ impl ZoneHandle {
             initial,
             overrides,
             reply: tx,
-        })).await
-            .map_err(|_| EngineError::ChannelClosed)?;
+        })).await.map_err(|_| EngineError::ChannelClosed)?;
 
         match rx.await {
             Ok(res) => res,

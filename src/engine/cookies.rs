@@ -31,14 +31,15 @@
 //! # use std::sync::Arc;
 //! # use tokio::sync::mpsc;
 //! use gosub_engine::render::Viewport;
-//! use gosub_engine::zone::{ZoneConfig, ZoneServices, PartitionPolicy};
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
 //! use gosub_engine::cookies::{DefaultCookieJar};
 //!
-//! # async fn demo(mut engine: gosub_engine::GosubEngine, event_tx: mpsc::Sender<gosub_engine::engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! # async fn demo(mut engine: gosub_engine::GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
 //! let services = ZoneServices {
-//!     storage: Arc::new(gosub_engine::engine::storage::StorageService::new(
-//!         Arc::new(gosub_engine::engine::storage::InMemoryLocalStore::new()),
-//!         Arc::new(gosub_engine::engine::storage::InMemorySessionStore::new()),
+//!     storage: Arc::new(StorageService::new(
+//!         Arc::new(InMemoryLocalStore::new()),
+//!         Arc::new(InMemorySessionStore::new()),
 //!     )),
 //!     cookie_store: None,
 //!     cookie_jar: Some(DefaultCookieJar::new().into()),
@@ -46,7 +47,7 @@
 //! };
 //!
 //! let zone_cfg = ZoneConfig::default();
-//! let _zone = engine.create_zone(Some(zone_cfg), services, None, event_tx).await?;
+//! let _zone = engine.create_zone(zone_cfg, services, None, event_tx)?;
 //! # Ok(()) }
 //! ```
 //!
@@ -56,16 +57,17 @@
 //! ```no_run
 //! # use std::sync::Arc;
 //! # use tokio::sync::mpsc;
-//! use gosub_engine::zone::{ZoneConfig, ZoneServices, PartitionPolicy};
+//! use gosub_engine::zone::{ZoneConfig, ZoneServices};
+//! use gosub_engine::storage::{StorageService, InMemoryLocalStore, InMemorySessionStore, PartitionPolicy};
 //! use gosub_engine::cookies::{SqliteCookieStore};
 //!
-//! # async fn demo(mut engine: gosub_engine::GosubEngine, event_tx: mpsc::Sender<gosub_engine::engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! # async fn demo(mut engine: gosub_engine::GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
 //! let store = SqliteCookieStore::new("cookies.db".into());
 //!
 //! let services = ZoneServices {
-//!     storage: Arc::new(gosub_engine::engine::storage::StorageService::new(
-//!         Arc::new(gosub_engine::engine::storage::InMemoryLocalStore::new()),
-//!         Arc::new(gosub_engine::engine::storage::InMemorySessionStore::new()),
+//!     storage: Arc::new(StorageService::new(
+//!         Arc::new(InMemoryLocalStore::new()),
+//!         Arc::new(InMemorySessionStore::new()),
 //!     )),
 //!     cookie_store: Some(store.into()),
 //!     cookie_jar: None, // engine will wrap with PersistentCookieJar per zone
@@ -73,7 +75,7 @@
 //! };
 //!
 //! let zone_cfg = ZoneConfig::default();
-//! let _zone = engine.create_zone(Some(zone_cfg), services, None, event_tx).await?;
+//! let _zone = engine.create_zone(zone_cfg, services, None, event_tx)?;
 //! # Ok(()) }
 //! ```
 //!

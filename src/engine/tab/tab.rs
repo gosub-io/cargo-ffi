@@ -5,8 +5,7 @@ use crate::engine::BrowsingContext;
 use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::Viewport;
-use crate::storage::{PartitionKey, StorageEvent, StorageHandles};
-use crate::storage::types::PartitionPolicy;
+use crate::storage::{PartitionKey, StorageEvent, StorageHandles, PartitionPolicy};
 use crate::tab::structs::{TabActivityMode, TabState};
 use crate::zone::ZoneId;
 
