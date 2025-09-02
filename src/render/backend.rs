@@ -232,6 +232,8 @@ pub trait ErasedSurface: Any {
 /// Implemented by all rendering backends. The engine calls these methods
 /// on the backend’s owning thread.
 pub trait RenderBackend: Send + Sync {
+    fn name(&self) -> &str;
+
     /// Create a new surface with the given size and present mode.
     fn create_surface(
         &self,

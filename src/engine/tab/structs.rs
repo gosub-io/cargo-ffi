@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::{mpsc, broadcast};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::cookies::CookieJarHandle;
@@ -41,9 +41,9 @@ pub struct TabSpawnArgs {
     /// Tab ID
     pub tab_id: TabId,
     /// Receive channel for commands for the tab
-    pub cmd_rx: Receiver<TabCommand>,
+    pub cmd_rx: mpsc::Receiver<TabCommand>,
     /// Send channel for events from the tab to the UA
-    pub event_tx: Sender<EngineEvent>,
+    pub event_tx: broadcast::Sender<EngineEvent>,
     /// Services available to the tab
     pub services: EffectiveTabServices,
     // Handle to the engine for shared resources

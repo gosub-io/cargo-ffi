@@ -12,6 +12,15 @@ pub struct ZoneHandle {
     cmd_tx: Sender<EngineCommand>,
 }
 
+impl std::fmt::Debug for ZoneHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZoneHandle")
+            .field("zone_id", &self.zone_id)
+            .field("cmd_tx", &self.cmd_tx)
+            .finish()
+    }
+}
+
 impl ZoneHandle {
     pub fn new(zone_id: ZoneId, cmd_tx: Sender<EngineCommand>) -> Self {
         Self { zone_id, cmd_tx }
@@ -60,6 +69,7 @@ impl ZoneHandle {
     }
 
     pub async fn create_tab(&self, initial: TabDefaults, overrides: Option<TabOverrides>) -> Result<TabHandle, EngineError> {
+        println!("ZoneHandle::create_tab: zone_id={}", self.zone_id);
         let (tx, rx) = oneshot::channel::<Result<TabHandle, EngineError>>();
         self.cmd_tx.send(EngineCommand::Zone(ZoneCommand::CreateTab {
             zone_id: self.zone_id,
@@ -67,11 +77,15 @@ impl ZoneHandle {
             overrides,
             reply: tx,
         })).await.map_err(|_| EngineError::ChannelClosed)?;
+        println!("ZoneHandle: awaiting reply");
 
-        match rx.await {
+        let res = match rx.await {
             Ok(res) => res,
-            Err(e) => Err(EngineError::CreateTab(e.to_string()))
-        }
+            Err(e) => Err(EngineError::CreateTab(e.into()))
+        };
+
+        println!("ZoneHandle: got reply");
+        res
     }
 
     pub async fn close_tab(&self, tab_id: TabId) -> Result<()> {

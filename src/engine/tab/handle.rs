@@ -11,6 +11,14 @@ pub struct TabHandle {
     cmd_tx: Sender<TabCommand>,
 }
 
+impl std::fmt::Debug for TabHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TabHandle")
+            .field("tab_id", &self.tab_id)
+            .finish()
+    }
+}
+
 impl TabHandle {
     pub fn new(tab_id: TabId, cmd_tx: Sender<TabCommand>) -> Self {
         Self { tab_id, cmd_tx }

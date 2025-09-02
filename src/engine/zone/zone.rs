@@ -11,8 +11,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::mpsc::{Sender, channel};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -91,7 +90,7 @@ struct TabRecord {
     /// Tab title
     title: String,
     /// Command channel to the tab task
-    cmd_tx: Sender<TabCommand>,
+    cmd_tx: mpsc::Sender<TabCommand>,
     /// Join handle
     join: Option<JoinHandle<()>>,
 }
@@ -145,7 +144,7 @@ pub struct Zone {
     /// Flags controlling which data is shared with other zones.
     pub shared_flags: SharedFlags,
     /// Event channel to send events back to the UI
-    event_tx: Sender<EngineEvent>,
+    event_tx: broadcast::Sender<EngineEvent>,
     // Mutable state
     state: RwLock<ZoneState>,
 }
@@ -188,7 +187,7 @@ impl Zone {
         // Services to provide to tabs within this zone
         services: ZoneServices,
         // Event channel to send events back to the UI
-        event_tx: Sender<EngineEvent>,
+        event_tx: broadcast::Sender<EngineEvent>,
     ) -> Self {
         // We generate the color by using the zone id as a seed
         let mut rng = StdRng::seed_from_u64(zone_id.0.as_u64_pair().0);
@@ -232,7 +231,7 @@ impl Zone {
     pub fn new(
         config: ZoneConfig,
         services: ZoneServices,
-        event_tx: Sender<EngineEvent>,
+        event_tx: broadcast::Sender<EngineEvent>,
     ) -> Self {
         Self::new_with_id(ZoneId::new(), config, services, event_tx)
     }
@@ -267,7 +266,7 @@ impl Zone {
         }
 
         // Channel to send and receive commands to and from the UI
-        let (tab_cmd_tx, tab_cmd_rx) = channel::<TabCommand>(DEFAULT_CHANNEL_CAPACITY);
+        let (tab_cmd_tx, tab_cmd_rx) = mpsc::channel::<TabCommand>(DEFAULT_CHANNEL_CAPACITY);
         let tab_id = TabId::new();
 
         let (ack_tx, ack_rx) = oneshot::channel::<anyhow::Result<()>>();
@@ -297,15 +296,15 @@ impl Zone {
             }
             Ok(Ok(Err(e))) => {
                 join.abort();
-                Err(EngineError::TaskInitFailed(e.to_string()))
+                Err(EngineError::TaskInitFailed(e.into()))
             }
-            Ok(Err(_cancelled)) => {
+            Ok(Err(e)) => {
                 join.abort();
-                Err(EngineError::TaskInitFailed("Cancelled".to_string()))
+                Err(EngineError::TaskInitFailed(e.into()))
             }
-            Err(_elapsed) => {
+            Err(e) => {
                 join.abort();
-                Err(EngineError::TaskInitFailed("timeout".to_string()))
+                Err(EngineError::TaskInitFailed(e.into()))
             }
         }
     }
@@ -347,7 +346,7 @@ impl Zone {
                     value: ev.new_value,
                     scope: ev.scope,
                     origin: ev.origin.clone(),
-                }).await;
+                });
             }
         });
     }

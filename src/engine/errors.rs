@@ -50,15 +50,21 @@ pub enum EngineError {
     InvalidConfiguration(String),
 
     /// Task/Tab creation failed
-    #[error("Tab creation failed: {0}")]
-    TaskInitFailed(String),
+    #[error("Task init failed: {0}")]
+    TaskInitFailed(#[source] anyhow::Error),
 
     #[error("poisoned")]
     Poisoned,
 
     #[error("Failed to create tab: {0}")]
-    CreateTab(String),
+    CreateTab(#[source] anyhow::Error),
 
     #[error("Channel closed")]
     ChannelClosed,
+
+    #[error("Failed to create zone: {0}")]
+    CreateZone(#[source] anyhow::Error),
+
+    #[error("Engine is already running")]
+    AlreadyRunning,
 }

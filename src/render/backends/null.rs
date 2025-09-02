@@ -16,6 +16,10 @@ impl NullBackend {
 }
 
 impl RenderBackend for NullBackend {
+    fn name(&self) -> &str {
+        "NullBackend"
+    }
+
     fn create_surface(
         &self,
         size: SurfaceSize,

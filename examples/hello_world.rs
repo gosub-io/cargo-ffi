@@ -31,11 +31,12 @@ async fn main() -> Result<(), EngineError> {
     // anything.
     let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null backend");
 
-    // Instantiate the engine
-    let mut engine = GosubEngine::new(Some(engine_cfg), Box::new(backend));
+    // Instantiate and start the engine
+    let engine = GosubEngine::new(Some(engine_cfg), Box::new(backend));
+    let (engine_handle, engine_join_handle) = engine.start().expect("cannot start engine");
 
-    // Create a channel to receive events from and to the engine
-    let (event_tx, mut event_rx) = engine.create_event_channel(1024);
+    // Get our event channel to receive events from the engine
+    let mut event_rx = engine_handle.subscribe_events();
 
     // Configure a zone. This works the same way as the engine config, using a builder
     // pattern to set up the configuration before building it.
@@ -60,7 +61,7 @@ async fn main() -> Result<(), EngineError> {
     // Create the zone. Note that we can define our own zone ID to keep zones deterministic
     // (like a user profile), and we give the zone handle to the event channel so we can
     // receive events related to the zone.
-    let zone_handle = engine.create_zone(zone_cfg, zone_services, None, event_tx).expect("cannot create zone");
+    let zone_handle = engine_handle.create_zone(zone_cfg, zone_services, None).await?;
 
     // Next, we create a tab in the zone. For now, we don't provide anything, but we should
     // be able to provide tab-specific services (like a different cookie jar, etc).
@@ -69,9 +70,9 @@ async fn main() -> Result<(), EngineError> {
         title: Some("New Tab".into()),
         viewport: Some(Viewport::new(0, 0, 800, 600)),
     };
-    println!("Creating a new tab...");
+    println!("User: zone_handle.create_tab");
     let tab_handle = zone_handle.create_tab(def_values, None).await.expect("cannot create tab");
-    println!("Tab created: {:?}", tab_handle.id());
+    println!("User: zone_handle.create_tab completed");
 
     // From the tab handle, we can now send commands to the engine to control the tab.
     tab_handle.send(TabCommand::Resize{width: 1024, height: 768}).await?;
@@ -109,7 +110,7 @@ async fn main() -> Result<(), EngineError> {
     // act on them. In a real application, you would probably want to run this in
     // a separate task/thread, and not block the main thread.
     let mut seen_frames = 0usize;
-    while let Some(ev) = event_rx.recv().await {
+    while let Some(ev) = event_rx.recv().await.ok() {
         match ev {
             // EngineEvent::ZoneCreated { zone } => {
             //     println!("[event] ZoneCreated: {zone}");
@@ -136,6 +137,12 @@ async fn main() -> Result<(), EngineError> {
                 println!("[event] {:?}", other);
             }
         }
+    }
+
+    println!("Shutting down engine...");
+    engine_handle.shutdown().await?;
+    if let Err(join_err) = engine_join_handle.await {
+        eprintln!("engine task panicked: {join_err}");
     }
 
     println!("Done. Exiting.");

@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::{mpsc, broadcast};
 use crate::engine::events::EngineEvent;
 use crate::events::TabCommand;
 use crate::tab::structs::{TabSpawnArgs, TabState};
@@ -8,8 +8,8 @@ use crate::tab::{EffectiveTabServices, TabId};
 #[allow(unused)]
 pub struct TabWorker {
     tab_id: TabId,
-    cmd_rx: Receiver<TabCommand>,
-    event_tx: Sender<EngineEvent>,
+    cmd_rx: mpsc::Receiver<TabCommand>,
+    event_tx: broadcast::Sender<EngineEvent>,
     services: EffectiveTabServices,
     // engine: EngineHandle,
     state: TabState,
