@@ -1,5 +1,5 @@
 mod handle;
-mod worker;
+pub(crate) mod worker;
 mod tab;
 mod structs;
 mod options;

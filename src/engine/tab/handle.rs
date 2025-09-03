@@ -1,14 +1,15 @@
-use tokio::sync::mpsc::Sender;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use crate::EngineError;
 use crate::events::TabCommand;
-use crate::tab::TabId;
+use crate::render::Viewport;
+use crate::tab::{TabId, TabSink};
 
 #[derive(Clone)]
 pub struct TabHandle {
-    /// Id of the tab
-    tab_id: TabId,
-    /// Sender part of the channel to send Engine commands to.
-    cmd_tx: Sender<TabCommand>,
+    pub tab_id: TabId,
+    pub cmd_tx: mpsc::Sender<TabCommand>,
+    pub sink: Arc<TabSink>,
 }
 
 impl std::fmt::Debug for TabHandle {
@@ -20,22 +21,25 @@ impl std::fmt::Debug for TabHandle {
 }
 
 impl TabHandle {
-    pub fn new(tab_id: TabId, cmd_tx: Sender<TabCommand>) -> Self {
-        Self { tab_id, cmd_tx }
+    pub async fn send(&self, cmd: TabCommand) -> Result<(), EngineError> {
+        self.cmd_tx.send(cmd).await.map_err(|_| EngineError::ChannelClosed)?;
+        Ok(())
     }
 
-    pub fn id(&self) -> TabId {
-        self.tab_id
+    pub async fn set_title(&self, title: impl Into<String>) -> Result<(), EngineError>{
+        self.send(TabCommand::SetTitle { title: title.into() }).await
     }
 
-    pub fn cmd_tx(&self) -> Sender<TabCommand> {
-        self.cmd_tx.clone()
+    pub async fn set_viewport(&self, viewport: Viewport) -> Result<(), EngineError>{
+        self.send(TabCommand::SetViewport {
+            x: viewport.x,
+            y: viewport.y,
+            width: viewport.width,
+            height: viewport.height
+        }).await
     }
 
-    pub async fn send(&self, command: TabCommand) -> anyhow::Result<(), EngineError> {
-        self.cmd_tx
-            .send(command)
-            .await
-            .map_err(|_| EngineError::ChannelClosed)
+    pub async fn navigate(&self, url: impl Into<String>) -> Result<(), EngineError>{
+        self.send(TabCommand::Navigate { url: url.into() }).await
     }
 }

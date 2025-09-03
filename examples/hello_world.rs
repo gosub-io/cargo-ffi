@@ -71,6 +71,7 @@ async fn main() -> Result<(), EngineError> {
     };
     let tab = zone
         .create_tab(def_values, None)
+        .await
         .expect("cannot create tab");
 
     // From the tab handle, we can now send commands to the engine to control the tab.
@@ -131,6 +132,7 @@ async fn main() -> Result<(), EngineError> {
                 ..Default::default()
             }),
         )
+        .await
         .expect("cannot create tab");
 
     // This is the application's main loop, where we receive events from the engine and

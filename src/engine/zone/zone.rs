@@ -8,13 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 use crate::cookies::CookieStoreHandle;
 use crate::engine::engine::EngineContext;
 use crate::engine::events::EngineEvent;
 use crate::storage::types::PartitionPolicy;
-use crate::tab::{TabDefaults, TabOverrides, TabSink, TabWorker, TabWorkerHandle};
+use crate::tab::{TabDefaults, TabOverrides, TabSink, TabWorker, TabHandle};
 use crate::tab::services::resolve_tab_services;
 use crate::zone::ZoneConfig;
 
@@ -81,20 +82,19 @@ pub struct ZoneServices {
 /// Zone context we can share downwards to tabs
 pub struct ZoneContext {
     /// Zone services (storage, cookies, etc)
-    services: ZoneServices,
+    pub(crate) services: ZoneServices,
     /// Subscription for session storage changes
-    storage_rx: Subscription,
+    pub(crate) storage_rx: Subscription,
     /// Flags controlling which data is shared with other zones.
-    pub shared_flags: SharedFlags,
+    pub(crate) shared_flags: SharedFlags,
     /// Event channel to send events back to the UI
-    event_tx: broadcast::Sender<EngineEvent>,
+    pub(crate) event_tx: broadcast::Sender<EngineEvent>,
 }
 
 // Things that are shared upwards to the engine
-#[derive(Clone)]
 pub struct ZoneSink {
     /// How many tabs has this zone created over its lifetime
-    tabs_created: usize,
+    tabs_created: AtomicUsize,
 }
 
 /// This is the zone structure, which contains tabs and shared services. It is only known to the engine
@@ -177,7 +177,7 @@ impl Zone {
         let zone = Self {
             engine_context,
             sink: Arc::new(ZoneSink {
-                tabs_created: 0,
+                tabs_created: AtomicUsize::new(0),
             }),
             context: Arc::new(ZoneContext {
                 services,
@@ -236,23 +236,31 @@ impl Zone {
     // pub fn services(&self) -> ZoneServices { self.services.clone() }
 
     /// This function does the actual creation of the tab
-    pub fn create_tab(&mut self, _initial: TabDefaults, overrides: Option<TabOverrides>) -> Result<TabWorkerHandle, EngineError> {
+    pub async fn create_tab(&mut self, initial: TabDefaults, overrides: Option<TabOverrides>) -> Result<TabHandle, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
         let tab_services = resolve_tab_services(self.id, &self.context.services, &overrides.unwrap_or_default());
 
-        let handle = TabWorker::new(tab_services, self.context.clone())
-            .map_err(|e| EngineError::CreateTab(e.into()));
-
-        if handle.is_ok() {
-            let tab_handle = handle.as_ref().unwrap();
-            self.tabs.insert(tab_handle.tab_id, tab_handle.sink().clone());
-        }
+        let handle = TabWorker::new_on_thread(tab_services, self.context.clone())
+            .map_err(|e| EngineError::CreateTab(e.into()))?;
+        self.tabs.insert(handle.tab_id, handle.sink.clone());
 
         // Increase metrics
-        self.sink.tabs_created += 1;
+        self.sink.tabs_created.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Set tab defaults
+        handle.set_title(initial.title.as_deref().unwrap_or("New Tab")).await?;
+        handle.set_viewport(initial.viewport.unwrap_or_default()).await?;
+
+        // Load URL in tab if provided
+        if let Some(url) = initial.url.as_ref() {
+            handle.navigate(url).await?;
+        }
+
+        Ok(handle)
+
 
         // let join = spawn_tab_task(tab_args, ack_tx);
         //
@@ -315,7 +323,7 @@ impl Zone {
                 let _ = tx.send(EngineEvent::StorageChanged {
                     tab_id: ev.source_tab,
                     zone: Some(zone_id),
-                    key: ev.key.unwrap_or("".into()),
+                    key: ev.key.unwrap_or_default(),
                     value: ev.new_value,
                     scope: ev.scope,
                     origin: ev.origin.clone(),
@@ -332,10 +340,10 @@ impl Zone {
 
             // Disconnect the session storage for this tab
             self.context.services.storage.drop_tab(self.id, tab_id);
-            true
-        } else {
-            false
+            return true;
         }
+
+        false
     }
 
     /// Lists all tab IDs in this zone.

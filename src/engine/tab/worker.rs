@@ -2,54 +2,69 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use crate::engine::DEFAULT_CHANNEL_CAPACITY;
-use crate::EngineError;
-use crate::events::TabCommand;
+use crate::events::{EngineEvent, TabCommand};
+use crate::render::Viewport;
 use crate::tab::structs::TabState;
-use crate::tab::{EffectiveTabServices, TabId, TabSink};
+use crate::tab::{EffectiveTabServices, TabHandle, TabId, TabSink};
 use crate::zone::ZoneContext;
 
 pub struct TabWorker {
     /// Shared context from the tab
     zone_context: Arc<ZoneContext>,
     /// Sink for sending events upwards
-    sink: TabSink,
+    sink: Arc<TabSink>,
     /// ID of the tab
     tab_id: TabId,
     /// Receiver for incoming tab commands
     cmd_rx: mpsc::Receiver<TabCommand>,
+    cmd_tx: mpsc::Sender<TabCommand>,
     // Effective tab services that we can use
     services: EffectiveTabServices,
     /// State of the tab
     state: TabState,
+    /// Title of the tab
+    title: String,
+    /// Viewport
+    viewport: Viewport,
 }
 
-pub struct TabHandle {
-    pub tab_id: TabId,
-    pub cmd_tx: mpsc::Sender<TabCommand>,
-}
 
 impl TabWorker {
-    pub fn new(services: EffectiveTabServices, zone_context: Arc<ZoneContext>) -> anyhow::Result<TabHandle> {
+    pub fn new(services: EffectiveTabServices, zone_context: Arc<ZoneContext>) -> anyhow::Result<Self> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<TabCommand>(DEFAULT_CHANNEL_CAPACITY);
         let tab_id = TabId::new();
 
-        let this = Self{
+        Ok(Self {
             zone_context,
-            sink: TabSink {
+            sink: Arc::new(TabSink {
                 metrics: false,
-            },
+            }),
             cmd_rx,
+            cmd_tx,
             tab_id,
             services,
             state: TabState::Idle,
-        };
-        
+            title: "".to_string(),
+            viewport: Default::default(),
+        })
+    }
+
+    pub fn handle(&self) -> TabHandle {
+        TabHandle {
+            tab_id: self.tab_id,
+            cmd_tx: self.cmd_tx.clone(),
+            sink: self.sink.clone(),
+        }
+    }
+
+    pub fn new_on_thread(services: EffectiveTabServices, zone_context: Arc<ZoneContext>) -> anyhow::Result<TabHandle> {
+        let this = Self::new(services, zone_context)?;
+
+        let handle = this.handle();
+
         tokio::spawn(this.run());
 
-        Ok(TabHandle {
-            tab_id,
-            cmd_tx,
-        })
+        Ok(handle)
     }
 
     pub async fn run(mut self) {
@@ -81,6 +96,28 @@ impl TabWorker {
 
     pub async fn handle_command(&mut self, cmd: TabCommand) {
         println!("Handling tab command: {:?}", cmd);
+        match cmd {
+            TabCommand::Navigate { url } => {
+                println!("tab.run() wants to navigate to {url}");
+                self.zone_context.event_tx.send(EngineEvent::LoadStarted { tab_id: self.tab_id, url: url.to_string()}).unwrap();
+            }
+            TabCommand::SetViewport { x, y, width, height } => {
+                // set the viewport
+                self.viewport = Viewport::new(x, y, width, height);
+                // trigger redraw
+
+                self.zone_context.event_tx.send(EngineEvent::TabResized { tab_id: self.tab_id, viewport: self.viewport }).unwrap();
+            }
+            TabCommand::SetTitle { title } => {
+                // set the title
+                self.title = title;
+
+                self.zone_context.event_tx.send(EngineEvent::TabTitleChanged { tab_id: self.tab_id, title: self.title.clone() }).unwrap();
+            }
+            _ => {
+                println!("Not yet implemented tab command: {:?}", cmd);
+            }
+        }
     }
 
     pub async fn tick(&mut self) {
@@ -89,18 +126,13 @@ impl TabWorker {
 }
 
 
-pub struct TabWorkerHandle {
-    pub tab_id: TabId,
-    pub cmd_tx: mpsc::Sender<TabCommand>,
-}
+// pub struct TabWorkerHandle {
+//     pub tab_id: TabId,
+//     pub cmd_tx: mpsc::Sender<TabCommand>,
+// }
 
 
-impl TabWorkerHandle {
-    pub async fn send(&self, cmd: TabCommand) -> Result<(), EngineError> {
-        self.cmd_tx.send(cmd).await.map_err(|_| EngineError::ChannelClosed)?;
-        Ok(())
-    }
-}
+
 
 /*
 

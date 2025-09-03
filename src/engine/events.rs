@@ -5,6 +5,7 @@ use crate::config::LogLevel;
 use crate::cookies::Cookie;
 use crate::EngineError;
 use crate::render::backend::ExternalHandle;
+use crate::render::Viewport;
 use crate::storage::event::StorageScope;
 use crate::tab::{TabDefaults, TabHandle, TabId, TabOverrides};
 use crate::zone::ZoneId;
@@ -141,6 +142,9 @@ pub enum TabCommand {
     /// Set viewport
     SetViewport { x: i32, y: i32, width: u32, height: u32 },
 
+    /// Set the title
+    SetTitle { title: String },
+
     // ** User input
     /// Mouse moved to new position
     MouseMove { x: f32, y: f32 },
@@ -255,7 +259,7 @@ pub enum EngineEvent {
     /// Redirect occurred
     Redirect { tab_id: TabId, from: Url, to: Url },
     /// Loading of the HTML started
-    LoadStarted { tab_id: TabId, url: Url },
+    LoadStarted { tab_id: TabId, url: String },
     /// Progress of loading
     LoadProgress { tab_id: TabId, progress: f32 },
     /// Loading of the HTML has finished
@@ -271,6 +275,10 @@ pub enum EngineEvent {
     TabCreated { tab_id: TabId, zone_id: ZoneId },
     /// Tab closed in zone
     TabClosed { tab_id: TabId, zone_id: ZoneId },
+
+    // ** Tab
+    /// Title of the tab has changed
+    TabTitleChanged { tab_id: TabId, title: String },
 
     // ** Session / zone state
 
@@ -304,4 +312,5 @@ pub enum EngineEvent {
     TabCrashed { tab_id: TabId, reason: String },
 
     // Uncategorized / generic
+    TabResized { tab_id: TabId, viewport: Viewport },
 }
