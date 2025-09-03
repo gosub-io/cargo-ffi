@@ -183,7 +183,7 @@ impl CookieStoreHandle {
 ///
 /// This structure captures the essential attributes of an HTTP cookie and
 /// is suitable for persistence (e.g., JSON, SQLite) via `serde`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Cookie {
     /// Cookie name (case-sensitive).
     pub name: String,

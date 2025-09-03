@@ -17,15 +17,13 @@
 
 mod config;
 mod zone;
-// mod handle;
 
 pub use zone::ZoneId;
+pub use zone::ZoneSink;
+pub use zone::ZoneContext;
 pub use zone::ZoneServices;
-// pub use handle::ZoneHandle;
-pub use config::ZoneConfig;
 
-pub use zone::ZoneSharedTabState;
-pub use zone::ZoneSharedEngineState;
+pub use config::ZoneConfig;
 
 // Internal type, not exposed publicly.
 pub(crate) use zone::Zone;

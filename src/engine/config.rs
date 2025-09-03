@@ -183,7 +183,7 @@ pub struct GpuOptions {
 }
 
 /// Log verbosity for the engine.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogLevel {
     Error,
     Warn,

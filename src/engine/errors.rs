@@ -67,4 +67,7 @@ pub enum EngineError {
 
     #[error("Engine is already running")]
     AlreadyRunning,
+
+    #[error("Engine is not running")]
+    NotRunning,
 }

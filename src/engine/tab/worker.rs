@@ -1,47 +1,83 @@
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, broadcast};
-use crate::engine::events::EngineEvent;
+use tokio::sync::mpsc;
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
+use crate::EngineError;
 use crate::events::TabCommand;
-use crate::tab::structs::{TabSpawnArgs, TabState};
-use crate::tab::{EffectiveTabServices, TabId};
+use crate::tab::structs::TabState;
+use crate::tab::{EffectiveTabServices, TabId, TabSink};
+use crate::zone::ZoneContext;
 
-#[allow(unused)]
 pub struct TabWorker {
+    /// Shared context from the tab
+    zone_context: Arc<ZoneContext>,
+    /// Sink for sending events upwards
+    sink: TabSink,
+    /// ID of the tab
     tab_id: TabId,
+    /// Receiver for incoming tab commands
     cmd_rx: mpsc::Receiver<TabCommand>,
-    event_tx: broadcast::Sender<EngineEvent>,
+    // Effective tab services that we can use
     services: EffectiveTabServices,
-    // engine: EngineHandle,
+    /// State of the tab
     state: TabState,
 }
 
+pub struct TabHandle {
+    pub tab_id: TabId,
+    pub cmd_tx: mpsc::Sender<TabCommand>,
+}
+
 impl TabWorker {
-    pub async fn new(args: TabSpawnArgs) -> anyhow::Result<Self> {
-        Ok(Self{
-            tab_id: args.tab_id,
-            cmd_rx: args.cmd_rx,
-            event_tx: args.event_tx,
-            services: args.services,
+    pub fn new(services: EffectiveTabServices, zone_context: Arc<ZoneContext>) -> anyhow::Result<TabHandle> {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<TabCommand>(DEFAULT_CHANNEL_CAPACITY);
+        let tab_id = TabId::new();
+
+        let this = Self{
+            zone_context,
+            sink: TabSink {
+                metrics: false,
+            },
+            cmd_rx,
+            tab_id,
+            services,
             state: TabState::Idle,
+        };
+        
+        tokio::spawn(this.run());
+
+        Ok(TabHandle {
+            tab_id,
+            cmd_tx,
         })
     }
 
     pub async fn run(mut self) {
-        let mut ticker = tokio::time::interval(Duration::from_millis(16));
+        println!("Worker started for tab {:?}", self.tab_id);
+
+        // Ticker for driving periodic tasks (like rendering)
+        let mut ticker = tokio::time::interval(Duration::from_millis(750));
 
         loop {
             tokio::select! {
                 Some(cmd) = self.cmd_rx.recv() => {
+                    if cmd == TabCommand::CloseTab {
+                        println!("Tab {:?} received Close command, exiting", self.tab_id);
+                        break;
+                    }
+
                     self.handle_command(cmd).await;
                 }
                 _ = ticker.tick() => {
+                    println!("Tab {:?} ticker ticked", self.tab_id);
                     self.tick().await;
                 }
                 else => break, // graceful shutdown
             }
         }
-    }
 
+        println!("Worker exiting for tab {:?}", self.tab_id);
+    }
 
     pub async fn handle_command(&mut self, cmd: TabCommand) {
         println!("Handling tab command: {:?}", cmd);
@@ -49,6 +85,20 @@ impl TabWorker {
 
     pub async fn tick(&mut self) {
         // println!("Doing a tab tick()")
+    }
+}
+
+
+pub struct TabWorkerHandle {
+    pub tab_id: TabId,
+    pub cmd_tx: mpsc::Sender<TabCommand>,
+}
+
+
+impl TabWorkerHandle {
+    pub async fn send(&self, cmd: TabCommand) -> Result<(), EngineError> {
+        self.cmd_tx.send(cmd).await.map_err(|_| EngineError::ChannelClosed)?;
+        Ok(())
     }
 }
 

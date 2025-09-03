@@ -1,8 +1,10 @@
+use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
 use crate::cookies::CookieJarHandle;
 use crate::engine::BrowsingContext;
 use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::events::TabCommand;
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::Viewport;
 use crate::storage::{PartitionKey, StorageEvent, StorageHandles, PartitionPolicy};
@@ -36,6 +38,18 @@ impl TabId {
         Self(Uuid::new_v4())
     }
 }
+
+/// Things that the tab shares with the zone (or anyone else)
+#[allow(unused)]
+pub struct TabContext {
+    cmd_tx: mpsc::Sender<TabCommand>,
+}
+
+/// Things shared upwards to the zone
+pub struct TabSink {
+    pub metrics: bool
+}
+
 
 #[allow(unused)]
 pub struct Tab {

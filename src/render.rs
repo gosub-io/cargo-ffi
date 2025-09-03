@@ -122,4 +122,4 @@ mod viewport;
 pub use viewport::Viewport;
 
 mod compositor;
-pub use compositor::{DefaultCompositor};
+pub use compositor::DefaultCompositor;

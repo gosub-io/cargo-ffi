@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 use url::Url;
 use crate::config::LogLevel;
 use crate::cookies::Cookie;
@@ -7,10 +7,10 @@ use crate::EngineError;
 use crate::render::backend::ExternalHandle;
 use crate::storage::event::StorageScope;
 use crate::tab::{TabDefaults, TabHandle, TabId, TabOverrides};
-use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices};
+use crate::zone::ZoneId;
 
 /// Represents a mouse button that can be pressed or released
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MouseButton {
     /// Left mouse button pressed (or depressed)
     Left,
@@ -21,7 +21,7 @@ pub enum MouseButton {
 }
 
 /// Represents modifier keys that can be held down during keyboard events
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Modifiers {
     /// The Shift key is held down
     Shift,
@@ -119,7 +119,7 @@ impl Debug for ZoneCommand {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TabCommand {
     // ** Navigation / lifecycle
     /// Navigate to specific URL
@@ -193,20 +193,20 @@ pub enum EngineCommand {
     /// Gracefully shutdown the engine
     Shutdown{ reply: oneshot::Sender<anyhow::Result<(), EngineError>> },
 
-    // ** Zone management
-    /// Create a new zone
-    CreateZone{
-        config: ZoneConfig,
-        services: ZoneServices,
-        zone_id: Option<ZoneId>,
-        event_tx: broadcast::Sender<EngineEvent>,
-        reply: oneshot::Sender<anyhow::Result<Zone, EngineError>>
-    },
-    /// Destroy a zone
-    DestroyZone{
-        zone_id: ZoneId,
-        reply: oneshot::Sender<anyhow::Result<(), EngineError>>
-    },
+    // // ** Zone management
+    // /// Create a new zone
+    // CreateZone{
+    //     config: ZoneConfig,
+    //     services: ZoneServices,
+    //     zone_id: Option<ZoneId>,
+    //     event_tx: broadcast::Sender<EngineEvent>,
+    //     reply: oneshot::Sender<anyhow::Result<Zone, EngineError>>
+    // },
+    // /// Destroy a zone
+    // DestroyZone{
+    //     zone_id: ZoneId,
+    //     reply: oneshot::Sender<anyhow::Result<(), EngineError>>
+    // },
 
     /// Send a command to a specific zone
     // Zone(ZoneCommand),
@@ -220,20 +220,22 @@ pub enum EngineCommand {
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
     // ** Engine lifecycle
+
     /// Engine has started
     EngineStarted,
+    /// Render backend has changed for the engine
     BackendChanged { old: String, new: String },
     /// Warning from the engine
     Warning { message: String },
     /// Engine is shutting down
-    EngineShutdown,
-
+    EngineShutdown { reason: String },
 
     ZoneCreated { zone_id: ZoneId },
     ZoneClosed { zone_id: ZoneId },
 
 
     // ** Rendering
+
     /// A redraw frame is available
     Redraw { tab_id: TabId, handle: ExternalHandle },
     /// Frame has been completed (@TODO: do we need this?)
@@ -247,6 +249,7 @@ pub enum EngineEvent {
     LocationChanged { tab_id: TabId, url: Url },
 
     // ** Navigation
+
     /// Network connection has been established
     ConnectionEstablished { tab_id: TabId, url: Url },
     /// Redirect occurred
@@ -263,22 +266,14 @@ pub enum EngineEvent {
     PageCommitted { tab_id: TabId, url: Url },
 
     // ** Tab lifecycle
+
     /// New tab created in zone
     TabCreated { tab_id: TabId, zone_id: ZoneId },
     /// Tab closed in zone
     TabClosed { tab_id: TabId, zone_id: ZoneId },
 
-    // ** Input / interaction
-    // FocusChanged { tab: TabId, focused: bool },
-    // // CursorChanged { tab: TabId, cursor: CursorIcon },
-    // KeyDown { key: String, code: String, modifiers: Modifiers },
-    // KeyUp { key: String, code: String, modifiers: Modifiers },
-    // MouseUp { button: MouseButton, x: f32, y: f32 },
-    // MouseDown { button: MouseButton, x: f32, y: f32 },
-    // InputChar { character: char },
-    // InputText { character: char },
-
     // ** Session / zone state
+
     /// A cookie has been added
     CookieAdded { tab_id: TabId, cookie: Cookie },
     /// Storage has changed
@@ -291,7 +286,8 @@ pub enum EngineEvent {
         origin: url::Origin
     },
 
-    // Media / scripting
+    // ** Media / scripting
+
     /// Media has started
     MediaStarted { tab_id: TabId, element_id: u64 },
     /// Media has paused

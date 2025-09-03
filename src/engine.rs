@@ -13,7 +13,7 @@ pub mod zone;
 pub mod storage;
 
 pub mod config;
-mod handle;
+// mod handle;
 
 pub use context::BrowsingContext;
 pub use engine::GosubEngine;
