@@ -128,7 +128,6 @@ pub mod events {
         TabCommand,
         EngineEvent,
         EngineCommand,
-        ZoneCommand,
         MouseButton,
     };
 }

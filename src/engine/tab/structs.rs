@@ -7,15 +7,15 @@ use crate::engine::events::EngineEvent;
 use crate::events::TabCommand;
 use crate::net::Response;
 use crate::render::Viewport;
-use crate::storage::{PartitionKey, StorageService};
+use crate::storage::{PartitionKey, PartitionPolicy, StorageService};
 use crate::tab::TabId;
 
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
 /// the load is no longer needed (e.g., user navigated away).
 #[allow(unused)]
 pub(crate) struct InflightLoad {
-    cancel: CancellationToken,
-    rx: tokio::sync::oneshot::Receiver<anyhow::Result<Response>>,
+    pub cancel: CancellationToken,
+    pub rx: tokio::sync::oneshot::Receiver<anyhow::Result<Response>>,
 }
 
 /// Arguments required to spawn a new tab task.
@@ -119,6 +119,7 @@ pub enum TabActivityMode {
 #[derive(Clone, Debug)]
 pub struct EffectiveTabServices {
     pub partition_key: PartitionKey,
+    pub partition_policy: PartitionPolicy,
     pub storage: Arc<StorageService>,
     pub cookie_jar: CookieJarHandle,
 }

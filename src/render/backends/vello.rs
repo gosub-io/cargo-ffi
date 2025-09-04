@@ -152,15 +152,18 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
     }
 }
 
-impl<C: WgpuContextProvider> RenderBackend for VelloBackend<C> {
+impl RenderBackend for VelloBackend {
+    fn name(&self) -> &str {
+        "vello"
+    }
+
     fn create_surface(
         &self,
         size: SurfaceSize,
         _present: PresentMode,
     ) -> Result<Box<dyn ErasedSurface>> {
         let texture_store_id =
-            self.context
-                .create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
+            self.context.create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
 
         Ok(Box::new(VelloSurface {
             texture_store_id,

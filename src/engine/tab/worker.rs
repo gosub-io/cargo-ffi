@@ -1,3 +1,4 @@
+/*
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -7,6 +8,7 @@ use crate::render::Viewport;
 use crate::tab::structs::TabState;
 use crate::tab::{EffectiveTabServices, TabHandle, TabId, TabSink};
 use crate::zone::ZoneContext;
+
 
 pub struct TabWorker {
     /// ID of the tab
@@ -124,8 +126,6 @@ impl TabWorker {
 
 
 
-
-/*
 
 
     tokio::spawn(async move {

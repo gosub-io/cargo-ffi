@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use tokio::sync::oneshot;
 use url::Url;
 use crate::config::LogLevel;
@@ -7,8 +7,9 @@ use crate::EngineError;
 use crate::render::backend::ExternalHandle;
 use crate::render::Viewport;
 use crate::storage::event::StorageScope;
-use crate::tab::{TabDefaults, TabHandle, TabId, TabOverrides};
+use crate::tab::TabId;
 use crate::zone::ZoneId;
+use bitflags::bitflags;
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -21,108 +22,57 @@ pub enum MouseButton {
     Right,
 }
 
-/// Represents modifier keys that can be held down during keyboard events
-#[derive(Debug, Clone, PartialEq)]
-pub enum Modifiers {
-    /// The Shift key is held down
-    Shift,
-    /// The Control key is held down
-    Control,
-    /// The Alt key is held down
-    Alt,
-    /// The Meta key (Command on Mac, Windows key on Windows) is held down
-    Meta,
-}
-
-/// Commands related to zone management
-pub enum ZoneCommand {
-    /// Set the title of the zone
-    SetTitle {
-        zone_id: ZoneId,
-        title: String,
-        reply: oneshot::Sender<anyhow::Result<()>>,
-    },
-    /// Set the icon of the zone (favicon)
-    SetIcon {
-        zone_id: ZoneId,
-        icon: Vec<u8>,
-        reply: oneshot::Sender<anyhow::Result<()>>,
-    },
-    /// Set the description of the zone
-    SetDescription {
-        zone_id: ZoneId,
-        description: String,
-        reply: oneshot::Sender<anyhow::Result<()>>,
-    },
-    /// Set the color of the zone (RGBA)
-    SetColor {
-        zone_id: ZoneId,
-        color: [u8; 4],
-        reply: oneshot::Sender<anyhow::Result<()>>,
-    },
-    /// Open a tab in the zone
-    CreateTab {
-        zone_id: ZoneId,
-        initial: TabDefaults,
-        overrides: Option<TabOverrides>,
-        reply: oneshot::Sender<anyhow::Result<TabHandle, EngineError>>,
-    },
-    /// Close a tab in the zone
-    CloseTab {
-        zone_id: ZoneId,
-        tab_id: TabId,
-        reply: oneshot::Sender<anyhow::Result<()>>,
-    },
-    /// List all tabs in the zone
-    ListTabs {
-        zone_id: ZoneId,
-        reply: oneshot::Sender<anyhow::Result<Vec<TabId>>>,
-    },
-}
-
-impl Debug for ZoneCommand {
+impl Display for MouseButton {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ZoneCommand::SetTitle { zone_id, title, .. } => f
-                .debug_struct("SetTitle")
-                .field("zone_id", zone_id)
-                .field("title", title)
-                .finish(),
-            ZoneCommand::SetIcon { zone_id, icon, .. } => f
-                .debug_struct("SetIcon")
-                .field("zone_id", zone_id)
-                .field("icon_len", &icon.len())
-                .finish(),
-            ZoneCommand::SetDescription { zone_id, description, .. } => f
-                .debug_struct("SetDescription")
-                .field("zone_id", zone_id)
-                .field("description", description)
-                .finish(),
-            ZoneCommand::SetColor { zone_id, color, .. } => f
-                .debug_struct("SetColor")
-                .field("zone_id", zone_id)
-                .field("color", color)
-                .finish(),
-            ZoneCommand::CreateTab { zone_id,  .. } => f
-                .debug_struct("OpenTab")
-                .field("zone_id", zone_id)
-                .finish(),
-            ZoneCommand::CloseTab { zone_id, tab_id, .. } => f
-                .debug_struct("CloseTab")
-                .field("zone_id", zone_id)
-                .field("tab_id", tab_id)
-                .finish(),
-            ZoneCommand::ListTabs { zone_id, .. } => f
-                .debug_struct("ListTabs")
-                .field("zone_id", zone_id)
-                .finish(),
+            MouseButton::Left => write!(f, "Left"),
+            MouseButton::Middle => write!(f, "Middle"),
+            MouseButton::Right => write!(f, "Right"),
         }
     }
 }
 
+bitflags! {
+    pub struct Modifiers: u8 {
+        const SHIFT   = 0b0001;
+        const CONTROL = 0b0010;
+        const ALT     = 0b0100;
+        const META    = 0b1000;
+    }
+}
+
+impl Display for Modifiers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts = Vec::new();
+
+        if self.contains(Modifiers::SHIFT) {
+            parts.push("Shift");
+        }
+        if self.contains(Modifiers::CONTROL) {
+            parts.push("Control");
+        }
+        if self.contains(Modifiers::ALT) {
+            parts.push("Alt");
+        }
+        if self.contains(Modifiers::META) {
+            parts.push("Meta");
+        }
+
+        if parts.is_empty() {
+            write!(f, "None")
+        } else {
+            write!(f, "{}", parts.join("+"))
+        }
+    }
+}
+
+
+/// Commands that can be sent to a specific tab
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabCommand {
+    // ****************************************
     // ** Navigation / lifecycle
+
     /// Navigate to specific URL
     Navigate { url: String },
     /// Reload current URL (with or without cache)
@@ -132,6 +82,7 @@ pub enum TabCommand {
     /// Close tab
     CloseTab,
 
+    // ****************************************
     // ** Rendering control
     /// Resume sending draw events to the tab's event channel. Use fps as the refresh limit
     ResumeDrawing { fps: u16 },
@@ -142,10 +93,16 @@ pub enum TabCommand {
     /// Set viewport
     SetViewport { x: i32, y: i32, width: u32, height: u32 },
 
+
+    // ****************************************
+    // ** Tab properties
     /// Set the title
     SetTitle { title: String },
 
+
+    // ****************************************
     // ** User input
+
     /// Mouse moved to new position
     MouseMove { x: f32, y: f32 },
     /// Mouse button is pressed
@@ -163,7 +120,10 @@ pub enum TabCommand {
     /// Char input (@TODO: Needed since we have TextInput)?
     CharInput { ch: char },
 
+
+    // ****************************************
     // ** Session / zone state
+
     /// Set a specific cookie
     SetCookie { cookie: Cookie },
     /// Clear all cookies
@@ -175,7 +135,10 @@ pub enum TabCommand {
     /// Clear whole storage
     ClearStorage,
 
+
+    // ****************************************
     // ** Media / scripting
+
     /// Execute given javascript (how about lua?)
     ExecuteScript { source: String },
     /// Play media in element_id
@@ -183,7 +146,10 @@ pub enum TabCommand {
     /// Pause media in element_id
     PauseMedia { element_id: u64 },
 
+
+    // ****************************************
     // ** Debug / devtools
+
     /// Enable logging
     EnableLogging { level: LogLevel },
     /// Dump dom tree
@@ -192,30 +158,15 @@ pub enum TabCommand {
 
 #[derive(Debug)]
 pub enum EngineCommand {
+    // ****************************************
     // ** Engine control
 
     /// Gracefully shutdown the engine
     Shutdown{ reply: oneshot::Sender<anyhow::Result<(), EngineError>> },
 
-    // // ** Zone management
-    // /// Create a new zone
-    // CreateZone{
-    //     config: ZoneConfig,
-    //     services: ZoneServices,
-    //     zone_id: Option<ZoneId>,
-    //     event_tx: broadcast::Sender<EngineEvent>,
-    //     reply: oneshot::Sender<anyhow::Result<Zone, EngineError>>
-    // },
-    // /// Destroy a zone
-    // DestroyZone{
-    //     zone_id: ZoneId,
-    //     reply: oneshot::Sender<anyhow::Result<(), EngineError>>
-    // },
-
-    /// Send a command to a specific zone
-    // Zone(ZoneCommand),
-
+    // ****************************************
     // ** Debug / devtools
+
     /// Enable logging
     EnableLogging { level: LogLevel },
 }
@@ -223,6 +174,7 @@ pub enum EngineCommand {
 
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
+    // ****************************************
     // ** Engine lifecycle
 
     /// Engine has started
@@ -234,10 +186,17 @@ pub enum EngineEvent {
     /// Engine is shutting down
     EngineShutdown { reason: String },
 
+
+    // ****************************************
+    // ** Zone lifecycle
+
+    /// Zone created
     ZoneCreated { zone_id: ZoneId },
+    /// Zone closed
     ZoneClosed { zone_id: ZoneId },
 
 
+    // ****************************************
     // ** Rendering
 
     /// A redraw frame is available
@@ -245,30 +204,40 @@ pub enum EngineEvent {
     /// Frame has been completed (@TODO: do we need this?)
     FrameComplete { tab_id: TabId, frame_id: u64 },
 
+
+    // ****************************************
+    // ** Tab state
+
     /// Title of the tab has changed
     TitleChanged { tab_id: TabId, title: String },
     /// Favicon of tab has changed
     FavIconChanged { tab_id: TabId, favicon: Vec<u8> },
     /// Location of the tab has changed
     LocationChanged { tab_id: TabId, url: Url },
+    /// Viewport of the tab has changed
+    TabResized { tab_id: TabId, viewport: Viewport },
 
+
+    // ****************************************
     // ** Navigation
 
+    /// Navigation to a URL has failed (incorrect URL etc.)
+    NavigationFailed { tab_id: TabId, url: String, error: String },
+    /// Loading of the HTML started
+    LoadStarted { tab_id: TabId, url: String },
     /// Network connection has been established
     ConnectionEstablished { tab_id: TabId, url: Url },
     /// Redirect occurred
     Redirect { tab_id: TabId, from: Url, to: Url },
-    /// Loading of the HTML started
-    LoadStarted { tab_id: TabId, url: String },
     /// Progress of loading
     LoadProgress { tab_id: TabId, progress: f32 },
     /// Loading of the HTML has finished
     LoadFinished { tab_id: TabId, url: Url },
     /// Loading has failed
     LoadFailed { tab_id: TabId, url: Url, error: String },
-    /// Page committed (@TODO: needed? what for?)
-    PageCommitted { tab_id: TabId, url: Url },
 
+
+    // ****************************************
     // ** Tab lifecycle
 
     /// New tab created in zone
@@ -294,6 +263,8 @@ pub enum EngineEvent {
         origin: url::Origin
     },
 
+
+    // ****************************************
     // ** Media / scripting
 
     /// Media has started
@@ -312,5 +283,125 @@ pub enum EngineEvent {
     TabCrashed { tab_id: TabId, reason: String },
 
     // Uncategorized / generic
-    TabResized { tab_id: TabId, viewport: Viewport },
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mousebutton_display() {
+        assert_eq!(MouseButton::Left.to_string(), "Left");
+        assert_eq!(MouseButton::Middle.to_string(), "Middle");
+        assert_eq!(MouseButton::Right.to_string(), "Right");
+    }
+
+    #[test]
+    fn modifiers_display_empty_is_none() {
+        let m = Modifiers::empty();
+        assert_eq!(m.to_string(), "None");
+        assert!(!m.contains(Modifiers::SHIFT));
+        assert!(!m.contains(Modifiers::CONTROL));
+        assert!(!m.contains(Modifiers::ALT));
+        assert!(!m.contains(Modifiers::META));
+    }
+
+    #[test]
+    fn modifiers_display_single() {
+        assert_eq!((Modifiers::SHIFT).to_string(), "Shift");
+        assert_eq!((Modifiers::CONTROL).to_string(), "Control");
+        assert_eq!((Modifiers::ALT).to_string(), "Alt");
+        assert_eq!((Modifiers::META).to_string(), "Meta");
+    }
+
+    #[test]
+    fn modifiers_display_combo_in_order() {
+        // Order should follow the push order in Display (Shift, Control, Alt, Meta)
+        let all = Modifiers::SHIFT | Modifiers::CONTROL | Modifiers::ALT | Modifiers::META;
+        assert_eq!(all.to_string(), "Shift+Control+Alt+Meta");
+
+        let some = Modifiers::SHIFT | Modifiers::ALT;
+        assert_eq!(some.to_string(), "Shift+Alt");
+    }
+
+    #[test]
+    fn modifiers_bit_ops() {
+        let mut m = Modifiers::empty();
+        m.insert(Modifiers::SHIFT | Modifiers::CONTROL);
+        assert!(m.contains(Modifiers::SHIFT));
+        assert!(m.contains(Modifiers::CONTROL));
+        assert!(!m.contains(Modifiers::ALT));
+        assert!(!m.contains(Modifiers::META));
+
+        m.remove(Modifiers::SHIFT);
+        assert!(!m.contains(Modifiers::SHIFT));
+        assert!(m.contains(Modifiers::CONTROL));
+
+        // No stray bits set
+        let all = Modifiers::SHIFT | Modifiers::CONTROL | Modifiers::ALT | Modifiers::META;
+        assert_eq!(m.bits() & !all.bits(), 0);
+    }
+
+    #[test]
+    fn tabcommand_equality_and_debug() {
+        let a = TabCommand::SetTitle { title: "Hello".into() };
+        let b = a.clone();
+        assert_eq!(a, b);
+        let dbg = format!("{:?}", a);
+        assert!(dbg.contains("SetTitle"));
+    }
+
+    #[test]
+    fn tabcommand_keydown_with_modifiers() {
+        let mods = Modifiers::SHIFT | Modifiers::CONTROL;
+        let e = TabCommand::KeyDown {
+            key: "A".into(),
+            code: "KeyA".into(),
+            modifiers: mods,
+        };
+
+        match e {
+            TabCommand::KeyDown { key, code, modifiers } => {
+                assert_eq!(key, "A");
+                assert_eq!(code, "KeyA");
+                assert!(modifiers.contains(Modifiers::SHIFT));
+                assert!(modifiers.contains(Modifiers::CONTROL));
+                assert_eq!(modifiers.to_string(), "Shift+Control");
+            }
+            _ => panic!("Unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn tabcommand_mouse_and_resize() {
+        let down = TabCommand::MouseDown {
+            x: 10.0,
+            y: 20.0,
+            button: MouseButton::Left,
+        };
+        let up = TabCommand::MouseUp {
+            x: 10.0,
+            y: 20.0,
+            button: MouseButton::Left,
+        };
+        let resize = TabCommand::Resize { width: 800, height: 600 };
+
+        // Just basic sanity and Debug formatting
+        assert!(format!("{down:?}").contains("MouseDown"));
+        assert!(format!("{up:?}").contains("MouseUp"));
+        assert!(format!("{resize:?}").contains("Resize"));
+    }
+
+    #[test]
+    fn engineevent_simple_variants_debug() {
+        let a = EngineEvent::EngineStarted;
+        let b = EngineEvent::Warning { message: "Heads up".into() };
+        let c = EngineEvent::EngineShutdown { reason: "Bye".into() };
+
+        assert!(format!("{a:?}").contains("EngineStarted"));
+        assert!(format!("{b:?}").contains("Warning"));
+        assert!(format!("{c:?}").contains("EngineShutdown"));
+    }
 }

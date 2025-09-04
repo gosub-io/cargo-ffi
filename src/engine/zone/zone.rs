@@ -15,7 +15,7 @@ use crate::cookies::CookieStoreHandle;
 use crate::engine::engine::EngineContext;
 use crate::engine::events::EngineEvent;
 use crate::storage::types::PartitionPolicy;
-use crate::tab::{TabDefaults, TabOverrides, TabSink, TabWorker, TabHandle};
+use crate::tab::{TabDefaults, TabOverrides, TabSink, TabHandle, Tab};
 use crate::tab::services::resolve_tab_services;
 use crate::zone::ZoneConfig;
 
@@ -107,7 +107,7 @@ pub struct Zone {
     // Shared state that can be read by anyone with a ZoneSink
     pub sink: Arc<ZoneSink>,
     // List of tabs
-    tabs: HashMap<TabId, Arc<TabSink>>,
+    tabs: HashMap<TabId, TabInfo>,
 
     /// ID of the zone
     pub id: ZoneId,
@@ -134,6 +134,12 @@ impl Debug for Zone {
             .field("shared_flags", &self.context.shared_flags)
             .finish()
     }
+}
+
+/// Simple structure to hold tab info inside the zone
+struct TabInfo {
+    join_handle: tokio::task::JoinHandle<()>,
+    sink: Arc<TabSink>,
 }
 
 #[allow(unused)]
@@ -243,23 +249,26 @@ impl Zone {
 
         let tab_services = resolve_tab_services(self.id, &self.context.services, &overrides.unwrap_or_default());
 
-        let handle = TabWorker::new_on_thread(tab_services, self.context.clone())
+        let (tab_handle, join_handle) = Tab::new_on_thread(self.id, tab_services, self.context.clone())
             .map_err(|e| EngineError::CreateTab(e.into()))?;
-        self.tabs.insert(handle.tab_id, handle.sink.clone());
+        self.tabs.insert(tab_handle.tab_id, TabInfo {
+            join_handle: join_handle,
+            sink: tab_handle.sink.clone()
+        });
 
         // Increase metrics
         self.sink.tabs_created.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Set tab defaults
-        handle.set_title(initial.title.as_deref().unwrap_or("New Tab")).await?;
-        handle.set_viewport(initial.viewport.unwrap_or_default()).await?;
+        tab_handle.set_title(initial.title.as_deref().unwrap_or("New Tab")).await?;
+        tab_handle.set_viewport(initial.viewport.unwrap_or_default()).await?;
 
         // Load URL in tab if provided
         if let Some(url) = initial.url.as_ref() {
-            handle.navigate(url).await?;
+            tab_handle.navigate(url).await?;
         }
 
-        Ok(handle)
+        Ok(tab_handle)
 
 
         // let join = spawn_tab_task(tab_args, ack_tx);

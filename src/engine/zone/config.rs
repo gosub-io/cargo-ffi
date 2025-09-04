@@ -160,8 +160,6 @@ impl ZoneConfigBuilder {
     }
 }
 
-// ---------- Validation ----------
-
 /// These checks help prevent common configuration errors and ensure a valid zone setup.
 #[derive(Debug, Clone)]
 pub enum ZoneConfigError {

@@ -6,7 +6,6 @@ mod options;
 pub mod services;
 
 pub use tab::*;
-pub use worker::*;
 pub use handle::TabHandle;
 
 pub use options::TabDefaults;
