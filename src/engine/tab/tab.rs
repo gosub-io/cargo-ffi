@@ -1,15 +1,18 @@
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use url::Url;
 use uuid::Uuid;
-use crate::cookies::CookieJarHandle;
-use crate::engine::BrowsingContext;
+use crate::engine::{BrowsingContext, DEFAULT_CHANNEL_CAPACITY};
 use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::events::TabCommand;
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::Viewport;
-use crate::storage::{PartitionKey, StorageEvent, StorageHandles, PartitionPolicy};
-use crate::tab::structs::{TabActivityMode, TabState};
-use crate::zone::ZoneId;
+use crate::storage::{StorageEvent, StorageHandles};
+use crate::tab::{EffectiveTabServices, TabHandle};
+use crate::tab::structs::{InflightLoad, TabActivityMode, TabState};
+use crate::zone::{ZoneContext, ZoneId};
 
 /// A unique identifier for a browser tab within a [`GosubEngine`](crate::engine::GosubEngine).
 ///
@@ -39,30 +42,60 @@ impl TabId {
     }
 }
 
-/// Things that the tab shares with the zone (or anyone else)
-#[allow(unused)]
-pub struct TabContext {
-    cmd_tx: mpsc::Sender<TabCommand>,
-}
-
 /// Things shared upwards to the zone
 pub struct TabSink {
     pub metrics: bool
 }
 
 
-#[allow(unused)]
+/// State for the tab task driving a single tab.
+pub(crate) struct TabRuntime {
+    /// Is drawing enabled (vs suspended)
+    drawing_enabled: bool,
+    /// Target frames per second when drawing is enabled
+    fps: u32,
+    /// Interval timer for driving ticks
+    interval: tokio::time::Interval,
+    /// Current in-flight load operation, if any
+    load: Option<InflightLoad>,
+    /// Current viewport size
+    viewport: Viewport,
+    /// Has something changed that requires a redraw
+    dirty: bool,
+}
+
+impl Default for TabRuntime {
+    fn default() -> Self {
+        Self {
+            interval: tokio::time::interval(Duration::new(1, 0)),
+            ..Default::default()
+        }
+    }
+}
+
 pub struct Tab {
     /// ID of the tab
-    pub id: TabId,
+    pub tab_id: TabId,
     /// ID of the zone in which this tab resides
     pub zone_id: ZoneId,
+
+    /// Shared context from the tab
+    zone_context: Arc<ZoneContext>,
+    /// Sink for sending events upwards
+    sink: Arc<TabSink>,
+
     /// Browsing context running for this tab
     pub context: BrowsingContext,
     /// State of the tab (idle, loading, loaded, etc.)
     pub state: TabState,
     /// Current tab mode (idle, live, background)
     pub mode: TabActivityMode,
+    /// Receiver for incoming tab commands
+    cmd_rx: mpsc::Receiver<TabCommand>,
+    cmd_tx: mpsc::Sender<TabCommand>,
+    // Effective tab services that we can use
+    services: EffectiveTabServices,
+
 
     /// Favicon binary data for the current tab
     pub favicon: Vec<u8>,
@@ -78,14 +111,6 @@ pub struct Tab {
     /// Is there an error in the current tab?
     pub is_error: bool,
 
-    /// Cookie jar for this tab. This is shared with the rest of the zone tabs
-    pub cookie_jar: Option<CookieJarHandle>,
-
-    /// Storage partition key
-    pub partition_key: PartitionKey,
-    /// Storage partition policy
-    pub partition_policy: PartitionPolicy,
-
     /// Backend rendering
     pub thumbnail: Option<RgbaImage>, // Thumbnail image of the tab in case the tab is not visible
     surface: Option<Box<dyn ErasedSurface>>, // Surface on which the browsing context can render the tab
@@ -98,57 +123,79 @@ pub struct Tab {
     desired_viewport: Viewport,
     /// Set when a resize arrives while rendering. Causes an immediate re-render after finihsing the current rendering.
     dirty_after_inflight: bool,
+
+    /// Keeps track of the tab workers runtime data
+    runtime: TabRuntime,
+
+    // Join handle for the tab worker
+    join_handle: Option<JoinHandle<()>>,
 }
 
-#[allow(unused)]
 impl Tab {
-    /// Create a new tab bound to `zone_id`, with a runtime, initial viewport,
-    /// and an optional zone-shared cookie jar handle.
-    ///
-    /// The tab starts in [`TabState::Idle`], [`TabActivityMode::Active`], and with
-    /// [`PartitionKey::None`]/[`PartitionPolicy::TopLevelOrigin`].
-    pub fn new(
-        zone_id: ZoneId,
-        viewport: Viewport,
-        cookie_jar: Option<CookieJarHandle>,
-    ) -> Self {
-        let mut tab = Self {
-            id: TabId::new(),
+    /// Creats a new tab. Does NOT spawn the tab worker
+    pub fn new(zone_id: ZoneId, services: EffectiveTabServices, zone_context: Arc<ZoneContext>) -> anyhow::Result<Self> {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<TabCommand>(DEFAULT_CHANNEL_CAPACITY);
+        let tab_id = TabId::new();
+
+        Ok(Self {
+            tab_id,
             zone_id,
-            state: TabState::Idle,
+            zone_context,
+            sink: Arc::new(TabSink {
+                metrics: false,
+            }),
             context: BrowsingContext::new(),
-
-            favicon: vec![],              // Placeholder for favicon data
-            title: "New Tab".to_string(), // Title of the new tab
-
+            state: TabState::Idle,
+            mode: TabActivityMode::Active,
+            cmd_rx,
+            cmd_tx,
+            services,
+            favicon: vec![],
+            title: "New Tab".to_string(),
             pending_url: None,
             current_url: None,
             is_loading: false,
             is_error: false,
-
-            mode: TabActivityMode::Active, // Default mode is active
-
-            cookie_jar,
-            partition_key: PartitionKey::None, // Start with no partition key
-            partition_policy: PartitionPolicy::TopLevelOrigin,
-
+            thumbnail: None,
             surface: None,
-            surface_size: SurfaceSize {
-                width: 1,
-                height: 1,
-            },
+            surface_size: SurfaceSize { width: 1, height: 1 },
             present_mode: PresentMode::Fifo,
-            thumbnail: None, // No thumbnail initially
-
-            committed_viewport: viewport,
-            desired_viewport: viewport,
+            committed_viewport: Default::default(),
+            desired_viewport: Default::default(),
             dirty_after_inflight: false,
-        };
-
-        tab.context.set_viewport(viewport);
-
-        tab
+            runtime: TabRuntime::default(),
+            join_handle: None,
+        })
     }
+
+    /// Creates a new tab and spawns the tab-worker
+    pub fn new_on_thread(
+        zone_id: ZoneId,
+        services: EffectiveTabServices,
+        zone_context: Arc<ZoneContext>
+    ) -> anyhow::Result<(TabHandle, JoinHandle<()>)> {
+        let this = Self::new(zone_id, services, zone_context)?;
+
+        let handle = this.handle();
+
+        let join_handle = tokio::spawn(this.run());
+
+        Ok((handle, join_handle))
+    }
+
+    /// Returns a tab handle
+    pub fn handle(&self) -> TabHandle {
+        TabHandle {
+            tab_id: self.tab_id,
+            cmd_tx: self.cmd_tx.clone(),
+            sink: self.sink.clone(),
+        }
+    }
+
+
+
+
+
 
     /// Navigate to a URL (string is parsed into a `Url`). On success, moves the
     /// tab to [`TabState::PendingLoad`]. Invalid URLs are ignored and logged.
@@ -157,7 +204,7 @@ impl Tab {
             Ok(url) => url,
             Err(e) => {
                 // Can't parse string to a URL to load
-                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.id, e);
+                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
                 return;
             }
         };
@@ -243,5 +290,195 @@ impl Tab {
 
     pub fn execute_command(_cmd: EngineCommand) -> anyhow::Result<()> {
         Ok(())
+    }
+
+
+    pub async fn run(mut self) {
+        println!("Worker started for tab {:?}", self.tab_id);
+
+        // Ticker for driving periodic tasks (like rendering)
+        let mut ticker = tokio::time::interval(Duration::from_millis(750));
+
+        // Initialize workers runtime data
+        let fps = 60;
+        self.runtime = TabRuntime {
+            drawing_enabled: false,
+            fps,
+            interval: tokio::time::interval(std::time::Duration::from_millis(1000/fps as u64)),
+            load: None,
+            viewport,
+            dirty: true,
+        };
+
+        let _ = self.zone_context.event_tx.send(EngineEvent::TabCreated { tab_id: self.tab_id, zone_id: self.zone_id });
+
+        loop {
+            tokio::select! {
+                // Tick interval for driving the redraws
+                _ = self.runtime.interval.tick(), if self.runtime.drawing_enabled => {
+                    if let Err(e) = drive_once(&mut tab, &backend, &event_tx, &mut self.runtime.dirty).await {
+                        self.state = TabState::Failed(format!("Tab {:?} tick error: {}", tab_id, e));
+                        self.runtime.dirty = true;
+                    }
+                }
+
+                // Handle in-flight load completion
+                res = async {
+                    if let Some(load) = &mut self.runtime.load {
+                        load.rx.await
+                    } else {
+                        futures::future::pending().await
+                    }
+                } => {
+                    match res {
+                        Ok(Ok(resp)) => {
+                            if let Some(ref jar) = self.cookie_jar {
+                                jar.write().unwrap().store_response_cookies(&resp.url, &resp.headers);
+                            }
+
+                            self.current_url = Some(resp.url.clone());
+                            self.is_loading = false;
+                            self.is_error = false;
+                            self.pending_url = None;
+                            self.state = TabState::Loaded;
+
+                            self.context.set_raw_html(
+                                String::from_utf8_lossy(resp.body().as_slice()).as_ref()
+                            );
+
+                            let _ = event_tx.send(EngineEvent::PageCommitted { tab: tab_id, url: resp.url.clone() }).await;
+                            self.runtime.dirty = true;
+                        }
+                        Ok(Err(e)) => {
+                            self.state = TabState::Failed(format!("Tab {:?} error: {}", tab_id, e));
+                            self.is_loading = false;
+                            self.is_error = true;
+                            self.runtime.dirty = true;
+                        }
+                        Err(_cancelled_or_replaced) => {
+                            // Load was cancelled or replaced, do nothing
+                            println!("Tab {:?} load was cancelled or replaced", tab_id);
+                        }
+                    }
+                }
+
+                msg = self.cmd_rx.recv() => {
+                    let Some(cmd) = msg else {
+                        // Channel closed, exit the loop
+                        break;
+                    };
+
+                    match cmd {
+                        TabCommand::CloseTab => {
+                            println!("Tab {:?} received Close command, exiting", self.tab_id);
+                            break;
+                        }
+                        _ => handle_tab_command(cmd)
+                    }
+                }
+            }
+        }
+
+        // Cleanup tab
+        println!("Tab task for tab {:?} exiting", self.tab_id);
+        let _ = self.zone_context.event_tx.send(EngineEvent::TabClosed { tab_id: self.tab_id, zone_id: self.zone_id });
+        self.services.storage.drop_tab(self.zone_id, self.tab_id);
+    }
+
+
+    fn handle_tab_command(&mut self, cmd: TabCommand) {
+        TabCommand::Navigate { url } => {
+            println!("Tab {:?} navigating to URL: {}", tab_id, url);
+
+            // Cancel any in-flight load
+            if let Some(load) = self.runtime.load.take() {
+                load.cancel.cancel();
+            }
+
+            // Compute storage and bind @TODO: do we need to do this for each navigation?
+            let pk = compute_partition_key(&url, &services.partition_policy);
+            let origin = url.origin().clone();
+            let local = services.storage.local_for(services.zone_id, &pk, &origin).expect("cannot get local storage for tab");
+            let session = services.storage.session_for(services.zone_id, tab_id, &pk, &origin).expect("cannot get session storage for tab");
+            self.bind_storage(StorageHandles { local, session });
+
+            let cancel = CancellationToken::new();
+            let fut = self.context.load(url.clone(), cancel.child_token());
+
+            tokio::select! {
+                                res = fut => {
+
+
+                                }
+                            }
+            // let (tx, rx) = oneshot::channel();
+            //
+            // let cancel_child = cancel.child_token();
+            // tokio::spawn(async move {
+            //     let res = load_main_document(url.clone(), cancel_child).await;
+            //     let _ = tx.send(res);
+            // });
+
+            self.runtime.load = Some(InflightLoad { cancel, rx });
+            self.state = TabState::Loading;
+            self.runtime.dirty = true;
+            // let _ = event_tx.send(EngineEvent::ConnectionEstablished { tab: tab_id, url: url.clone() }).await;
+        }
+        TabCommand::Reload(..) => {
+            self.execute_command(EngineCommand::Reload());
+            self.runtime.dirty = true;
+        }
+        TabCommand::Resize { width, height } => {
+            self.runtime.viewport.width = width;
+            self.runtime.viewport.height = height;
+            self.handle_event(EngineEvent::Resize { width, height });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::MouseMove { x, y } => {
+            self.handle_event(EngineEvent::MouseMove { x, y });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::MouseDown { button, x, y } => {
+            self.handle_event(EngineEvent::MouseDown { button, x, y });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::MouseUp { button, x, y } => {
+            self.handle_event(EngineEvent::MouseUp { button, x, y });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::KeyDown { key, code, modifiers } => {
+            self.handle_event(EngineEvent::KeyDown { key, code, modifiers });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::KeyUp { key, code, modifiers } => {
+            self.handle_event(EngineEvent::KeyUp { key, code, modifiers });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::InputChar { character } => {
+            self.handle_event(EngineEvent::InputChar { character });
+            self.runtime.dirty = true;
+        }
+
+        TabCommand::ResumeDrawing { fps: wanted_fps } => {
+            self.runtime.drawing_enabled = true;
+            self.runtime.fps = wanted_fps.max(1) as u32;
+            self.runtime.interval = tokio::time::interval(Duration::from_millis(1000 / (self.runtime.fps as u64)));
+            self.runtime.dirty = true;
+            println!("Tab {:?} resumed drawing FPS: {} / {}", tab_id, self.runtime.fps, self.runtime.drawing_enabled);
+        }
+        TabCommand::SuspendDrawing=> {
+            self.runtime.drawing_enabled = false;
+            println!("Tab {:?} suspended drawing: at fps: {} / {}", tab_id, self.runtime.fps, self.runtime.drawing_enabled);
+        }
+        _ => {
+            println!("Tab {:?} received command: {:?}", tab_id, cmd);
+            self.runtime.dirty = true;
+        }
     }
 }

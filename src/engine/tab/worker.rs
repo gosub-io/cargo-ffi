@@ -9,17 +9,8 @@ use crate::tab::{EffectiveTabServices, TabHandle, TabId, TabSink};
 use crate::zone::ZoneContext;
 
 pub struct TabWorker {
-    /// Shared context from the tab
-    zone_context: Arc<ZoneContext>,
-    /// Sink for sending events upwards
-    sink: Arc<TabSink>,
     /// ID of the tab
     tab_id: TabId,
-    /// Receiver for incoming tab commands
-    cmd_rx: mpsc::Receiver<TabCommand>,
-    cmd_tx: mpsc::Sender<TabCommand>,
-    // Effective tab services that we can use
-    services: EffectiveTabServices,
     /// State of the tab
     state: TabState,
     /// Title of the tab

@@ -13,32 +13,15 @@ use crate::tab::TabId;
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
 /// the load is no longer needed (e.g., user navigated away).
 #[allow(unused)]
-struct InflightLoad {
+pub(crate) struct InflightLoad {
     cancel: CancellationToken,
     rx: tokio::sync::oneshot::Receiver<anyhow::Result<Response>>,
-}
-
-/// State for the tab task driving a single tab.
-#[allow(unused)]
-struct TabTaskState {
-    /// Is drawing enabled (vs suspended)
-    drawing_enabled: bool,
-    /// Target frames per second when drawing is enabled
-    fps: u32,
-    /// Interval timer for driving ticks
-    interval: tokio::time::Interval,
-    /// Current in-flight load operation, if any
-    load: Option<InflightLoad>,
-    /// Current viewport size
-    viewport: Viewport,
-    /// Has something changed that requires a redraw
-    dirty: bool,
 }
 
 /// Arguments required to spawn a new tab task.
 #[derive(Debug)]
 pub struct TabSpawnArgs {
-    /// Tab ID
+    /// Tab I
     pub tab_id: TabId,
     /// Receive channel for commands for the tab
     pub cmd_rx: mpsc::Receiver<TabCommand>,
