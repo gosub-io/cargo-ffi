@@ -1,15 +1,15 @@
-use std::fmt::{Debug, Display};
-use tokio::sync::oneshot;
-use url::Url;
 use crate::config::LogLevel;
 use crate::cookies::Cookie;
-use crate::EngineError;
 use crate::render::backend::ExternalHandle;
 use crate::render::Viewport;
 use crate::storage::event::StorageScope;
 use crate::tab::TabId;
 use crate::zone::ZoneId;
+use crate::EngineError;
 use bitflags::bitflags;
+use std::fmt::{Debug, Display};
+use tokio::sync::oneshot;
+use url::Url;
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -66,13 +66,11 @@ impl Display for Modifiers {
     }
 }
 
-
 /// Commands that can be sent to a specific tab
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabCommand {
     // ****************************************
     // ** Navigation / lifecycle
-
     /// Navigate to specific URL
     Navigate { url: String },
     /// Reload current URL (with or without cache)
@@ -91,18 +89,20 @@ pub enum TabCommand {
     /// Resize viewport
     Resize { width: u32, height: u32 },
     /// Set viewport
-    SetViewport { x: i32, y: i32, width: u32, height: u32 },
-
+    SetViewport {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
 
     // ****************************************
     // ** Tab properties
     /// Set the title
     SetTitle { title: String },
 
-
     // ****************************************
     // ** User input
-
     /// Mouse moved to new position
     MouseMove { x: f32, y: f32 },
     /// Mouse button is pressed
@@ -112,18 +112,24 @@ pub enum TabCommand {
     /// Mouse scrolled up by delta
     MouseScroll { delta_x: f32, delta_y: f32 },
     /// Key has been pressed
-    KeyDown { key: String, code: String, modifiers: Modifiers },
+    KeyDown {
+        key: String,
+        code: String,
+        modifiers: Modifiers,
+    },
     /// Key has been depressed
-    KeyUp { key: String, code: String, modifiers: Modifiers },
+    KeyUp {
+        key: String,
+        code: String,
+        modifiers: Modifiers,
+    },
     /// Text input
     TextInput { text: String },
     /// Char input (@TODO: Needed since we have TextInput)?
     CharInput { ch: char },
 
-
     // ****************************************
     // ** Session / zone state
-
     /// Set a specific cookie
     SetCookie { cookie: Cookie },
     /// Clear all cookies
@@ -135,10 +141,8 @@ pub enum TabCommand {
     /// Clear whole storage
     ClearStorage,
 
-
     // ****************************************
     // ** Media / scripting
-
     /// Execute given javascript (how about lua?)
     ExecuteScript { source: String },
     /// Play media in element_id
@@ -146,10 +150,8 @@ pub enum TabCommand {
     /// Pause media in element_id
     PauseMedia { element_id: u64 },
 
-
     // ****************************************
     // ** Debug / devtools
-
     /// Enable logging
     EnableLogging { level: LogLevel },
     /// Dump dom tree
@@ -160,23 +162,21 @@ pub enum TabCommand {
 pub enum EngineCommand {
     // ****************************************
     // ** Engine control
-
     /// Gracefully shutdown the engine
-    Shutdown{ reply: oneshot::Sender<anyhow::Result<(), EngineError>> },
+    Shutdown {
+        reply: oneshot::Sender<anyhow::Result<(), EngineError>>,
+    },
 
     // ****************************************
     // ** Debug / devtools
-
     /// Enable logging
     EnableLogging { level: LogLevel },
 }
-
 
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
     // ****************************************
     // ** Engine lifecycle
-
     /// Engine has started
     EngineStarted,
     /// Render backend has changed for the engine
@@ -186,28 +186,25 @@ pub enum EngineEvent {
     /// Engine is shutting down
     EngineShutdown { reason: String },
 
-
     // ****************************************
     // ** Zone lifecycle
-
     /// Zone created
     ZoneCreated { zone_id: ZoneId },
     /// Zone closed
     ZoneClosed { zone_id: ZoneId },
 
-
     // ****************************************
     // ** Rendering
-
     /// A redraw frame is available
-    Redraw { tab_id: TabId, handle: ExternalHandle },
+    Redraw {
+        tab_id: TabId,
+        handle: ExternalHandle,
+    },
     /// Frame has been completed (@TODO: do we need this?)
     FrameComplete { tab_id: TabId, frame_id: u64 },
 
-
     // ****************************************
     // ** Tab state
-
     /// Title of the tab has changed
     TitleChanged { tab_id: TabId, title: String },
     /// Favicon of tab has changed
@@ -217,12 +214,14 @@ pub enum EngineEvent {
     /// Viewport of the tab has changed
     TabResized { tab_id: TabId, viewport: Viewport },
 
-
     // ****************************************
     // ** Navigation
-
     /// Navigation to a URL has failed (incorrect URL etc.)
-    NavigationFailed { tab_id: TabId, url: String, error: String },
+    NavigationFailed {
+        tab_id: TabId,
+        url: String,
+        error: String,
+    },
     /// Loading of the HTML started
     LoadStarted { tab_id: TabId, url: String },
     /// Network connection has been established
@@ -234,12 +233,14 @@ pub enum EngineEvent {
     /// Loading of the HTML has finished
     LoadFinished { tab_id: TabId, url: Url },
     /// Loading has failed
-    LoadFailed { tab_id: TabId, url: Url, error: String },
-
+    LoadFailed {
+        tab_id: TabId,
+        url: Url,
+        error: String,
+    },
 
     // ****************************************
     // ** Tab lifecycle
-
     /// New tab created in zone
     TabCreated { tab_id: TabId, zone_id: ZoneId },
     /// Tab closed in zone
@@ -250,7 +251,6 @@ pub enum EngineEvent {
     TabTitleChanged { tab_id: TabId, title: String },
 
     // ** Session / zone state
-
     /// A cookie has been added
     CookieAdded { tab_id: TabId, cookie: Cookie },
     /// Storage has changed
@@ -260,32 +260,39 @@ pub enum EngineEvent {
         key: String,
         value: Option<String>,
         scope: StorageScope,
-        origin: url::Origin
+        origin: url::Origin,
     },
-
 
     // ****************************************
     // ** Media / scripting
-
     /// Media has started
     MediaStarted { tab_id: TabId, element_id: u64 },
     /// Media has paused
     MediaPaused { tab_id: TabId, element_id: u64 },
     /// Result of a script is returned (console stuff?)
-    ScriptResult { tab_id: TabId, result: serde_json::Value },
+    ScriptResult {
+        tab_id: TabId,
+        result: serde_json::Value,
+    },
 
     // Errors / diagnostics
     /// Network error occurred
-    NetworkError { tab_id: TabId, url: Url, message: String },
+    NetworkError {
+        tab_id: TabId,
+        url: Url,
+        message: String,
+    },
     /// Javascript (parse) error
-    JavaScriptError { tab_id: TabId, message: String, line: u32, column: u32 },
+    JavaScriptError {
+        tab_id: TabId,
+        message: String,
+        line: u32,
+        column: u32,
+    },
     /// Engine crashed
     TabCrashed { tab_id: TabId, reason: String },
-
     // Uncategorized / generic
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -346,7 +353,9 @@ mod tests {
 
     #[test]
     fn tabcommand_equality_and_debug() {
-        let a = TabCommand::SetTitle { title: "Hello".into() };
+        let a = TabCommand::SetTitle {
+            title: "Hello".into(),
+        };
         let b = a.clone();
         assert_eq!(a, b);
         let dbg = format!("{:?}", a);
@@ -363,7 +372,11 @@ mod tests {
         };
 
         match e {
-            TabCommand::KeyDown { key, code, modifiers } => {
+            TabCommand::KeyDown {
+                key,
+                code,
+                modifiers,
+            } => {
                 assert_eq!(key, "A");
                 assert_eq!(code, "KeyA");
                 assert!(modifiers.contains(Modifiers::SHIFT));
@@ -386,7 +399,10 @@ mod tests {
             y: 20.0,
             button: MouseButton::Left,
         };
-        let resize = TabCommand::Resize { width: 800, height: 600 };
+        let resize = TabCommand::Resize {
+            width: 800,
+            height: 600,
+        };
 
         // Just basic sanity and Debug formatting
         assert!(format!("{down:?}").contains("MouseDown"));
@@ -397,8 +413,12 @@ mod tests {
     #[test]
     fn engineevent_simple_variants_debug() {
         let a = EngineEvent::EngineStarted;
-        let b = EngineEvent::Warning { message: "Heads up".into() };
-        let c = EngineEvent::EngineShutdown { reason: "Bye".into() };
+        let b = EngineEvent::Warning {
+            message: "Heads up".into(),
+        };
+        let c = EngineEvent::EngineShutdown {
+            reason: "Bye".into(),
+        };
 
         assert!(format!("{a:?}").contains("EngineStarted"));
         assert!(format!("{b:?}").contains("Warning"));

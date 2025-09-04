@@ -9,17 +9,17 @@
 //! Caching avoids repeating the (relatively expensive) shaping step when you
 //! draw the same text+font+size/wrap/alignment multiple times.
 
+use crate::render::backends::vello::font_cache::FontCache;
+use crate::render::backends::vello::font_manager::FontManager;
+use parley::{Font, FontContext, LayoutContext};
+#[cfg(not(feature = "parley_layout"))]
+use skrifa::MetadataProvider;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use parley::{Font, FontContext, LayoutContext};
-#[cfg(not(feature="parley_layout"))]
-use skrifa::MetadataProvider;
-use vello::{Glyph, Scene};
 use vello::kurbo::Affine;
 use vello::peniko::{Brush, Color, Fill};
-use crate::render::backends::vello::font_cache::FontCache;
-use crate::render::backends::vello::font_manager::FontManager;
+use vello::{Glyph, Scene};
 
 /// Cache key for shaped text.
 ///
@@ -46,9 +46,13 @@ pub struct TextKey {
 
 impl PartialEq for TextKey {
     fn eq(&self, o: &Self) -> bool {
-        self.font_size == o.font_size && self.align == o.align && self.wrap == o.wrap
-            && Arc::ptr_eq(&self.text, &o.text) && Arc::ptr_eq(&self.font_name, &o.font_name)
-            || (self.text.as_ref() == o.text.as_ref() && self.font_name.as_ref() == o.font_name.as_ref())
+        self.font_size == o.font_size
+            && self.align == o.align
+            && self.wrap == o.wrap
+            && Arc::ptr_eq(&self.text, &o.text)
+            && Arc::ptr_eq(&self.font_name, &o.font_name)
+            || (self.text.as_ref() == o.text.as_ref()
+                && self.font_name.as_ref() == o.font_name.as_ref())
     }
 }
 
@@ -139,7 +143,6 @@ impl TextRenderer {
         let transform = Affine::translate((scale * x as f64, scale * y as f64));
         let brush = Brush::Solid(Color::new(rgba));
 
-
         for r in runs.iter() {
             scene
                 .draw_glyphs(&r.vello_font)
@@ -173,7 +176,7 @@ impl TextRenderer {
         fc: &mut FontCache,
         key: &TextKey,
     ) -> Arc<[CachedRun]> {
-         // Resolve font
+        // Resolve font
         let (vello_font, resolved_name) = match fc.fetch(&key.font_name) {
             Some(f) => (f.0.clone(), f.1),
             None => {
@@ -199,18 +202,26 @@ impl TextRenderer {
             let mut pen_x = 0f32;
             let mut pen_y = 0f32;
 
-            let glyphs = key.text.chars().filter_map(|ch| {
-                if ch == '\n' {
-                    pen_y += line_height;
-                    pen_x = 0.0;
-                    return None;
-                }
-                let gid = charmap.map(ch).unwrap_or_default();
-                let advance = glyph_metrics.advance_width(gid).unwrap_or_default();
-                let x = pen_x;
-                pen_x += advance;
-                Some(Glyph { id: gid.to_u32(), x, y: pen_y })
-            }).collect::<Arc<[_]>>();
+            let glyphs = key
+                .text
+                .chars()
+                .filter_map(|ch| {
+                    if ch == '\n' {
+                        pen_y += line_height;
+                        pen_x = 0.0;
+                        return None;
+                    }
+                    let gid = charmap.map(ch).unwrap_or_default();
+                    let advance = glyph_metrics.advance_width(gid).unwrap_or_default();
+                    let x = pen_x;
+                    pen_x += advance;
+                    Some(Glyph {
+                        id: gid.to_u32(),
+                        x,
+                        y: pen_y,
+                    })
+                })
+                .collect::<Arc<[_]>>();
 
             let mut out: Vec<CachedRun> = Vec::new();
             out.push(CachedRun {
@@ -225,15 +236,14 @@ impl TextRenderer {
         #[cfg(feature = "parley_layout")]
         {
             // Build layout
-            let mut builder = self.layout_cx.ranged_builder(
-                &mut self.font_cx,
-                key.text.as_ref(),
-                1.0,
-                true,
-            );
+            let mut builder =
+                self.layout_cx
+                    .ranged_builder(&mut self.font_cx, key.text.as_ref(), 1.0, true);
             builder.push_default(parley::style::StyleProperty::FontSize(key.font_size as f32));
             builder.push_default(parley::style::StyleProperty::FontStack(
-                parley::style::FontStack::Single(parley::style::FontFamily::Named(resolved_name.into()))
+                parley::style::FontStack::Single(parley::style::FontFamily::Named(
+                    resolved_name.into(),
+                )),
             ));
             let mut layout = builder.build(key.text.as_ref());
 
@@ -258,8 +268,13 @@ impl TextRenderer {
                     if let parley::layout::PositionedLayoutItem::GlyphRun(run) = item {
                         let ro = run.offset();
 
-                        let glyphs: Vec<Glyph> = run.positioned_glyphs()
-                            .map(|g| Glyph { id: g.id as u32, x: g.x.round(), y: (pen_y + baseline + ro + g.y).round() })
+                        let glyphs: Vec<Glyph> = run
+                            .positioned_glyphs()
+                            .map(|g| Glyph {
+                                id: g.id as u32,
+                                x: g.x.round(),
+                                y: (pen_y + baseline + ro + g.y).round(),
+                            })
                             .collect();
 
                         out.push(CachedRun {
@@ -277,7 +292,7 @@ impl TextRenderer {
     }
 }
 
-#[cfg(not(feature="parley_layout"))]
+#[cfg(not(feature = "parley_layout"))]
 fn to_font_ref(font: &Font) -> Option<skrifa::raw::FontRef<'_>> {
     use skrifa::raw::FileRef;
     let file_ref = FileRef::new(font.data.as_ref()).ok()?;

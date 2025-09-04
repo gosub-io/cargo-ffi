@@ -80,7 +80,9 @@ impl JsonCookieStore {
             let _ = fs::create_dir_all(parent);
         }
         if !path.exists() {
-            let empty = CookieStoreFile { zones: HashMap::new() };
+            let empty = CookieStoreFile {
+                zones: HashMap::new(),
+            };
             fs::write(&path, serde_json::to_vec(&empty).unwrap())
                 .expect("Failed to create cookie store file");
         }
@@ -117,8 +119,7 @@ impl JsonCookieStore {
     /// # Panics
     /// Panics if serialization or writing fails.
     fn save_file(&self, store_file: &CookieStoreFile) {
-        let contents = serde_json::to_vec_pretty(store_file)
-            .expect("Failed to serialize cookies");
+        let contents = serde_json::to_vec_pretty(store_file).expect("Failed to serialize cookies");
         // atomic-ish: write to tmp then rename
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, &contents).expect("Failed to write temp cookie store file");
@@ -146,9 +147,11 @@ impl CookieStore for JsonCookieStore {
 
         // load from disk (or empty)
         let mut file = self.load_file();
-        let jar = file.zones.remove(&zone_id).unwrap_or_else(DefaultCookieJar::new);
+        let jar = file
+            .zones
+            .remove(&zone_id)
+            .unwrap_or_else(DefaultCookieJar::new);
         let arc_jar: CookieJarHandle = jar.into(); // assuming you have From<DefaultCookieJar> for CookieJarHandle
-
 
         let store = self
             .store_self
@@ -157,7 +160,6 @@ impl CookieStore for JsonCookieStore {
             .as_ref()
             .expect("store_self not initialized")
             .clone();
-
 
         // Wrap in PersistentCookieJar and then into a CookieJarHandle
         let persistent = PersistentCookieJar::new(zone_id, arc_jar.clone(), store);
@@ -220,8 +222,8 @@ impl CookieStore for JsonCookieStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use http::HeaderMap;
+    use tempfile::tempdir;
     use url::Url;
 
     fn mk_headers(set_cookie_lines: &[&str]) -> HeaderMap {
@@ -244,10 +246,17 @@ mod tests {
         let z = ZoneId::new();
         let a = store.jar_for(z).unwrap();
         let b = store.jar_for(z).unwrap();
-        assert!(CookieJarHandle::ptr_eq(&a, &b), "same zone should return same Arc");
+        assert!(
+            CookieJarHandle::ptr_eq(&a, &b),
+            "same zone should return same Arc"
+        );
 
         // Downcast to persistent wrapper to ensure it’s wrapped
-        assert!(a.read().as_any().downcast_ref::<PersistentCookieJar>().is_some());
+        assert!(a
+            .read()
+            .as_any()
+            .downcast_ref::<PersistentCookieJar>()
+            .is_some());
     }
 
     #[test]
@@ -262,7 +271,9 @@ mod tests {
         // write a cookie via the inner jar
         {
             let binding = handle.read();
-            let persist = binding.as_any().downcast_ref::<PersistentCookieJar>()
+            let persist = binding
+                .as_any()
+                .downcast_ref::<PersistentCookieJar>()
                 .expect("persistent wrapper expected");
             let mut inner = persist.inner.write(); // inner: Arc<RwLock<DefaultCookieJar>>
 
@@ -279,14 +290,21 @@ mod tests {
         let mut s = String::new();
         f.read_to_string(&mut s).unwrap();
         let parsed: CookieStoreFile = serde_json::from_str(&s).unwrap();
-        assert!(parsed.zones.contains_key(&zone), "zone entry must exist after persist_all");
+        assert!(
+            parsed.zones.contains_key(&zone),
+            "zone entry must exist after persist_all"
+        );
 
         // New store instance should load the jar from disk
         let store2 = JsonCookieStore::new(path.clone());
         let h2 = store2.jar_for(zone).unwrap();
 
         // Ensure it’s again a persistent wrapper
-        assert!(h2.read().as_any().downcast_ref::<PersistentCookieJar>().is_some());
+        assert!(h2
+            .read()
+            .as_any()
+            .downcast_ref::<PersistentCookieJar>()
+            .is_some());
     }
 
     #[test]
@@ -323,4 +341,3 @@ mod tests {
         assert!(parsed2.zones.contains_key(&z1));
     }
 }
-

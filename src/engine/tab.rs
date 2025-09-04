@@ -1,18 +1,18 @@
 mod handle;
-pub(crate) mod worker;
-mod tab;
-mod structs;
 mod options;
 pub mod services;
+mod structs;
+mod tab;
+pub(crate) mod worker;
 
-pub use tab::*;
 pub use handle::TabHandle;
+pub use tab::*;
 
+pub use options::TabCacheMode;
+pub use options::TabCookieJar;
 pub use options::TabDefaults;
 pub use options::TabOverrides;
-pub use options::TabCookieJar;
-pub use options::TabCacheMode;
 pub use options::TabStorageScope;
 
-pub use structs::TabSpawnArgs;
 pub use structs::EffectiveTabServices;
+pub use structs::TabSpawnArgs;

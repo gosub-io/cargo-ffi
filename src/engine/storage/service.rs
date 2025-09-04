@@ -1,13 +1,13 @@
-use std::fmt::Debug;
 use super::area::{LocalStore, SessionStore, StorageArea};
 use super::event::{StorageEvent, StorageScope};
 use super::types::PartitionKey;
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 use crate::tab::TabId;
 use crate::zone::ZoneId;
 use anyhow::Result;
+use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 
 /// A handle for receiving storage change notifications.
 pub type Subscription = broadcast::Receiver<StorageEvent>;
@@ -50,7 +50,11 @@ impl Debug for StorageService {
 
 impl StorageService {
     pub fn new(local: Arc<dyn LocalStore>, session: Arc<dyn SessionStore>) -> Self {
-        Self { local, session, bus: Arc::new(StorageBus::default()) }
+        Self {
+            local,
+            session,
+            bus: Arc::new(StorageBus::default()),
+        }
     }
 
     pub fn subscribe(&self) -> Subscription {
@@ -64,7 +68,14 @@ impl StorageService {
         origin: &url::Origin,
     ) -> Result<Arc<dyn StorageArea>> {
         let inner = self.local.area(zone, part, origin)?;
-        Ok(self.wrap_notifying(inner, zone, None, part.clone(), origin.clone(), StorageScope::Local))
+        Ok(self.wrap_notifying(
+            inner,
+            zone,
+            None,
+            part.clone(),
+            origin.clone(),
+            StorageScope::Local,
+        ))
     }
 
     pub fn session_for(
@@ -75,7 +86,14 @@ impl StorageService {
         origin: &url::Origin,
     ) -> Result<Arc<dyn StorageArea>> {
         let inner = self.session.area(zone, tab, part, origin);
-        Ok(self.wrap_notifying(inner, zone, Some(tab), part.clone(), origin.clone(), StorageScope::Session))
+        Ok(self.wrap_notifying(
+            inner,
+            zone,
+            Some(tab),
+            part.clone(),
+            origin.clone(),
+            StorageScope::Session,
+        ))
     }
 
     pub fn drop_tab(&self, zone: ZoneId, tab: TabId) {
@@ -92,7 +110,11 @@ impl StorageService {
         scope: StorageScope,
     ) -> Arc<dyn StorageArea> {
         Arc::new(NotifyingArea {
-            inner, zone, partition, origin, source_tab,
+            inner,
+            zone,
+            partition,
+            origin,
+            source_tab,
             bus: self.bus.clone(),
             scope,
         })
@@ -157,6 +179,10 @@ impl StorageArea for NotifyingArea {
         });
         Ok(())
     }
-    fn len(&self) -> usize { self.inner.len() }
-    fn keys(&self) -> Vec<String> { self.inner.keys() }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+    fn keys(&self) -> Vec<String> {
+        self.inner.keys()
+    }
 }

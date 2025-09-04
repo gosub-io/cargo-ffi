@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -44,7 +43,6 @@ impl CookieStore for InMemoryCookieStore {
 
     fn persist_all(&self) {}
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -115,6 +115,6 @@ pub use cookie_jar::DefaultCookieJar;
 pub use persistent_cookie_jar::PersistentCookieJar;
 
 pub use store::CookieStore;
+pub use store::InMemoryCookieStore;
 pub use store::JsonCookieStore;
 pub use store::SqliteCookieStore;
-pub use store::InMemoryCookieStore;

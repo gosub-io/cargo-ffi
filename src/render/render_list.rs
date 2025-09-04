@@ -57,19 +57,66 @@ impl Into<[u8; 4]> for Color {
 }
 
 impl Color {
-    pub const BLACK: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-    pub const WHITE: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
-    pub const TRANSPARENT: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
+    pub const BLACK: Color = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    pub const WHITE: Color = Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    pub const TRANSPARENT: Color = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    };
 
-    pub const RED:   Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
-    pub const GREEN: Color = Color { r: 0.0, g: 1.0, b: 0.0, a: 1.0 };
-    pub const BLUE:  Color = Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
-    pub const YELLOW: Color = Color { r: 1.0, g: 1.0, b: 0.0, a: 1.0 };
-    pub const CYAN:   Color = Color { r: 0.0, g: 1.0, b: 1.0, a: 1.0 };
-    pub const MAGENTA: Color = Color { r: 1.0, g: 0.0, b: 1.0, a: 1.0 };
+    pub const RED: Color = Color {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    pub const GREEN: Color = Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    pub const BLUE: Color = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    pub const YELLOW: Color = Color {
+        r: 1.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    pub const CYAN: Color = Color {
+        r: 0.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    pub const MAGENTA: Color = Color {
+        r: 1.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    };
 
     /// Creates a new color from `f32` channel values in the range `0.0 ..= 1.0`.
-    pub fn new(r: f32, g: f32, b: f32, a: f32) -> Color { Color { r, g, b, a } }
+    pub fn new(r: f32, g: f32, b: f32, a: f32) -> Color {
+        Color { r, g, b, a }
+    }
 
     /// Creates a new color from `u8` channel values in the range `0 ..= 255`.
     pub fn from_u8(r: u8, g: u8, b: u8, a: u8) -> Color {
@@ -177,7 +224,6 @@ impl RenderList {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,7 +252,7 @@ mod tests {
         let c = Color::from_u8(255, 0, 128, 64);
         let arr: [f32; 4] = c.into();
         // 128/255 ≈ 0.5019608, 64/255 ≈ 0.2509804
-        approx_eq4(arr, [1.0, 0.0, 128.0/255.0, 64.0/255.0], 1e-6);
+        approx_eq4(arr, [1.0, 0.0, 128.0 / 255.0, 64.0 / 255.0], 1e-6);
     }
 
     #[test]
@@ -236,7 +282,9 @@ mod tests {
 
     #[test]
     fn displayitem_clear_debug() {
-        let di = DisplayItem::Clear { color: Color::from_u8(0, 0, 0, 255) };
+        let di = DisplayItem::Clear {
+            color: Color::from_u8(0, 0, 0, 255),
+        };
         let dbg = format!("{di:?}");
         assert!(dbg.contains("Clear"));
         assert!(dbg.contains("Color"));
@@ -278,7 +326,15 @@ mod tests {
             max_width: None,
         };
 
-        if let DisplayItem::TextRun { x, y, text, size, color, max_width } = no_wrap {
+        if let DisplayItem::TextRun {
+            x,
+            y,
+            text,
+            size,
+            color,
+            max_width,
+        } = no_wrap
+        {
             assert_eq!(x, 5.0);
             assert_eq!(y, 7.0);
             assert_eq!(text, "Hello");
@@ -317,13 +373,23 @@ mod tests {
     fn renderlist_add_command_keeps_order() {
         let mut rl = RenderList::new();
 
-        rl.add_command(DisplayItem::Clear { color: Color::from_u8(10, 20, 30, 255) });
+        rl.add_command(DisplayItem::Clear {
+            color: Color::from_u8(10, 20, 30, 255),
+        });
         rl.add_command(DisplayItem::Rect {
-            x: 1.0, y: 2.0, w: 3.0, h: 4.0, color: Color::from_u8(255, 0, 0, 255),
+            x: 1.0,
+            y: 2.0,
+            w: 3.0,
+            h: 4.0,
+            color: Color::from_u8(255, 0, 0, 255),
         });
         rl.add_command(DisplayItem::TextRun {
-            x: 100.0, y: 200.0, text: "abc".into(), size: 16.0,
-            color: Color::from_u8(255, 255, 255, 255), max_width: Some(300.0),
+            x: 100.0,
+            y: 200.0,
+            text: "abc".into(),
+            size: 16.0,
+            color: Color::from_u8(255, 255, 255, 255),
+            max_width: Some(300.0),
         });
 
         assert_eq!(rl.items.len(), 3);
@@ -344,7 +410,12 @@ mod tests {
         }
 
         match &rl.items[2] {
-            DisplayItem::TextRun { text, size, max_width, .. } => {
+            DisplayItem::TextRun {
+                text,
+                size,
+                max_width,
+                ..
+            } => {
                 assert_eq!(text, "abc");
                 assert_eq!(*size, 16.0);
                 assert_eq!(*max_width, Some(300.0));
@@ -356,8 +427,12 @@ mod tests {
     #[test]
     fn renderlist_clear_removes_all() {
         let mut rl = RenderList::new();
-        rl.add_command(DisplayItem::Clear { color: Color::from_u8(0, 0, 0, 255) });
-        rl.add_command(DisplayItem::Clear { color: Color::from_u8(255, 255, 255, 255) });
+        rl.add_command(DisplayItem::Clear {
+            color: Color::from_u8(0, 0, 0, 255),
+        });
+        rl.add_command(DisplayItem::Clear {
+            color: Color::from_u8(255, 255, 255, 255),
+        });
 
         assert_eq!(rl.items.len(), 2);
         rl.clear();

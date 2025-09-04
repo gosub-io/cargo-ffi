@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use parley::Font;
+use std::collections::HashMap;
 
 /// A simple font cache that maps font family names to loaded fonts.
 pub struct FontCache {
@@ -29,11 +29,12 @@ impl FontCache {
 
                 let fallback_name = match name {
                     "UI Sans" => "SansSerif",
-                    _ => "SansSerif"
+                    _ => "SansSerif",
                 };
 
                 if let Some(font) = self.fonts.get(fallback_name) {
-                    self.resolved_names.insert(name.to_string(), fallback_name.to_string());
+                    self.resolved_names
+                        .insert(name.to_string(), fallback_name.to_string());
                     return Some((font, fallback_name.to_string()));
                 }
 
@@ -45,7 +46,8 @@ impl FontCache {
     pub fn insert(&mut self, name: &str, resolved_name: &str, font: Font) {
         println!("Caching font {} as {}", name, resolved_name);
         self.fonts.insert(name.to_string(), font);
-        self.resolved_names.insert(name.to_string(), resolved_name.to_string());
+        self.resolved_names
+            .insert(name.to_string(), resolved_name.to_string());
     }
 
     #[allow(unused)]
@@ -60,4 +62,3 @@ impl FontCache {
         self.resolved_names.remove(name);
     }
 }
-

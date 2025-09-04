@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::render::backend::{CompositorSink, ExternalHandle};
 use crate::tab::TabId;
+use std::collections::HashMap;
 
 /// A default compositor implementation that manages frames per tab
 /// and requests redraws when new frames are submitted.

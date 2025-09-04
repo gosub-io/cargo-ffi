@@ -1,7 +1,3 @@
-use std::sync::Arc;
-use tokio::sync::{mpsc, broadcast};
-use tokio_util::sync::CancellationToken;
-use url::Url;
 use crate::cookies::CookieJarHandle;
 use crate::engine::events::EngineEvent;
 use crate::events::TabCommand;
@@ -9,6 +5,10 @@ use crate::net::Response;
 use crate::render::Viewport;
 use crate::storage::{PartitionKey, PartitionPolicy, StorageService};
 use crate::tab::TabId;
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc};
+use tokio_util::sync::CancellationToken;
+use url::Url;
 
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
 /// the load is no longer needed (e.g., user navigated away).
@@ -86,7 +86,6 @@ pub enum TabActivityMode {
     Suspended,
 }
 
-
 // /// Parameters for creating a new tab.
 // ///
 // /// This lets the UA specify an optional title, viewport size, and/or URL
@@ -113,7 +112,6 @@ pub enum TabActivityMode {
 //         }
 //     }
 // }
-
 
 /// The effective services for a tab after applying zone defaults and tab overrides.
 #[derive(Clone, Debug)]

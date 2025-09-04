@@ -103,12 +103,10 @@ async fn main() -> Result<(), EngineError> {
     })
     .await?;
 
-
     // We can set metadata on the zone like this
     zone.set_title("My first Zone");
     zone.set_description("This is the new description");
-    zone.set_color([255,128,64,255]);
-
+    zone.set_color([255, 128, 64, 255]);
 
     // Open a private tab inside the zone. Note that we override some of the tab options to
     // make it private (ephemeral storage, cookie jar, cache, etc). We also set an initial URL that
@@ -184,7 +182,6 @@ async fn main() -> Result<(), EngineError> {
     println!("Done. Exiting.");
     Ok(())
 }
-
 
 fn handle_event(ev: EngineEvent) {
     match ev {

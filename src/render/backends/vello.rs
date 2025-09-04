@@ -3,6 +3,9 @@ use crate::render::backend::GpuPixelFormat;
 use crate::render::backend::{
     ErasedSurface, ExternalHandle, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
 };
+use crate::render::backends::vello::font_cache::FontCache;
+use crate::render::backends::vello::font_manager::FontManager;
+use crate::render::backends::vello::text_renderer::{TextKey, TextRenderer};
 use crate::render::DisplayItem;
 use anyhow::{anyhow, Result};
 use std::any::Any;
@@ -11,14 +14,10 @@ use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::wgpu;
 use vello::{RenderParams, Renderer, RendererOptions, Scene};
-use crate::render::backends::vello::font_cache::FontCache;
-use crate::render::backends::vello::font_manager::FontManager;
-use crate::render::backends::vello::text_renderer::{TextKey, TextRenderer};
 
-mod font_manager;
 mod font_cache;
+mod font_manager;
 mod text_renderer;
-
 
 /// This trait abstracts over the wgpu context (device, queue, texture management) so we can connect
 /// UI based wgpu contexts (like eframe) to the Vello backend.
@@ -141,7 +140,8 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                         &mut self.font_cache,
                         &mut scene,
                         &key,
-                        x, y,
+                        x,
+                        y,
                         (*color).into(),
                     );
                 }
@@ -163,7 +163,8 @@ impl RenderBackend for VelloBackend {
         _present: PresentMode,
     ) -> Result<Box<dyn ErasedSurface>> {
         let texture_store_id =
-            self.context.create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
+            self.context
+                .create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
 
         Ok(Box::new(VelloSurface {
             texture_store_id,

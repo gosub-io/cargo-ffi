@@ -45,14 +45,14 @@
 //! };
 //! ```
 
-use std::fmt::Debug;
-use std::ops::Deref;
+use crate::cookies::DefaultCookieJar;
 use crate::engine::cookies::store::CookieStore;
 use crate::engine::cookies::CookieJar;
-use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use crate::cookies::DefaultCookieJar;
 use crate::zone::ZoneId;
+use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
+use std::ops::Deref;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// A handle to a cookie jar trait.
 ///
@@ -112,7 +112,9 @@ impl CookieJarHandle {
 
 impl Deref for CookieJarHandle {
     type Target = RwLock<Box<dyn CookieJar + Send + Sync>>;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl From<Box<dyn CookieJar + Send + Sync>> for CookieJarHandle {
@@ -130,7 +132,6 @@ where
     }
 }
 
-
 /// A handle to a cookie store trait.
 ///
 /// This is a reference-counted pointer to a type-erased [`CookieStore`].
@@ -141,11 +142,13 @@ where
 pub struct CookieStoreHandle(Arc<dyn CookieStore + Send + Sync>);
 
 impl Clone for CookieStoreHandle {
-    fn clone(&self) -> Self { Self(self.0.clone()) }
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
 
     fn clone_from(&mut self, source: &Self)
     where
-        Self:
+        Self:,
     {
         self.0.clone_from(&source.0);
     }
@@ -155,7 +158,9 @@ impl<T> From<Arc<T>> for CookieStoreHandle
 where
     T: CookieStore + Send + Sync + 'static,
 {
-    fn from(a: Arc<T>) -> Self { Self(a) }
+    fn from(a: Arc<T>) -> Self {
+        Self(a)
+    }
 }
 
 impl Debug for CookieStoreHandle {

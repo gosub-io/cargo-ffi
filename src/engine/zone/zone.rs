@@ -1,23 +1,23 @@
+use crate::cookies::CookieStoreHandle;
 use crate::engine::cookies::CookieJarHandle;
+use crate::engine::engine::EngineContext;
+use crate::engine::events::EngineEvent;
 use crate::engine::storage::{StorageService, Subscription};
 use crate::engine::tab::TabId;
+use crate::storage::types::PartitionPolicy;
+use crate::tab::services::resolve_tab_services;
+use crate::tab::{Tab, TabDefaults, TabHandle, TabOverrides, TabSink};
+use crate::zone::ZoneConfig;
 use crate::EngineError;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use crate::cookies::CookieStoreHandle;
-use crate::engine::engine::EngineContext;
-use crate::engine::events::EngineEvent;
-use crate::storage::types::PartitionPolicy;
-use crate::tab::{TabDefaults, TabOverrides, TabSink, TabHandle, Tab};
-use crate::tab::services::resolve_tab_services;
-use crate::zone::ZoneConfig;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -242,26 +242,44 @@ impl Zone {
     // pub fn services(&self) -> ZoneServices { self.services.clone() }
 
     /// This function does the actual creation of the tab
-    pub async fn create_tab(&mut self, initial: TabDefaults, overrides: Option<TabOverrides>) -> Result<TabHandle, EngineError> {
+    pub async fn create_tab(
+        &mut self,
+        initial: TabDefaults,
+        overrides: Option<TabOverrides>,
+    ) -> Result<TabHandle, EngineError> {
         if self.tabs.len() >= self.config.max_tabs {
             return Err(EngineError::TabLimitExceeded);
         }
 
-        let tab_services = resolve_tab_services(self.id, &self.context.services, &overrides.unwrap_or_default());
+        let tab_services = resolve_tab_services(
+            self.id,
+            &self.context.services,
+            &overrides.unwrap_or_default(),
+        );
 
-        let (tab_handle, join_handle) = Tab::new_on_thread(self.id, tab_services, self.context.clone())
-            .map_err(|e| EngineError::CreateTab(e.into()))?;
-        self.tabs.insert(tab_handle.tab_id, TabInfo {
-            join_handle: join_handle,
-            sink: tab_handle.sink.clone()
-        });
+        let (tab_handle, join_handle) =
+            Tab::new_on_thread(self.id, tab_services, self.context.clone())
+                .map_err(|e| EngineError::CreateTab(e.into()))?;
+        self.tabs.insert(
+            tab_handle.tab_id,
+            TabInfo {
+                join_handle: join_handle,
+                sink: tab_handle.sink.clone(),
+            },
+        );
 
         // Increase metrics
-        self.sink.tabs_created.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.sink
+            .tabs_created
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Set tab defaults
-        tab_handle.set_title(initial.title.as_deref().unwrap_or("New Tab")).await?;
-        tab_handle.set_viewport(initial.viewport.unwrap_or_default()).await?;
+        tab_handle
+            .set_title(initial.title.as_deref().unwrap_or("New Tab"))
+            .await?;
+        tab_handle
+            .set_viewport(initial.viewport.unwrap_or_default())
+            .await?;
 
         // Load URL in tab if provided
         if let Some(url) = initial.url.as_ref() {
@@ -269,7 +287,6 @@ impl Zone {
         }
 
         Ok(tab_handle)
-
 
         // let join = spawn_tab_task(tab_args, ack_tx);
         //
@@ -319,7 +336,6 @@ impl Zone {
     // ) -> anyhow::Result<Arc<dyn StorageArea>> {
     //     self.services.storage.session_for(self.id, tab, pk, origin)
     // }
-
 
     /// Forwards storage events from the storage service to the engine event channel.
     fn spawn_storage_events_to_engine(&self) {

@@ -1,6 +1,6 @@
+use crate::zone::ZoneId;
 use url::{Origin, Url};
 use uuid::Uuid;
-use crate::zone::ZoneId;
 
 /// Partitioning key (future-proof for state partitioning).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -10,7 +10,7 @@ pub enum PartitionKey {
     /// Top-level partitioning key based on the origin of the URL.
     TopLevel(Origin),
     /// Custom partition key
-    Custom(String)
+    Custom(String),
 }
 
 impl Default for PartitionKey {

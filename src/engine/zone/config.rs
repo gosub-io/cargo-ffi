@@ -58,8 +58,8 @@
 //! (e.g. `font_scale` outside `0.25..=10.0`, `minimum_font_size > default_font_size`,
 //! or `max_tabs == 0`).
 
-use std::fmt;
 use crate::storage::PartitionPolicy;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct ZoneConfig {
@@ -112,7 +112,9 @@ pub struct ZoneConfigBuilder {
 
 impl Default for ZoneConfigBuilder {
     fn default() -> Self {
-        Self { inner: ZoneConfig::default() }
+        Self {
+            inner: ZoneConfig::default(),
+        }
     }
 }
 
@@ -124,34 +126,62 @@ impl ZoneConfigBuilder {
     }
 
     #[must_use]
-    pub fn max_tabs(self, n: usize) -> Self { self.map(|c| c.max_tabs = n) }
+    pub fn max_tabs(self, n: usize) -> Self {
+        self.map(|c| c.max_tabs = n)
+    }
     #[must_use]
-    pub fn user_agent<S: Into<String>>(self, ua: S) -> Self { self.map(|c| c.user_agent = Some(ua.into())) }
+    pub fn user_agent<S: Into<String>>(self, ua: S) -> Self {
+        self.map(|c| c.user_agent = Some(ua.into()))
+    }
     #[must_use]
-    pub fn accept_languages<S: Into<String>>(self, langs: S) -> Self { self.map(|c| c.accept_languages = Some(langs.into())) }
+    pub fn accept_languages<S: Into<String>>(self, langs: S) -> Self {
+        self.map(|c| c.accept_languages = Some(langs.into()))
+    }
     #[must_use]
-    pub fn do_not_track(self, dnt: bool) -> Self { self.map(|c| c.do_not_track = dnt) }
+    pub fn do_not_track(self, dnt: bool) -> Self {
+        self.map(|c| c.do_not_track = dnt)
+    }
     #[must_use]
-    pub fn javascript_enabled(self, on: bool) -> Self { self.map(|c| c.javascript_enabled = on) }
+    pub fn javascript_enabled(self, on: bool) -> Self {
+        self.map(|c| c.javascript_enabled = on)
+    }
     #[must_use]
-    pub fn images_enabled(self, on: bool) -> Self { self.map(|c| c.images_enabled = on) }
+    pub fn images_enabled(self, on: bool) -> Self {
+        self.map(|c| c.images_enabled = on)
+    }
     #[must_use]
-    pub fn plugins_enabled(self, on: bool) -> Self { self.map(|c| c.plugins_enabled = on) }
+    pub fn plugins_enabled(self, on: bool) -> Self {
+        self.map(|c| c.plugins_enabled = on)
+    }
     #[must_use]
-    pub fn font_scale(self, scale: f32) -> Self { self.map(|c| c.font_scale = scale) }
+    pub fn font_scale(self, scale: f32) -> Self {
+        self.map(|c| c.font_scale = scale)
+    }
     #[must_use]
-    pub fn default_font_family<S: Into<String>>(self, fam: S) -> Self { self.map(|c| c.default_font_family = Some(fam.into())) }
+    pub fn default_font_family<S: Into<String>>(self, fam: S) -> Self {
+        self.map(|c| c.default_font_family = Some(fam.into()))
+    }
     #[must_use]
-    pub fn default_font_size(self, px: u32) -> Self { self.map(|c| c.default_font_size = px) }
+    pub fn default_font_size(self, px: u32) -> Self {
+        self.map(|c| c.default_font_size = px)
+    }
     #[must_use]
-    pub fn minimum_font_size(self, px: u32) -> Self { self.map(|c| c.minimum_font_size = px) }
+    pub fn minimum_font_size(self, px: u32) -> Self {
+        self.map(|c| c.minimum_font_size = px)
+    }
     #[must_use]
-    pub fn enable_local_file_access(self, on: bool) -> Self { self.map(|c| c.enable_local_file_access = on) }
+    pub fn enable_local_file_access(self, on: bool) -> Self {
+        self.map(|c| c.enable_local_file_access = on)
+    }
     #[must_use]
-    pub fn partition_policy(self, policy: PartitionPolicy) -> Self { self.map(|c| c.partition_policy = policy) }
+    pub fn partition_policy(self, policy: PartitionPolicy) -> Self {
+        self.map(|c| c.partition_policy = policy)
+    }
 
     /// Apply multiple changes in one go.
-    pub fn with(self, f: impl FnOnce(&mut ZoneConfig)) -> Self { self.map(f) }
+    pub fn with(self, f: impl FnOnce(&mut ZoneConfig)) -> Self {
+        self.map(f)
+    }
 
     /// Validate and build the final config.
     pub fn build(self) -> Result<ZoneConfig, ZoneConfigError> {
@@ -171,12 +201,14 @@ pub enum ZoneConfigError {
 impl fmt::Display for ZoneConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ZoneConfigError::InvalidFontScale(s) =>
-                write!(f, "font_scale {s} is out of range (expected 0.25..=10.0)"),
-            ZoneConfigError::MinFontLarger { min, default } =>
-                write!(f, "minimum_font_size ({min}) > default_font_size ({default})"),
-            ZoneConfigError::ZeroTabs =>
-                write!(f, "max_tabs must be at least 1"),
+            ZoneConfigError::InvalidFontScale(s) => {
+                write!(f, "font_scale {s} is out of range (expected 0.25..=10.0)")
+            }
+            ZoneConfigError::MinFontLarger { min, default } => write!(
+                f,
+                "minimum_font_size ({min}) > default_font_size ({default})"
+            ),
+            ZoneConfigError::ZeroTabs => write!(f, "max_tabs must be at least 1"),
         }
     }
 }

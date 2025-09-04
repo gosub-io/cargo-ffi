@@ -1,8 +1,8 @@
 use crate::engine::storage::{StorageArea, StorageHandles};
 use crate::net::{fetch, Response};
 use crate::render::{Color, DisplayItem, RenderList, Viewport};
-use std::sync::Arc;
 use http::header::CONTENT_TYPE;
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,7 +30,6 @@ pub struct BrowsingContext {
 
     // Tokio runtime for async operations
     // runtime: Arc<Runtime>,
-
     /// Storage handles for local and session storage
     storage: Option<StorageHandles>,
 
@@ -79,7 +78,6 @@ impl BrowsingContext {
     pub fn session_storage(&self) -> Option<Arc<dyn StorageArea>> {
         self.storage.as_ref().map(|s| s.session.clone())
     }
-
 
     /// Load a URL, mutate the context, and return the raw Response.
     /// - On success: sets current_url (after redirects), raw_html (decoded), clears `failed`, invalidates render.
@@ -209,7 +207,6 @@ impl BrowsingContext {
     }
 }
 
-
 /// Best-effort response body decoder:
 /// - honors `Content-Type: ...; charset=...` when present
 /// - falls back to UTF-8 lossless
@@ -238,7 +235,6 @@ fn decode_response_body(headers: &http::HeaderMap, body: &[u8]) -> String {
         _ => String::from_utf8_lossy(body).into_owned(),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -287,7 +283,12 @@ mod tests {
         let epoch1 = ctx.scene_epoch();
 
         // change viewport → should invalidate and rebuild
-        let vp = Viewport { x: 0, y: 0, width: 800, height: 600 };
+        let vp = Viewport {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        };
         ctx.set_viewport(vp);
         ctx.rebuild_render_list_if_needed();
         assert_eq!(ctx.scene_epoch(), epoch1 + 1);
@@ -314,7 +315,11 @@ mod tests {
         // And set the error stub HTML (visible after rebuild)
         ctx.rebuild_render_list_if_needed();
         let texts = list_texts(&ctx);
-        assert!(texts.iter().any(|t| t.contains("Load cancelled")), "missing cancel text in render list: {:?}", texts);
+        assert!(
+            texts.iter().any(|t| t.contains("Load cancelled")),
+            "missing cancel text in render list: {:?}",
+            texts
+        );
     }
 
     #[test]
@@ -322,10 +327,7 @@ mod tests {
         use http::HeaderMap;
 
         let mut headers = HeaderMap::new();
-        headers.insert(
-            CONTENT_TYPE,
-            "text/html; charset=UTF-8".parse().unwrap()
-        );
+        headers.insert(CONTENT_TYPE, "text/html; charset=UTF-8".parse().unwrap());
 
         let body = b"<html>\xe2\x98\x83</html>"; // UTF-8 snowman
         let s = decode_response_body(&headers, body);

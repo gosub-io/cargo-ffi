@@ -116,9 +116,9 @@ pub struct StorageHandles {
 
 pub use area::{LocalStore, SessionStore, StorageArea};
 pub use event::StorageEvent;
-pub use service::{StorageService, Subscription};
-pub use local::sqlite_store::SqliteLocalStore;
 pub use local::in_memory::InMemoryLocalStore;
+pub use local::sqlite_store::SqliteLocalStore;
+pub use service::{StorageService, Subscription};
 pub use session::in_memory::InMemorySessionStore;
 pub use types::PartitionKey;
 pub use types::PartitionPolicy;

@@ -95,20 +95,20 @@
 //! - [`JsonCookieStore`]: file-backed JSON (easy to inspect/debug).
 //! - [`SqliteCookieStore`]: SQLite (scales to many cookies, concurrent friendly).
 //! - [`InMemoryCookieStore`]: non-persistent (tests, disposable profiles).
+mod in_memory;
 mod json;
 mod sqlite;
-mod in_memory;
 
 use crate::engine::cookies::cookie_jar::DefaultCookieJar;
 use crate::engine::cookies::cookies::CookieJarHandle;
 use crate::engine::zone::ZoneId;
 
+/// In-memory cookie store
+pub use in_memory::InMemoryCookieStore;
 /// File-backed JSON cookie store (one file for all zones).
 pub use json::JsonCookieStore;
 /// SQLite-backed cookie store (one database for all zones).
 pub use sqlite::SqliteCookieStore;
-/// In-memory cookie store
-pub use in_memory::InMemoryCookieStore;
 
 /// A cookie **store** mints per-zone cookie **jars** and (optionally) persists them.
 ///

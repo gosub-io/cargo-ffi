@@ -134,13 +134,13 @@ pub enum RedirectPolicy {
 #[derive(Debug, Clone)]
 pub struct ProxyConfig {
     /// Proxy URL for HTTP requests
-    pub http: Option<String>,   // e.g. "http://user:pass@host:port"
+    pub http: Option<String>, // e.g. "http://user:pass@host:port"
     /// Proxy URL for HTTPS requests
-    pub https: Option<String>,  // e.g. "https://user:pass@host:port"
+    pub https: Option<String>, // e.g. "https://user:pass@host:port"
     /// Proxy URL for SOCKS5 (TCP) requests
     pub socks5: Option<String>, // e.g. "socks5://host:1080"
     /// Domains to bypass the proxy for (exact match)
-    pub no_proxy: Vec<String>,  // domains to bypass proxy
+    pub no_proxy: Vec<String>, // domains to bypass proxy
 }
 
 /// TLS configuration settings
@@ -149,9 +149,9 @@ pub struct TlsConfig {
     /// Whether to use the system root certificates
     pub use_system_roots: bool,
     /// Additional root certificates in PEM format
-    pub extra_roots_pem: Vec<u8>,           // concatenated PEM
+    pub extra_roots_pem: Vec<u8>, // concatenated PEM
     /// Optional client certificate in PKCS#12 / PFX format
-    pub client_cert_pfx: Option<Vec<u8>>,   // PKCS#12 / PFX bytes
+    pub client_cert_pfx: Option<Vec<u8>>, // PKCS#12 / PFX bytes
     /// Optional password for the client certificate
     pub client_cert_password: Option<String>,
     /// Whether to enable HTTP/3 support (if the backend supports it)
@@ -175,7 +175,7 @@ pub struct GpuOptions {
     /// Whether to prefer low-power GPUs (e.g. integrated) on multi-GPU systems.
     pub prefer_low_power: bool,
     /// Number of MSAA samples for anti-aliasing.
-    pub msaa_samples: u32,           // {1,2,4,8}
+    pub msaa_samples: u32, // {1,2,4,8}
     /// Whether to enable vsync (may affect latency).
     pub vsync: bool,
     /// Whether to use an sRGB framebuffer (if supported).
@@ -212,7 +212,6 @@ pub struct EngineConfig {
     pub script_concurrency: usize,
 
     // --- networking / HTTP ---
-
     /// User agent string used for outgoing HTTP requests (default is Gosub-UA).
     pub user_agent: String,
     /// Connection timeout duration.
@@ -380,65 +379,148 @@ pub struct EngineConfigBuilder {
 
 impl Default for EngineConfigBuilder {
     fn default() -> Self {
-        Self { inner: EngineConfig::default() }
+        Self {
+            inner: EngineConfig::default(),
+        }
     }
 }
 
 impl EngineConfigBuilder {
     // --- generic helper ---
     #[inline]
-    fn map(mut self, f: impl FnOnce(&mut EngineConfig)) -> Self { f(&mut self.inner); self }
+    fn map(mut self, f: impl FnOnce(&mut EngineConfig)) -> Self {
+        f(&mut self.inner);
+        self
+    }
 
     // --- chainable setters (add more as you need) ---
-    pub fn user_agent<S: Into<String>>(self, ua: S) -> Self { self.map(|c| c.user_agent = ua.into()) }
-    pub fn max_zones(self, n: usize) -> Self { self.map(|c| c.max_zones = n) }
-    pub fn default_zone_config(self, z: ZoneConfig) -> Self { self.map(|c| c.default_zone_config = z) }
+    pub fn user_agent<S: Into<String>>(self, ua: S) -> Self {
+        self.map(|c| c.user_agent = ua.into())
+    }
+    pub fn max_zones(self, n: usize) -> Self {
+        self.map(|c| c.max_zones = n)
+    }
+    pub fn default_zone_config(self, z: ZoneConfig) -> Self {
+        self.map(|c| c.default_zone_config = z)
+    }
 
-    pub fn worker_threads(self, n: usize) -> Self { self.map(|c| c.worker_threads = n) }
-    pub fn io_concurrency(self, n: usize) -> Self { self.map(|c| c.io_concurrency = n) }
-    pub fn script_concurrency(self, n: usize) -> Self { self.map(|c| c.script_concurrency = n) }
+    pub fn worker_threads(self, n: usize) -> Self {
+        self.map(|c| c.worker_threads = n)
+    }
+    pub fn io_concurrency(self, n: usize) -> Self {
+        self.map(|c| c.io_concurrency = n)
+    }
+    pub fn script_concurrency(self, n: usize) -> Self {
+        self.map(|c| c.script_concurrency = n)
+    }
 
-    pub fn connect_timeout(self, d: Duration) -> Self { self.map(|c| c.connect_timeout = d) }
-    pub fn request_timeout(self, d: Duration) -> Self { self.map(|c| c.request_timeout = d) }
-    pub fn redirect_policy(self, p: RedirectPolicy) -> Self { self.map(|c| c.redirect_policy = p) }
-    pub fn http2(self, on: bool) -> Self { self.map(|c| c.http2 = on) }
-    pub fn max_connections_per_host(self, n: u32) -> Self { self.map(|c| c.max_connections_per_host = n) }
-    pub fn proxy(self, p: ProxyConfig) -> Self { self.map(|c| c.proxy = Some(p)) }
-    pub fn tls(self, t: TlsConfig) -> Self { self.map(|c| c.tls = t) }
+    pub fn connect_timeout(self, d: Duration) -> Self {
+        self.map(|c| c.connect_timeout = d)
+    }
+    pub fn request_timeout(self, d: Duration) -> Self {
+        self.map(|c| c.request_timeout = d)
+    }
+    pub fn redirect_policy(self, p: RedirectPolicy) -> Self {
+        self.map(|c| c.redirect_policy = p)
+    }
+    pub fn http2(self, on: bool) -> Self {
+        self.map(|c| c.http2 = on)
+    }
+    pub fn max_connections_per_host(self, n: u32) -> Self {
+        self.map(|c| c.max_connections_per_host = n)
+    }
+    pub fn proxy(self, p: ProxyConfig) -> Self {
+        self.map(|c| c.proxy = Some(p))
+    }
+    pub fn tls(self, t: TlsConfig) -> Self {
+        self.map(|c| c.tls = t)
+    }
 
-    pub fn disk_cache_dir<P: Into<PathBuf>>(self, p: P) -> Self { self.map(|c| c.disk_cache_dir = p.into()) }
-    pub fn disk_cache_bytes(self, n: u64) -> Self { self.map(|c| c.disk_cache_bytes = n) }
-    pub fn memory_cache_bytes(self, n: u64) -> Self { self.map(|c| c.memory_cache_bytes = n) }
-    pub fn storage_root<P: Into<PathBuf>>(self, p: P) -> Self { self.map(|c| c.storage_root = p.into()) }
-    pub fn quota_per_zone_bytes(self, n: u64) -> Self { self.map(|c| c.quota_per_zone_bytes = n) }
-    pub fn persist_cookies(self, on: bool) -> Self { self.map(|c| c.persist_cookies = on) }
-    pub fn cookie_jar_partitioning(self, m: CookiePartitioning) -> Self { self.map(|c| c.cookie_jar_partitioning = m) }
+    pub fn disk_cache_dir<P: Into<PathBuf>>(self, p: P) -> Self {
+        self.map(|c| c.disk_cache_dir = p.into())
+    }
+    pub fn disk_cache_bytes(self, n: u64) -> Self {
+        self.map(|c| c.disk_cache_bytes = n)
+    }
+    pub fn memory_cache_bytes(self, n: u64) -> Self {
+        self.map(|c| c.memory_cache_bytes = n)
+    }
+    pub fn storage_root<P: Into<PathBuf>>(self, p: P) -> Self {
+        self.map(|c| c.storage_root = p.into())
+    }
+    pub fn quota_per_zone_bytes(self, n: u64) -> Self {
+        self.map(|c| c.quota_per_zone_bytes = n)
+    }
+    pub fn persist_cookies(self, on: bool) -> Self {
+        self.map(|c| c.persist_cookies = on)
+    }
+    pub fn cookie_jar_partitioning(self, m: CookiePartitioning) -> Self {
+        self.map(|c| c.cookie_jar_partitioning = m)
+    }
 
-    pub fn sandbox_mode(self, m: SandboxMode) -> Self { self.map(|c| c.sandbox_mode = m) }
-    pub fn cors_enforcement(self, on: bool) -> Self { self.map(|c| c.cors_enforcement = on) }
-    pub fn disable_networking(self, on: bool) -> Self { self.map(|c| c.disable_networking = on) }
-    pub fn blocked_domains(self, list: Vec<String>) -> Self { self.map(|c| c.blocked_domains = list) }
-    pub fn allowlist_domains(self, list: Vec<String>) -> Self { self.map(|c| c.allowlist_domains = list) }
+    pub fn sandbox_mode(self, m: SandboxMode) -> Self {
+        self.map(|c| c.sandbox_mode = m)
+    }
+    pub fn cors_enforcement(self, on: bool) -> Self {
+        self.map(|c| c.cors_enforcement = on)
+    }
+    pub fn disable_networking(self, on: bool) -> Self {
+        self.map(|c| c.disable_networking = on)
+    }
+    pub fn blocked_domains(self, list: Vec<String>) -> Self {
+        self.map(|c| c.blocked_domains = list)
+    }
+    pub fn allowlist_domains(self, list: Vec<String>) -> Self {
+        self.map(|c| c.allowlist_domains = list)
+    }
 
-    pub fn gpu(self, opts: GpuOptions) -> Self { self.map(|c| c.gpu = opts) }
-    pub fn target_fps(self, fps: Option<u16>) -> Self { self.map(|c| c.target_fps = fps) }
-    pub fn pixel_snap(self, on: bool) -> Self { self.map(|c| c.pixel_snap = on) }
+    pub fn gpu(self, opts: GpuOptions) -> Self {
+        self.map(|c| c.gpu = opts)
+    }
+    pub fn target_fps(self, fps: Option<u16>) -> Self {
+        self.map(|c| c.target_fps = fps)
+    }
+    pub fn pixel_snap(self, on: bool) -> Self {
+        self.map(|c| c.pixel_snap = on)
+    }
 
-    pub fn font_search_paths(self, v: Vec<PathBuf>) -> Self { self.map(|c| c.font_search_paths = v) }
-    pub fn fallback_fonts(self, v: Vec<String>) -> Self { self.map(|c| c.fallback_fonts = v) }
-    pub fn font_cache_bytes(self, n: u64) -> Self { self.map(|c| c.font_cache_bytes = n) }
+    pub fn font_search_paths(self, v: Vec<PathBuf>) -> Self {
+        self.map(|c| c.font_search_paths = v)
+    }
+    pub fn fallback_fonts(self, v: Vec<String>) -> Self {
+        self.map(|c| c.fallback_fonts = v)
+    }
+    pub fn font_cache_bytes(self, n: u64) -> Self {
+        self.map(|c| c.font_cache_bytes = n)
+    }
 
-    pub fn javascript_enabled(self, on: bool) -> Self { self.map(|c| c.javascript_enabled = on) }
-    pub fn lua_enabled(self, on: bool) -> Self { self.map(|c| c.lua_enabled = on) }
-    pub fn wasm_enabled(self, on: bool) -> Self { self.map(|c| c.wasm_enabled = on) }
-    pub fn max_script_cpu_ms_per_frame(self, n: u32) -> Self { self.map(|c| c.max_script_cpu_ms_per_frame = n) }
+    pub fn javascript_enabled(self, on: bool) -> Self {
+        self.map(|c| c.javascript_enabled = on)
+    }
+    pub fn lua_enabled(self, on: bool) -> Self {
+        self.map(|c| c.lua_enabled = on)
+    }
+    pub fn wasm_enabled(self, on: bool) -> Self {
+        self.map(|c| c.wasm_enabled = on)
+    }
+    pub fn max_script_cpu_ms_per_frame(self, n: u32) -> Self {
+        self.map(|c| c.max_script_cpu_ms_per_frame = n)
+    }
 
-    pub fn log_level(self, lvl: LogLevel) -> Self { self.map(|c| c.log_level = lvl) }
-    pub fn metrics_enabled(self, on: bool) -> Self { self.map(|c| c.metrics_enabled = on) }
-    pub fn trace_enabled(self, on: bool) -> Self { self.map(|c| c.trace_enabled = on) }
+    pub fn log_level(self, lvl: LogLevel) -> Self {
+        self.map(|c| c.log_level = lvl)
+    }
+    pub fn metrics_enabled(self, on: bool) -> Self {
+        self.map(|c| c.metrics_enabled = on)
+    }
+    pub fn trace_enabled(self, on: bool) -> Self {
+        self.map(|c| c.trace_enabled = on)
+    }
 
     /// Apply multiple mutations in one go.
-    pub fn with(self, f: impl FnOnce(&mut EngineConfig)) -> Self { self.map(f) }
+    pub fn with(self, f: impl FnOnce(&mut EngineConfig)) -> Self {
+        self.map(f)
+    }
 
     /// Validate and build the final `EngineConfig`.
     pub fn build(self) -> Result<EngineConfig, EngineConfigError> {
@@ -465,7 +547,9 @@ impl fmt::Display for EngineConfigError {
         match self {
             ZeroZones => write!(f, "max_zones must be at least 1"),
             ZeroThreads(who) => write!(f, "{who} must be at least 1"),
-            InvalidConnectionsPerHost(n) => write!(f, "max_connections_per_host must be >= 1 (got {n})"),
+            InvalidConnectionsPerHost(n) => {
+                write!(f, "max_connections_per_host must be >= 1 (got {n})")
+            }
             InvalidTimeout(name, d) => write!(f, "{name} must be > 0 (got {:?})", d),
             InvalidMsaa(s) => write!(f, "msaa_samples must be one of {{1,2,4,8}} (got {s})"),
             NegativeBytes(name) => write!(f, "{name} must be non-negative"),
@@ -475,19 +559,35 @@ impl fmt::Display for EngineConfigError {
 impl std::error::Error for EngineConfigError {}
 
 fn validate(c: &EngineConfig) -> Result<(), EngineConfigError> {
-    if c.max_zones == 0 { return Err(EngineConfigError::ZeroZones); }
-    if c.worker_threads == 0 { return Err(EngineConfigError::ZeroThreads("worker_threads")); }
-    if c.io_concurrency == 0 { return Err(EngineConfigError::ZeroThreads("io_concurrency")); }
-    if c.script_concurrency == 0 { return Err(EngineConfigError::ZeroThreads("script_concurrency")); }
+    if c.max_zones == 0 {
+        return Err(EngineConfigError::ZeroZones);
+    }
+    if c.worker_threads == 0 {
+        return Err(EngineConfigError::ZeroThreads("worker_threads"));
+    }
+    if c.io_concurrency == 0 {
+        return Err(EngineConfigError::ZeroThreads("io_concurrency"));
+    }
+    if c.script_concurrency == 0 {
+        return Err(EngineConfigError::ZeroThreads("script_concurrency"));
+    }
 
     if c.max_connections_per_host == 0 {
-        return Err(EngineConfigError::InvalidConnectionsPerHost(c.max_connections_per_host));
+        return Err(EngineConfigError::InvalidConnectionsPerHost(
+            c.max_connections_per_host,
+        ));
     }
     if c.connect_timeout == Duration::from_millis(0) {
-        return Err(EngineConfigError::InvalidTimeout("connect_timeout", c.connect_timeout));
+        return Err(EngineConfigError::InvalidTimeout(
+            "connect_timeout",
+            c.connect_timeout,
+        ));
     }
     if c.request_timeout == Duration::from_millis(0) {
-        return Err(EngineConfigError::InvalidTimeout("request_timeout", c.request_timeout));
+        return Err(EngineConfigError::InvalidTimeout(
+            "request_timeout",
+            c.request_timeout,
+        ));
     }
     match c.gpu.msaa_samples {
         1 | 2 | 4 | 8 => {}

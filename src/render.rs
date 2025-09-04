@@ -101,15 +101,14 @@
 //! - **Presentation:** The engine doesn’t present frames directly; the host’s
 //!   compositor owns that responsibility.
 
-
 pub mod backend;
 
 /// Rendering backends for the Gosub engine.
 pub mod backends {
-    pub mod null;
     /// Cairo rendering backend
     #[cfg(feature = "backend_cairo")]
     pub mod cairo;
+    pub mod null;
     /// Vello rendering backend
     #[cfg(feature = "backend_vello")]
     pub mod vello;

@@ -8,9 +8,9 @@ mod errors;
 pub mod events;
 
 pub mod cookies;
+pub mod storage;
 pub mod tab;
 pub mod zone;
-pub mod storage;
 
 pub mod config;
 // mod handle;

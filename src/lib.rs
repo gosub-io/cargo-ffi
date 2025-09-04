@@ -106,7 +106,6 @@ pub mod render;
 
 pub use engine::{EngineError, GosubEngine};
 
-
 #[doc(inline)]
 pub use engine::tab;
 
@@ -124,25 +123,14 @@ pub use engine::storage;
 pub use crate::engine::config::EngineConfig;
 
 pub mod events {
-    pub use crate::engine::events::{
-        TabCommand,
-        EngineEvent,
-        EngineCommand,
-        MouseButton,
-    };
+    pub use crate::engine::events::{EngineCommand, EngineEvent, MouseButton, TabCommand};
 }
 
 // Public `config` namespace with the enums/structs:
 /// Configuration options for the Gosub engine.
 pub mod config {
     pub use crate::engine::config::{
-        CookiePartitioning,
-        RedirectPolicy,
-        ProxyConfig,
+        CookiePartitioning, GpuOptions, LogLevel, ProxyConfig, RedirectPolicy, SandboxMode,
         TlsConfig,
-        GpuOptions,
-        LogLevel,
-        SandboxMode,
     };
 }
-

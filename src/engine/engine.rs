@@ -4,11 +4,11 @@ use crate::render::backend::RenderBackend;
 use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices, ZoneSink};
 use crate::{EngineConfig, EngineError};
 use anyhow::Result;
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
-use std::borrow::BorrowMut;
 
 pub struct GosubEngine {
     /// Context is what can be shared downstream
@@ -151,7 +151,6 @@ impl GosubEngine {
         // Wait for confirmation that the run loop has exited
         let _ = rx.await.map_err(|_| EngineError::Internal)?;
 
-
         // // Tabs should be closed first, then zones
         // let tab_cmds: Vec<_> = {
         //     // snapshot without holding locks across awaits
@@ -216,19 +215,16 @@ impl GosubEngine {
         zone_id: Option<ZoneId>,
     ) -> Result<Zone, EngineError> {
         let zone = match zone_id {
-            Some(zone_id) => Zone::new_with_id(
-                zone_id,
-                config,
-                services,
-                self.context.clone(),
-            ),
+            Some(zone_id) => Zone::new_with_id(zone_id, config, services, self.context.clone()),
             None => Zone::new(config, services, self.context.clone()),
         };
 
         let zone_id = zone.id;
         self.zones.insert(zone.id, zone.sink.clone());
 
-        self.context.event_tx.send(EngineEvent::ZoneCreated { zone_id })
+        self.context
+            .event_tx
+            .send(EngineEvent::ZoneCreated { zone_id })
             .map_err(|_| EngineError::Internal)?;
 
         Ok(zone)

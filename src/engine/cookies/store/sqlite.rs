@@ -239,10 +239,7 @@ impl CookieStore for SqliteCookieStore {
         let persistent = PersistentCookieJar::new(zone_id, arc_jar.clone(), store);
         let handle = CookieJarHandle::new(persistent);
 
-        self.jars
-            .write()
-            .unwrap()
-            .insert(zone_id, handle.clone());
+        self.jars.write().unwrap().insert(zone_id, handle.clone());
 
         Some(handle)
     }

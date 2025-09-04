@@ -115,7 +115,6 @@ pub enum ExternalHandle {
     //     /// Raw pixel data pointer in RGBA8 format.
     //     ptr: NonNull<[u8]>,
     // },
-
     /// GL / GLES texture. `target` is usually GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES.
     /// Optional `frame_id` helps hosts avoid sampling stale frames.
     GlTexture {

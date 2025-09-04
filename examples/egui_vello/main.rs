@@ -88,8 +88,7 @@ impl GosubApp {
             .create()
             .expect("zone creation failed");
 
-
-        let tabs : Vec<Tabhandle> = Vec![];
+        let tabs: Vec<Tabhandle> = Vec![];
 
         // Open a tab in our zone
         let viewport = Viewport::new(0, 0, DEFAULT_WIDTH as u32, DEFAULT_HEIGHT as u32);
@@ -292,7 +291,6 @@ impl GosubApp {
 
 impl eframe::App for GosubApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
 
         // Initialize vello backend if not already done
@@ -434,7 +432,7 @@ impl eframe::App for GosubApp {
                 if let Some(handle) = compositor.frame_for_mut(tab_id) {
                     let rect_ui = egui::Rect::from_min_max(
                         egui::pos2(rect.x as f32, rect.y as f32),
-                        egui::pos2(rect.w as f32, rect.h as f32)
+                        egui::pos2(rect.w as f32, rect.h as f32),
                     );
 
                     match handle {
@@ -454,7 +452,8 @@ impl eframe::App for GosubApp {
 
                             let ppp = ui.ctx().pixels_per_point();
                             // let size_points = egui::Vec2::new(*width as f32 / ppp, *height as f32 / ppp);
-                            let size_points = egui::Vec2::new((*width - 25) as f32, (*height - 25) as f32);
+                            let size_points =
+                                egui::Vec2::new((*width - 25) as f32, (*height - 25) as f32);
                             ui.add(egui::Image::new(SizedTexture::new(tid, size_points)));
                         }
                         _ => {
@@ -495,15 +494,29 @@ impl eframe::App for GosubApp {
 
             // Calculate new panel layouts
             let mut pairs = Vec::new();
-            compute_layout(&self.root.borrow(), Rect { x:0, y:0, w: size.x as i32, h: size.y as i32 }, &mut pairs);
+            compute_layout(
+                &self.root.borrow(),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: size.x as i32,
+                    h: size.y as i32,
+                },
+                &mut pairs,
+            );
 
             // Signal all tabs that we have resized them
             let mut eng = self.engine.borrow_mut();
             for (tab_id, r) in pairs {
-                let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 });
+                let _ = eng.handle_event(
+                    tab_id,
+                    EngineEvent::Resize {
+                        width: r.w as u32,
+                        height: r.h as u32,
+                    },
+                );
             }
         }
-
     }
 }
 
