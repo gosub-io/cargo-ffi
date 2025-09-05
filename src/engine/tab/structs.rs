@@ -21,7 +21,7 @@ pub(crate) struct InflightLoad {
 /// Arguments required to spawn a new tab task.
 #[derive(Debug)]
 pub struct TabSpawnArgs {
-    /// Tab I
+    /// Tab Id
     pub tab_id: TabId,
     /// Receive channel for commands for the tab
     pub cmd_rx: mpsc::Receiver<TabCommand>,
@@ -85,33 +85,6 @@ pub enum TabActivityMode {
     /// Suspended: no ticking until an event or visibility change.
     Suspended,
 }
-
-// /// Parameters for creating a new tab.
-// ///
-// /// This lets the UA specify an optional title, viewport size, and/or URL
-// /// when calling `ZoneHandle::create_tab()`.
-// #[derive(Debug, Clone)]
-// pub struct OpenTabParams {
-//     /// Optional initial title (e.g. "New Tab").
-//     /// The engine will later override this when a document sets `<title>`.
-//     pub title: Option<String>,
-//     /// Optional viewport to use at creation.
-//     /// If `None`, the tab starts with a default and can be updated later
-//     /// by calling `TabHandle::set_viewport()`.
-//     pub viewport: Option<Viewport>,
-//     /// Optional URL string to navigate to (like `about:blank` or a real page).
-//     pub url: Option<String>,
-// }
-//
-// impl Default for OpenTabParams {
-//     fn default() -> Self {
-//         Self {
-//             title: Some("New Tab".to_string()),
-//             viewport: None,
-//             url: None,
-//         }
-//     }
-// }
 
 /// The effective services for a tab after applying zone defaults and tab overrides.
 #[derive(Clone, Debug)]

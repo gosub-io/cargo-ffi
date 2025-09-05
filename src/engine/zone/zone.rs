@@ -338,12 +338,12 @@ impl Zone {
     // }
 
     /// Forwards storage events from the storage service to the engine event channel.
-    fn spawn_storage_events_to_engine(&self) {
+    fn spawn_storage_events_to_engine(&self) -> Result<tokio::task::JoinHandle<()>, EngineError> {
         let mut rx = self.context.storage_rx.resubscribe();
         let tx = self.context.event_tx.clone();
         let zone_id = self.id;
 
-        tokio::spawn(async move {
+        let join_handle = tokio::task::Builder::new().name("storage-events-forwarder").spawn(async move {
             while let Ok(ev) = rx.recv().await {
                 let _ = tx.send(EngineEvent::StorageChanged {
                     tab_id: ev.source_tab,
@@ -355,6 +355,8 @@ impl Zone {
                 });
             }
         });
+
+        join_handle.map_err(|e| EngineError::Internal(e.into()))
     }
 
     /// Closes a tab.

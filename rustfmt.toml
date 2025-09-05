@@ -1,0 +1,27 @@
+# --- General formatting ---
+max_width = 120          # Common compromise (80 feels cramped, 120–140 can be too wide)
+hard_tabs = false        # Always use spaces, consistent with most Rust projects
+tab_spaces = 4           # Standard Rust indentation
+
+# --- Function & struct formatting ---
+fn_params_layout = "Tall"   # Each param on its own line if multi-line (more readable)
+fn_call_width = 60          # Wrap function calls earlier for readability
+struct_field_align_threshold = 20  # Don't try to over-align struct fields (avoids ugly spacing)
+
+# --- Imports ---
+imports_granularity = "Module"     # Group imports per module instead of flattening all
+group_imports = "StdExternalCrate" # Keep std / external / local imports grouped
+reorder_imports = true             # Keep imports tidy
+
+# --- Wrapping & chains ---
+chain_width = 60        # When to wrap method chains (helps avoid horizontal scrolling)
+single_line_if_else_max_width = 50 # Keep small `if let` inline, otherwise wrap
+
+# --- Comments & docs ---
+wrap_comments = true     # Reflow long comments at max_width
+normalize_doc_attributes = true  # Normalize doc attributes (`///` vs `#[doc]`)
+format_code_in_doc_comments = true  # Run rustfmt inside doc tests/examples
+
+# --- Misc ---
+use_field_init_shorthand = true   # Prefer `{ x }` over `{ x: x }`
+edition = "2021"                  # Make sure formatting matches your Rust edition

@@ -238,6 +238,8 @@ pub enum EngineEvent {
         url: Url,
         error: String,
     },
+    /// Load has been cancelled (by user)
+    LoadCancelled { tab_id: TabId, url: String },
 
     // ****************************************
     // ** Tab lifecycle
@@ -291,6 +293,7 @@ pub enum EngineEvent {
     },
     /// Engine crashed
     TabCrashed { tab_id: TabId, reason: String },
+
     // Uncategorized / generic
 }
 

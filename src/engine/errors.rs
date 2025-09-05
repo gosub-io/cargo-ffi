@@ -26,8 +26,8 @@ pub enum EngineError {
     RendererError(String),
 
     /// Some internal issue within the engine has occurred
-    #[error("Internal engine error")]
-    Internal,
+    #[error("Internal engine error: {0}")]
+    Internal(#[source] anyhow::Error),
 
     /// The zone provided by the zone id is not found (permissions or does not exist)
     #[error("Zone not found")]

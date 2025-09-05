@@ -188,11 +188,10 @@ impl Tab {
     ) -> anyhow::Result<(TabHandle, JoinHandle<()>)> {
         let this = Self::new(zone_id, services, zone_context)?;
 
-        let handle = this.handle();
+        let tab_handle = this.handle();
+        let join_handle = tokio::task::Builder::new().name("Tab Worker").spawn(this.run())?;
 
-        let join_handle = tokio::spawn(this.run());
-
-        Ok((handle, join_handle))
+        Ok((tab_handle, join_handle))
     }
 
     /// Returns a tab handle
@@ -284,6 +283,7 @@ impl Tab {
     pub async fn run(mut self) {
         println!("Worker started for tab {:?}", self.tab_id);
 
+        // Tell the outside world we have a new tab
         let _ = self.zone_context.event_tx.send(EngineEvent::TabCreated {
             tab_id: self.tab_id,
             zone_id: self.zone_id,
@@ -310,9 +310,8 @@ impl Tab {
                     match res {
                         // Loading completed
                         Ok(Ok(resp)) => {
-                            if let Some(ref jar) = self.cookie_jar {
-                                jar.write().unwrap().store_response_cookies(&resp.url, &resp.headers);
-                            }
+                            // Store any found cookies into the cookie jar
+                            self.services.cookie_jar.write().store_response_cookies(&resp.url, &resp.headers);
 
                             self.current_url = Some(resp.url.clone());
                             self.is_loading = false;
@@ -320,12 +319,14 @@ impl Tab {
                             self.pending_url = None;
                             self.state = TabState::Loaded;
 
+                            // Set the document content
                             self.context.set_raw_html(
-                                String::from_utf8_lossy(resp.body().as_slice()).as_ref()
+                                String::from_utf8_lossy(resp.body.as_slice()).as_ref()
                             );
 
-                            let _ = self.zone_context.event_tx.send(EngineEvent::PageCommitted { tab: self.tab_id, url: resp.url.clone() }).await;
                             self.runtime.dirty = true;
+
+                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadFinished { tab_id: self.tab_id, url: resp.url.clone() });
                         }
                         // Loading errrored
                         Ok(Err(e)) => {
@@ -333,11 +334,15 @@ impl Tab {
                             self.is_loading = false;
                             self.is_error = true;
                             self.runtime.dirty = true;
+
+                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadFailed { tab_id: self.tab_id, url: resp.url.clone(), error: e.to_string()});
                         }
                         // Loading was cancelled or replaced
                         Err(_cancelled_or_replaced) => {
                             // Load was cancelled or replaced, do nothing
                             println!("Tab {:?} load was cancelled or replaced", self.tab_id);
+
+                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadCancelled { tab_id: self.tab_id, url: resp.url.clone()});
                         }
                     }
                 }
@@ -438,12 +443,12 @@ impl Tab {
                 code,
                 modifiers,
             } => {
-                println!("Tab {:?} received key up: {} / {}", self.tab_id, key, code);
+                println!("Tab {:?} received key up: {} / {} / {}", self.tab_id, key, code, modifiers);
                 self.runtime.dirty = true;
             }
 
-            TabCommand::InputChar { character } => {
-                println!("Tab {:?} received char input: {}", self.tab_id, character);
+            TabCommand::CharInput { ch } => {
+                println!("Tab {:?} received char input: {}", self.tab_id, ch);
                 self.runtime.dirty = true;
             }
 
@@ -564,7 +569,7 @@ impl Tab {
     async fn drive_once(&mut self) -> anyhow::Result<()> {
         match self.state.clone() {
             TabState::Idle => {
-                if self.dirty {
+                if self.runtime.dirty {
                     self.state = TabState::PendingRendering(*self.context.viewport());
                 }
             }

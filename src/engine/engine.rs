@@ -76,13 +76,19 @@ impl GosubEngine {
         }
 
         let join_handle = if let Some(task) = self.run() {
-            Some(tokio::spawn(task))
+            Some(
+                tokio::task::Builder::new()
+                    .name("Engine runner")
+                    .spawn(task)
+                    .map_err(|e| EngineError::Internal(e.into()))?,
+            )
         } else {
             None
         };
 
         Ok(join_handle)
     }
+
 
     /// Return a receiver for engine events.
     pub fn subscribe_events(&self) -> broadcast::Receiver<EngineEvent> {
@@ -149,7 +155,7 @@ impl GosubEngine {
         let _ = self.cmd_tx.try_send(EngineCommand::Shutdown { reply: tx });
 
         // Wait for confirmation that the run loop has exited
-        let _ = rx.await.map_err(|_| EngineError::Internal)?;
+        let _ = rx.await.map_err(|e| EngineError::Internal(e.into()))?;
 
         // // Tabs should be closed first, then zones
         // let tab_cmds: Vec<_> = {
@@ -225,7 +231,7 @@ impl GosubEngine {
         self.context
             .event_tx
             .send(EngineEvent::ZoneCreated { zone_id })
-            .map_err(|_| EngineError::Internal)?;
+            .map_err(|e| EngineError::Internal(e.into()))?;
 
         Ok(zone)
     }
