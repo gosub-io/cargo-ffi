@@ -61,12 +61,7 @@ impl StorageService {
         self.bus.subscribe()
     }
 
-    pub fn local_for(
-        &self,
-        zone: ZoneId,
-        part: &PartitionKey,
-        origin: &url::Origin,
-    ) -> Result<Arc<dyn StorageArea>> {
+    pub fn local_for(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin) -> Result<Arc<dyn StorageArea>> {
         let inner = self.local.area(zone, part, origin)?;
         Ok(self.wrap_notifying(
             inner,

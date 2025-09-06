@@ -51,8 +51,7 @@ impl PartialEq for TextKey {
             && self.wrap == o.wrap
             && Arc::ptr_eq(&self.text, &o.text)
             && Arc::ptr_eq(&self.font_name, &o.font_name)
-            || (self.text.as_ref() == o.text.as_ref()
-                && self.font_name.as_ref() == o.font_name.as_ref())
+            || (self.text.as_ref() == o.text.as_ref() && self.font_name.as_ref() == o.font_name.as_ref())
     }
 }
 
@@ -170,12 +169,7 @@ impl TextRenderer {
     /// Alignment:
     /// - `align` is recorded in the key but currently not applied to advance/x positioning.
     ///   When adding alignment, adjust each line’s glyph x by the rag width delta.
-    fn shape(
-        &mut self,
-        fm: &mut FontManager,
-        fc: &mut FontCache,
-        key: &TextKey,
-    ) -> Arc<[CachedRun]> {
+    fn shape(&mut self, fm: &mut FontManager, fc: &mut FontCache, key: &TextKey) -> Arc<[CachedRun]> {
         // Resolve font
         let (vello_font, resolved_name) = match fc.fetch(&key.font_name) {
             Some(f) => (f.0.clone(), f.1),
@@ -236,14 +230,12 @@ impl TextRenderer {
         #[cfg(feature = "parley_layout")]
         {
             // Build layout
-            let mut builder =
-                self.layout_cx
-                    .ranged_builder(&mut self.font_cx, key.text.as_ref(), 1.0, true);
+            let mut builder = self
+                .layout_cx
+                .ranged_builder(&mut self.font_cx, key.text.as_ref(), 1.0, true);
             builder.push_default(parley::style::StyleProperty::FontSize(key.font_size as f32));
             builder.push_default(parley::style::StyleProperty::FontStack(
-                parley::style::FontStack::Single(parley::style::FontFamily::Named(
-                    resolved_name.into(),
-                )),
+                parley::style::FontStack::Single(parley::style::FontFamily::Named(resolved_name.into())),
             ));
             let mut layout = builder.build(key.text.as_ref());
 

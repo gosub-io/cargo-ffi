@@ -21,13 +21,7 @@ impl InMemorySessionStore {
 }
 
 impl SessionStore for InMemorySessionStore {
-    fn area(
-        &self,
-        zone: ZoneId,
-        tab: TabId,
-        part: &PartitionKey,
-        origin: &url::Origin,
-    ) -> Arc<dyn StorageArea> {
+    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea> {
         let k = (
             zone,
             tab,

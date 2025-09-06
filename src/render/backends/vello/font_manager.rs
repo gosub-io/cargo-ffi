@@ -17,11 +17,7 @@ impl FontManager {
     }
 
     /// Resolve a preferred family name; falls back to UI Sans → SansSerif.
-    pub fn resolve_ui_font(
-        &mut self,
-        prefer: Option<&str>,
-        attrs: Attributes,
-    ) -> anyhow::Result<(Font, String)> {
+    pub fn resolve_ui_font(&mut self, prefer: Option<&str>, attrs: Attributes) -> anyhow::Result<(Font, String)> {
         let mut col_clone = self.collection.clone();
 
         let mut q = self.collection.query(&mut self.cache);

@@ -143,11 +143,7 @@ pub(crate) fn find_leaf_at(node: &LayoutNode, rect: Rect, px: f64, py: f64) -> O
 }
 
 // Replace a leaf with Cols(leaf + new tabs)
-pub(crate) fn split_leaf_into_cols(
-    root: &LayoutHandle,
-    target: TabId,
-    new_tabs: Vec<TabId>,
-) -> bool {
+pub(crate) fn split_leaf_into_cols(root: &LayoutHandle, target: TabId, new_tabs: Vec<TabId>) -> bool {
     fn rec(n: &mut LayoutNode, target: TabId, new_tabs: &[TabId]) -> bool {
         match n {
             LayoutNode::Leaf(t) if *t == target => {
@@ -174,11 +170,7 @@ pub(crate) fn split_leaf_into_cols(
 }
 
 // Replace a leaf with Rows(leaf + new tabs)
-pub(crate) fn split_leaf_into_rows(
-    root: &LayoutHandle,
-    target: TabId,
-    new_tabs: Vec<TabId>,
-) -> bool {
+pub(crate) fn split_leaf_into_rows(root: &LayoutHandle, target: TabId, new_tabs: Vec<TabId>) -> bool {
     fn rec(n: &mut LayoutNode, target: TabId, new_tabs: &[TabId]) -> bool {
         match n {
             LayoutNode::Leaf(t) if *t == target => {

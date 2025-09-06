@@ -80,11 +80,8 @@ impl JsonCookieStore {
             let _ = fs::create_dir_all(parent);
         }
         if !path.exists() {
-            let empty = CookieStoreFile {
-                zones: HashMap::new(),
-            };
-            fs::write(&path, serde_json::to_vec(&empty).unwrap())
-                .expect("Failed to create cookie store file");
+            let empty = CookieStoreFile { zones: HashMap::new() };
+            fs::write(&path, serde_json::to_vec(&empty).unwrap()).expect("Failed to create cookie store file");
         }
 
         let store = Arc::new(Self {
@@ -109,9 +106,7 @@ impl JsonCookieStore {
         file.read_to_string(&mut contents)
             .expect("Failed to read cookie store file");
 
-        serde_json::from_str(&contents).unwrap_or_else(|_| CookieStoreFile {
-            zones: HashMap::new(),
-        })
+        serde_json::from_str(&contents).unwrap_or_else(|_| CookieStoreFile { zones: HashMap::new() })
     }
 
     /// Serializes and writes the full cookie store file (pretty-printed).

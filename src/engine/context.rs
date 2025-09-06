@@ -137,11 +137,7 @@ impl BrowsingContext {
     /// - On error/cancel: sets `failed = true` (and leaves previous HTML intact), returns a descriptive error.
     ///
     /// Caller (e.g., the tab task) can also use `resp.headers` to store cookies into the zone jar.
-    pub async fn load(
-        &mut self,
-        url: Url,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<Response, LoadError> {
+    pub async fn load(&mut self, url: Url, cancel: tokio_util::sync::CancellationToken) -> Result<Response, LoadError> {
         self.failed = false;
         self.current_url = Some(url.clone());
 

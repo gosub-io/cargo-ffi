@@ -411,10 +411,7 @@ mod tests {
 
         match &rl.items[2] {
             DisplayItem::TextRun {
-                text,
-                size,
-                max_width,
-                ..
+                text, size, max_width, ..
             } => {
                 assert_eq!(text, "abc");
                 assert_eq!(*size, 16.0);

@@ -10,9 +10,7 @@ pub struct VelloCompositor {
 
 impl VelloCompositor {
     pub fn new() -> Self {
-        Self {
-            frames: HashMap::new(),
-        }
+        Self { frames: HashMap::new() }
     }
 
     #[allow(unused)]

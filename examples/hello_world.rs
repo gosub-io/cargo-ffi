@@ -135,9 +135,10 @@ async fn main() -> Result<(), EngineError> {
         .await
         .expect("cannot create tab");
 
-
     tokio::spawn(async move {
-        _ = private_tab_handle.send(TabCommand::ResumeDrawing { fps: 10 }).await;
+        _ = private_tab_handle
+            .send(TabCommand::ResumeDrawing { fps: 10 })
+            .await;
         sleep(Duration::from_secs(5)).await;
         _ = private_tab_handle.send(TabCommand::SuspendDrawing).await;
     });

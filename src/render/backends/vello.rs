@@ -1,8 +1,6 @@
 use crate::engine::BrowsingContext;
 use crate::render::backend::GpuPixelFormat;
-use crate::render::backend::{
-    ErasedSurface, ExternalHandle, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
-};
+use crate::render::backend::{ErasedSurface, ExternalHandle, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::backends::vello::font_cache::FontCache;
 use crate::render::backends::vello::font_manager::FontManager;
 use crate::render::backends::vello::text_renderer::{TextKey, TextRenderer};
@@ -107,12 +105,7 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                         Affine::IDENTITY,
                         Color::new([color.r, color.g, color.b, color.a]),
                         None,
-                        &vello::kurbo::Rect::new(
-                            x as f64,
-                            y as f64,
-                            (x + w) as f64,
-                            (y + h) as f64,
-                        ),
+                        &vello::kurbo::Rect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64),
                     );
                 }
                 DisplayItem::TextRun {
@@ -157,14 +150,10 @@ impl RenderBackend for VelloBackend {
         "vello"
     }
 
-    fn create_surface(
-        &self,
-        size: SurfaceSize,
-        _present: PresentMode,
-    ) -> Result<Box<dyn ErasedSurface>> {
-        let texture_store_id =
-            self.context
-                .create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
+    fn create_surface(&self, size: SurfaceSize, _present: PresentMode) -> Result<Box<dyn ErasedSurface>> {
+        let texture_store_id = self
+            .context
+            .create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
 
         Ok(Box::new(VelloSurface {
             texture_store_id,

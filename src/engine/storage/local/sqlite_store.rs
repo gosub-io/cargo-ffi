@@ -17,11 +17,7 @@ impl SqliteLocalStore {
     /// Creates a new SQLite local store with the specified database file path.
     pub fn new(path: &str) -> Result<Self> {
         let manager = SqliteConnectionManager::file(path)
-            .with_flags(
-                OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | OpenFlags::SQLITE_OPEN_CREATE
-                    | OpenFlags::SQLITE_OPEN_URI,
-            )
+            .with_flags(OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI)
             .with_init(|c| {
                 c.busy_timeout(std::time::Duration::from_millis(500))?;
                 c.pragma_update(None, "journal_mode", &"WAL")?;
@@ -55,12 +51,7 @@ impl SqliteLocalStore {
 }
 
 impl LocalStore for SqliteLocalStore {
-    fn area(
-        &self,
-        zone: ZoneId,
-        part: &PartitionKey,
-        origin: &url::Origin,
-    ) -> Result<Arc<dyn StorageArea>> {
+    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin) -> Result<Arc<dyn StorageArea>> {
         Ok(Arc::new(SqliteLocalArea {
             pool: self.pool.clone(),
             zone,
@@ -94,7 +85,8 @@ impl StorageArea for SqliteLocalArea {
             "SELECT value FROM local_storage WHERE zone=?1 AND partition=?2 AND origin=?3 AND key=?4",
             params![self.zone.to_string(), self.partition, self.origin, key],
             |row| row.get::<_, String>(0),
-        ).ok()
+        )
+        .ok()
     }
 
     fn set_item(&self, key: &str, value: &str) -> Result<()> {
@@ -103,13 +95,7 @@ impl StorageArea for SqliteLocalArea {
             "INSERT INTO local_storage(zone,partition,origin,key,value) VALUES (?1,?2,?3,?4,?5)
              ON CONFLICT(zone,partition,origin,key) DO UPDATE
              SET value=excluded.value, updated_at=strftime('%s','now')",
-            params![
-                self.zone.to_string(),
-                self.partition,
-                self.origin,
-                key,
-                value
-            ],
+            params![self.zone.to_string(), self.partition, self.origin, key, value],
         )?;
         Ok(())
     }
@@ -150,9 +136,12 @@ impl StorageArea for SqliteLocalArea {
             Ok(c) => c,
             Err(_) => return vec![],
         };
-        let mut stmt = match conn.prepare(
-            "SELECT key FROM local_storage WHERE zone=?1 AND partition=?2 AND origin=?3 ORDER BY key",
-        ) { Ok(s) => s, Err(_) => return vec![] };
+        let mut stmt = match conn
+            .prepare("SELECT key FROM local_storage WHERE zone=?1 AND partition=?2 AND origin=?3 ORDER BY key")
+        {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
 
         let rows = match stmt.query_map(
             params![self.zone.to_string(), self.partition, self.origin],

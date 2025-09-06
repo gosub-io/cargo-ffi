@@ -65,7 +65,7 @@ pub(crate) struct TabRuntime {
     dirty: bool,
 
     // When the last tick draw was done
-    last_tick_draw: Instant
+    last_tick_draw: Instant,
 }
 
 impl Default for TabRuntime {
@@ -125,8 +125,8 @@ pub struct Tab {
     /// Backend rendering
     pub thumbnail: Option<RgbaImage>, // Thumbnail image of the tab in case the tab is not visible
     surface: Option<Box<dyn ErasedSurface + Send>>, // Surface on which the browsing context can render the tab
-    surface_size: SurfaceSize, // Size of the surface (does not have to match viewport)
-    present_mode: PresentMode, // Present mode for the surface?
+    surface_size: SurfaceSize,                      // Size of the surface (does not have to match viewport)
+    present_mode: PresentMode,                      // Present mode for the surface?
 
     /// The viewport that was committed for the in-flight/last render
     committed_viewport: Viewport,
@@ -171,10 +171,7 @@ impl Tab {
             is_error: false,
             thumbnail: None,
             surface: None,
-            surface_size: SurfaceSize {
-                width: 1,
-                height: 1,
-            },
+            surface_size: SurfaceSize { width: 1, height: 1 },
             present_mode: PresentMode::Fifo,
             committed_viewport: Default::default(),
             desired_viewport: Default::default(),
@@ -193,7 +190,9 @@ impl Tab {
         let this = Self::new(zone_id, services, zone_context)?;
 
         let tab_handle = this.handle();
-        let join_handle = tokio::task::Builder::new().name("Tab Worker").spawn(this.run())?;
+        let join_handle = tokio::task::Builder::new()
+            .name("Tab Worker")
+            .spawn(this.run())?;
 
         Ok((tab_handle, join_handle))
     }
@@ -239,12 +238,7 @@ impl Tab {
 
     /// Dispatch a storage event to same-origin documents in this tab (placeholder).
     /// Intended for HTML5 storage event semantics.
-    pub(crate) fn dispatch_storage_events(
-        &mut self,
-        origin: &url::Origin,
-        include_iframes: bool,
-        ev: &StorageEvent,
-    ) {
+    pub(crate) fn dispatch_storage_events(&mut self, origin: &url::Origin, include_iframes: bool, ev: &StorageEvent) {
         println!("Tab {:?} dispatch_storage_events called", self.tab_id);
         dbg!(&origin);
         dbg!(&include_iframes);
@@ -269,11 +263,7 @@ impl Tab {
     }
 
     /// Ensure the tab has a surface of the given size, creating it if necessary.
-    fn ensure_surface(
-        &mut self,
-        backend: &dyn RenderBackend,
-        size: SurfaceSize,
-    ) -> anyhow::Result<()> {
+    fn ensure_surface(&mut self, backend: &dyn RenderBackend, size: SurfaceSize) -> anyhow::Result<()> {
         if let Some(ref surf) = self.surface {
             if surf.size() == size {
                 return Ok(());
@@ -393,12 +383,12 @@ impl Tab {
             TabCommand::Reload { ignore_cache } => {
                 println!("Tab {:?} reloading current URL", self.tab_id);
 
-                let url = self.current_url
+                let url = self
+                    .current_url
                     .as_ref()
                     .map(|u| u.as_str())
                     .unwrap_or("about:blank")
-                    .to_string()
-                ;
+                    .to_string();
 
                 self.navigate_to(url.as_str(), ignore_cache);
                 self.runtime.dirty = true;
@@ -438,8 +428,11 @@ impl Tab {
                 );
                 self.runtime.dirty = true;
             }
-            TabCommand::KeyUp { key, code, modifiers} => {
-                println!("Tab {:?} received key up: {} / {} / {}", self.tab_id, key, code, modifiers);
+            TabCommand::KeyUp { key, code, modifiers } => {
+                println!(
+                    "Tab {:?} received key up: {} / {} / {}",
+                    self.tab_id, key, code, modifiers
+                );
                 self.runtime.dirty = true;
             }
             TabCommand::CharInput { ch } => {
@@ -449,8 +442,7 @@ impl Tab {
             TabCommand::ResumeDrawing { fps: wanted_fps } => {
                 self.runtime.drawing_enabled = true;
                 self.runtime.fps = wanted_fps.max(1) as u32;
-                self.runtime.interval =
-                    tokio::time::interval(Duration::from_millis(1000 / (self.runtime.fps as u64)));
+                self.runtime.interval = tokio::time::interval(Duration::from_millis(1000 / (self.runtime.fps as u64)));
                 self.runtime.dirty = true;
                 println!(
                     "Tab {:?} resumed drawing FPS: {} / {}",
@@ -488,79 +480,78 @@ impl Tab {
     // }
 
     fn navigate_to(&mut self, url: impl Into<String>, ignore_cache: bool) {
-/*
-        // Cancel any in-flight load
-        if let Some(load) = self.runtime.load.take() {
-            load.cancel.cancel();
-        }
+        /*
+                // Cancel any in-flight load
+                if let Some(load) = self.runtime.load.take() {
+                    load.cancel.cancel();
+                }
 
-        let unvalidated_url = url.into();
+                let unvalidated_url = url.into();
 
-        let real_url = Url::parse(&unvalidated_url);
-        let real_url = match real_url {
-            Ok(url) => url,
-            Err(e) => {
-                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
-                self.zone_context
-                    .event_tx
-                    .send(EngineEvent::NavigationFailed {
-                        tab_id: self.tab_id,
-                        url: unvalidated_url,
-                        error: format!("Cannot parse URL: {}", e),
-                    });
-                return;
-            }
-        };
+                let real_url = Url::parse(&unvalidated_url);
+                let real_url = match real_url {
+                    Ok(url) => url,
+                    Err(e) => {
+                        log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
+                        self.zone_context
+                            .event_tx
+                            .send(EngineEvent::NavigationFailed {
+                                tab_id: self.tab_id,
+                                url: unvalidated_url,
+                                error: format!("Cannot parse URL: {}", e),
+                            });
+                        return;
+                    }
+                };
 
-        // Compute storage and bind @TODO: do we need to do this for each navigation?
-        let pk = compute_partition_key(&real_url, self.services.partition_policy);
-        let origin = real_url.origin().clone();
-        let local = self
-            .services
-            .storage
-            .local_for(self.zone_id, &pk, &origin)
-            .expect("cannot get local storage for tab");
-        let session = self
-            .services
-            .storage
-            .session_for(self.zone_id, self.tab_id, &pk, &origin)
-            .expect("cannot get session storage for tab");
-        self.bind_storage(StorageHandles { local, session });
+                // Compute storage and bind @TODO: do we need to do this for each navigation?
+                let pk = compute_partition_key(&real_url, self.services.partition_policy);
+                let origin = real_url.origin().clone();
+                let local = self
+                    .services
+                    .storage
+                    .local_for(self.zone_id, &pk, &origin)
+                    .expect("cannot get local storage for tab");
+                let session = self
+                    .services
+                    .storage
+                    .session_for(self.zone_id, self.tab_id, &pk, &origin)
+                    .expect("cannot get session storage for tab");
+                self.bind_storage(StorageHandles { local, session });
 
-        let cancel = CancellationToken::new();
-        let fut = self.context.load(real_url.clone(), cancel.child_token());
+                let cancel = CancellationToken::new();
+                let fut = self.context.load(real_url.clone(), cancel.child_token());
 
-        // tokio::select! {
-        //                 res = fut => {
-        //                 }
-        //             }
-        // let (tx, rx) = oneshot::channel();
-        //
-        // let cancel_child = cancel.child_token();
-        // tokio::spawn(async move {
-        //     let res = load_main_document(url.clone(), cancel_child).await;
-        //     let _ = tx.send(res);
-        // });
+                // tokio::select! {
+                //                 res = fut => {
+                //                 }
+                //             }
+                // let (tx, rx) = oneshot::channel();
+                //
+                // let cancel_child = cancel.child_token();
+                // tokio::spawn(async move {
+                //     let res = load_main_document(url.clone(), cancel_child).await;
+                //     let _ = tx.send(res);
+                // });
 
-        self.runtime.load = Some(InflightLoad { cancel, rx });
-        self.state = TabState::Loading;
-        self.runtime.dirty = true;
-        // let _ = event_tx.send(EngineEvent::ConnectionEstablished { tab: tab_id, url: url.clone() }).await;
+                self.runtime.load = Some(InflightLoad { cancel, rx });
+                self.state = TabState::Loading;
+                self.runtime.dirty = true;
+                // let _ = event_tx.send(EngineEvent::ConnectionEstablished { tab: tab_id, url: url.clone() }).await;
 
-        let url = match Url::parse(url) {
-            Ok(url) => url,
-            Err(e) => {
-                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
-                return;
-            }
-        };
+                let url = match Url::parse(url) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
+                        return;
+                    }
+                };
 
-        self.state = TabState::PendingLoad(url.clone());
-        self.is_loading = true;
-        self.pending_url = Some(url);
-*/
+                self.state = TabState::PendingLoad(url.clone());
+                self.is_loading = true;
+                self.pending_url = Some(url);
+        */
     }
-
 
     /// Do a draw tick. This will be called based on the FPS that is requested
     async fn tick_draw(&mut self) -> anyhow::Result<()> {

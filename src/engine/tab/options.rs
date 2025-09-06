@@ -16,7 +16,6 @@ use crate::render::Viewport;
 use crate::storage::{PartitionKey, StorageService};
 use std::sync::Arc;
 
-
 /// Default parameters for a newly created tab.
 ///
 /// These values are *initial conditions* for the tab. They are optional and
@@ -56,7 +55,6 @@ pub struct TabDefaults {
 #[derive(Clone, Debug, Default)]
 pub struct TabOverrides {
     // --- Services & partitioning ---
-
     /// Storage partition key. `None` = inherit zone policy.
     pub partition_key: Option<PartitionKey>,
 
@@ -70,7 +68,6 @@ pub struct TabOverrides {
     pub cache_mode: TabCacheMode, // Default::Inherit
 
     // --- Identity ---
-
     /// Per-tab User-Agent override.
     pub user_agent: Option<String>,
 
@@ -78,7 +75,6 @@ pub struct TabOverrides {
     pub accept_language: Option<Vec<String>>,
 
     // --- Content flags ---
-
     /// Whether JavaScript is enabled for this tab.
     pub js_enabled: Option<bool>,
 
@@ -86,19 +82,16 @@ pub struct TabOverrides {
     pub images_enabled: Option<bool>,
 
     // --- UI/Render ---
-
     /// Zoom factor override (e.g. `1.0` = 100%).
     pub zoom: Option<f32>,
 
     // --- Persistence ---
-
     /// Whether history persistence is enabled for this tab.
     pub persist_history: Option<bool>,
 
     /// Whether downloads are persisted for this tab.
     pub persist_downloads: Option<bool>,
 }
-
 
 /// Policy for selecting a tab's cookie jar.
 ///

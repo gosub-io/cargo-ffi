@@ -66,10 +66,7 @@ impl GosubEngine {
     /// let backend = ge::render::backends::null::NullBackend::new().unwrap();
     /// let engine = ge::GosubEngine::new(None, Box::new(backend));
     /// ```
-    pub fn new(
-        config: Option<EngineConfig>,
-        backend: Box<dyn RenderBackend + Send + Sync>,
-    ) -> Self {
+    pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend + Send + Sync>) -> Self {
         let resolved_config = config.unwrap_or_else(EngineConfig::default);
 
         // Command channel on which to send and receive engine commands from the UA.
@@ -110,7 +107,6 @@ impl GosubEngine {
 
         Ok(join_handle)
     }
-
 
     /// Return a receiver for engine events.
     pub fn subscribe_events(&self) -> broadcast::Receiver<EngineEvent> {

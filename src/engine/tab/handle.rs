@@ -5,7 +5,6 @@ use crate::EngineError;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-
 /// A handle to a running [`Tab`](crate::tab).
 ///
 /// The `TabHandle` is returned when a new tab is created within a zone.
@@ -62,12 +61,9 @@ impl TabHandle {
     /// tab_handle.set_title("New Title");
     /// ```
     pub async fn set_title(&self, title: impl Into<String>) -> Result<(), EngineError> {
-        self.send(TabCommand::SetTitle {
-            title: title.into(),
-        })
-        .await
+        self.send(TabCommand::SetTitle { title: title.into() })
+            .await
     }
-
 
     /// Update the viewport of the tab.
     ///
@@ -90,7 +86,6 @@ impl TabHandle {
         })
         .await
     }
-
 
     /// Navigate the tab to a new URL.
     ///

@@ -1,18 +1,12 @@
 use crate::cookies::{CookieJarHandle, DefaultCookieJar};
-use crate::storage::{
-    InMemoryLocalStore, InMemorySessionStore, PartitionKey, PartitionPolicy, StorageService,
-};
+use crate::storage::{InMemoryLocalStore, InMemorySessionStore, PartitionKey, PartitionPolicy, StorageService};
 use crate::tab::options::{TabCookieJar, TabOverrides, TabStorageScope};
 use crate::tab::structs::EffectiveTabServices;
 use crate::zone::{ZoneId, ZoneServices};
 use std::sync::Arc;
 
 /// Resolve the effective services for a tab based on the zone services and tab overrides.
-pub fn resolve_tab_services(
-    zone_id: ZoneId,
-    services: &ZoneServices,
-    ov: &TabOverrides,
-) -> EffectiveTabServices {
+pub fn resolve_tab_services(zone_id: ZoneId, services: &ZoneServices, ov: &TabOverrides) -> EffectiveTabServices {
     let partition_key = ov
         .partition_key
         .clone()

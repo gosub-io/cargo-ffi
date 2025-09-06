@@ -103,12 +103,7 @@ pub enum TabCommand {
     /// Resize viewport
     Resize { width: u32, height: u32 },
     /// Set viewport
-    SetViewport {
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-    },
+    SetViewport { x: i32, y: i32, width: u32, height: u32 },
 
     // ****************************************
     // ** Tab properties
@@ -210,10 +205,7 @@ pub enum EngineEvent {
     // ****************************************
     // ** Rendering
     /// A redraw frame is available
-    Redraw {
-        tab_id: TabId,
-        handle: ExternalHandle,
-    },
+    Redraw { tab_id: TabId, handle: ExternalHandle },
     /// Frame has been completed (@TODO: do we need this?)
     FrameComplete { tab_id: TabId, frame_id: u64 },
 
@@ -231,11 +223,7 @@ pub enum EngineEvent {
     // ****************************************
     // ** Navigation
     /// Navigation to a URL has failed (incorrect URL etc.)
-    NavigationFailed {
-        tab_id: TabId,
-        url: String,
-        error: String,
-    },
+    NavigationFailed { tab_id: TabId, url: String, error: String },
     /// Loading of the HTML started
     LoadStarted { tab_id: TabId, url: String },
     /// Network connection has been established
@@ -247,11 +235,7 @@ pub enum EngineEvent {
     /// Loading of the HTML has finished
     LoadFinished { tab_id: TabId, url: String },
     /// Loading has failed
-    LoadFailed {
-        tab_id: TabId,
-        url: String,
-        error: String,
-    },
+    LoadFailed { tab_id: TabId, url: String, error: String },
     /// Load has been cancelled (by user)
     LoadCancelled { tab_id: TabId, url: String },
 
@@ -286,18 +270,11 @@ pub enum EngineEvent {
     /// Media has paused
     MediaPaused { tab_id: TabId, element_id: u64 },
     /// Result of a script is returned (console stuff?)
-    ScriptResult {
-        tab_id: TabId,
-        result: serde_json::Value,
-    },
+    ScriptResult { tab_id: TabId, result: serde_json::Value },
 
     // Errors / diagnostics
     /// Network error occurred
-    NetworkError {
-        tab_id: TabId,
-        url: Url,
-        message: String,
-    },
+    NetworkError { tab_id: TabId, url: Url, message: String },
     /// Javascript (parse) error
     JavaScriptError {
         tab_id: TabId,
@@ -307,7 +284,6 @@ pub enum EngineEvent {
     },
     /// Engine crashed
     TabCrashed { tab_id: TabId, reason: String },
-
     // Uncategorized / generic
 }
 
@@ -370,9 +346,7 @@ mod tests {
 
     #[test]
     fn tabcommand_equality_and_debug() {
-        let a = TabCommand::SetTitle {
-            title: "Hello".into(),
-        };
+        let a = TabCommand::SetTitle { title: "Hello".into() };
         let b = a.clone();
         assert_eq!(a, b);
         let dbg = format!("{:?}", a);
@@ -389,11 +363,7 @@ mod tests {
         };
 
         match e {
-            TabCommand::KeyDown {
-                key,
-                code,
-                modifiers,
-            } => {
+            TabCommand::KeyDown { key, code, modifiers } => {
                 assert_eq!(key, "A");
                 assert_eq!(code, "KeyA");
                 assert!(modifiers.contains(Modifiers::SHIFT));
@@ -433,9 +403,7 @@ mod tests {
         let b = EngineEvent::Warning {
             message: "Heads up".into(),
         };
-        let c = EngineEvent::EngineShutdown {
-            reason: "Bye".into(),
-        };
+        let c = EngineEvent::EngineShutdown { reason: "Bye".into() };
 
         assert!(format!("{a:?}").contains("EngineStarted"));
         assert!(format!("{b:?}").contains("Warning"));

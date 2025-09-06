@@ -131,8 +131,7 @@ pub mod events {
 /// Configuration options for the Gosub engine.
 pub mod config {
     pub use crate::engine::config::{
-        CookiePartitioning, GpuOptions, LogLevel, ProxyConfig, RedirectPolicy, SandboxMode,
-        TlsConfig,
+        CookiePartitioning, GpuOptions, LogLevel, ProxyConfig, RedirectPolicy, SandboxMode, TlsConfig,
     };
 }
 

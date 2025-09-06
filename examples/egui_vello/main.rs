@@ -1,7 +1,7 @@
 use crate::compositor::VelloCompositor;
 use crate::tiling::{
-    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols,
-    split_leaf_into_rows, LayoutHandle, LayoutNode, Rect,
+    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle,
+    LayoutNode, Rect,
 };
 use crate::wgpu_context_provider::EguiWgpuContextProvider;
 use eframe::{egui, CreationContext};
@@ -65,14 +65,11 @@ impl GosubApp {
 
         // Set up the engine with a null backend for now. We will update this once we have an egui context
         // so we can initialize the vello renderer properly.
-        let backend = gosub_engine::render::backends::null::NullBackend::new()
-            .expect("NullBackend::new failed");
+        let backend = gosub_engine::render::backends::null::NullBackend::new().expect("NullBackend::new failed");
         let engine = Arc::new(RefCell::new(GosubEngine::new(None, Box::new(backend))));
 
-        let ctx_provider = Arc::new(
-            EguiWgpuContextProvider::from_eframe(cc)
-                .expect("Failed to create EguiWgpuContextProvider"),
-        );
+        let ctx_provider =
+            Arc::new(EguiWgpuContextProvider::from_eframe(cc).expect("Failed to create EguiWgpuContextProvider"));
 
         let (tx, rx) = channel();
 
@@ -126,12 +123,11 @@ impl GosubApp {
         let composed_url = self.current_url_input.clone();
 
         // Check if composed_url starts with a scheme like http:// or https://
-        let url_str =
-            if !composed_url.starts_with("http://") && !composed_url.starts_with("https://") {
-                format!("https://{}", composed_url)
-            } else {
-                composed_url
-            };
+        let url_str = if !composed_url.starts_with("http://") && !composed_url.starts_with("https://") {
+            format!("https://{}", composed_url)
+        } else {
+            composed_url
+        };
 
         let Ok(url) = Url::parse(&url_str) else {
             return;
@@ -253,13 +249,10 @@ impl GosubApp {
             let dy_px = delta.y * line_h;
 
             // Send to the engine
-            let _ = self.engine.borrow_mut().handle_event(
-                tab_id,
-                EngineEvent::Scroll {
-                    dx: dx_px,
-                    dy: dy_px,
-                },
-            );
+            let _ = self
+                .engine
+                .borrow_mut()
+                .handle_event(tab_id, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
             self.needs_redraw = true;
         }
     }
@@ -436,24 +429,17 @@ impl eframe::App for GosubApp {
                     );
 
                     match handle {
-                        ExternalHandle::WgpuTextureId {
-                            id, width, height, ..
-                        } => {
+                        ExternalHandle::WgpuTextureId { id, width, height, .. } => {
                             let (_, view) = self.ctx_provider.get_texture(*id).unwrap();
 
                             let mut renderer = frame.wgpu_render_state().unwrap().renderer.write();
                             let device = &frame.wgpu_render_state().unwrap().device;
 
-                            let tid = renderer.register_native_texture(
-                                device,
-                                &view,
-                                wgpu::FilterMode::Nearest,
-                            );
+                            let tid = renderer.register_native_texture(device, &view, wgpu::FilterMode::Nearest);
 
                             let ppp = ui.ctx().pixels_per_point();
                             // let size_points = egui::Vec2::new(*width as f32 / ppp, *height as f32 / ppp);
-                            let size_points =
-                                egui::Vec2::new((*width - 25) as f32, (*height - 25) as f32);
+                            let size_points = egui::Vec2::new((*width - 25) as f32, (*height - 25) as f32);
                             ui.add(egui::Image::new(SizedTexture::new(tid, size_points)));
                         }
                         _ => {

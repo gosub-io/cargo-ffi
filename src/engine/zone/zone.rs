@@ -211,11 +211,7 @@ impl Zone {
     }
 
     /// Creates a new zone with a random ID and the provided configuration
-    pub fn new(
-        config: ZoneConfig,
-        services: ZoneServices,
-        engine_context: Arc<EngineContext>,
-    ) -> Self {
+    pub fn new(config: ZoneConfig, services: ZoneServices, engine_context: Arc<EngineContext>) -> Self {
         Self::new_with_id(ZoneId::new(), config, services, engine_context)
     }
 
@@ -258,13 +254,12 @@ impl Zone {
             &overrides.unwrap_or_default(),
         );
 
-        let (tab_handle, join_handle) =
-            Tab::new_on_thread(self.id, tab_services, self.context.clone())
-                .map_err(|e| EngineError::CreateTab(e.into()))?;
+        let (tab_handle, join_handle) = Tab::new_on_thread(self.id, tab_services, self.context.clone())
+            .map_err(|e| EngineError::CreateTab(e.into()))?;
         self.tabs.insert(
             tab_handle.tab_id,
             TabInfo {
-                join_handle: join_handle,
+                join_handle,
                 sink: tab_handle.sink.clone(),
             },
         );
@@ -344,18 +339,20 @@ impl Zone {
         let tx = self.context.event_tx.clone();
         let zone_id = self.id;
 
-        let join_handle = tokio::task::Builder::new().name("storage-events-forwarder").spawn(async move {
-            while let Ok(ev) = rx.recv().await {
-                let _ = tx.send(EngineEvent::StorageChanged {
-                    tab_id: ev.source_tab,
-                    zone: Some(zone_id),
-                    key: ev.key.unwrap_or_default(),
-                    value: ev.new_value,
-                    scope: ev.scope,
-                    origin: ev.origin.clone(),
-                });
-            }
-        });
+        let join_handle = tokio::task::Builder::new()
+            .name("storage-events-forwarder")
+            .spawn(async move {
+                while let Ok(ev) = rx.recv().await {
+                    let _ = tx.send(EngineEvent::StorageChanged {
+                        tab_id: ev.source_tab,
+                        zone: Some(zone_id),
+                        key: ev.key.unwrap_or_default(),
+                        value: ev.new_value,
+                        scope: ev.scope,
+                        origin: ev.origin.clone(),
+                    });
+                }
+            });
 
         join_handle.map_err(|e| EngineError::Internal(e.into()))
     }

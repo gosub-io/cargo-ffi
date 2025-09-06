@@ -20,19 +20,11 @@ impl RenderBackend for NullBackend {
         "NullBackend"
     }
 
-    fn create_surface(
-        &self,
-        size: SurfaceSize,
-        _present: PresentMode,
-    ) -> Result<Box<dyn ErasedSurface + Send>> {
+    fn create_surface(&self, size: SurfaceSize, _present: PresentMode) -> Result<Box<dyn ErasedSurface + Send>> {
         Ok(Box::new(NullSurface::new(size)?))
     }
 
-    fn render(
-        &mut self,
-        _ctx: &mut BrowsingContext,
-        surface: &mut dyn ErasedSurface,
-    ) -> Result<()> {
+    fn render(&mut self, _ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> Result<()> {
         let s = surface
             .as_any_mut()
             .downcast_mut::<NullSurface>()

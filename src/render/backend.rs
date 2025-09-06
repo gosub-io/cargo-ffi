@@ -178,13 +178,7 @@ impl RgbaImage {
     /// # Panics
     ///
     /// Panics if `pixels.len()` is smaller than `height * stride`.
-    pub fn from_raw(
-        pixels: Vec<u8>,
-        width: u32,
-        height: u32,
-        stride: u32,
-        format: PixelFormat,
-    ) -> Self {
+    pub fn from_raw(pixels: Vec<u8>, width: u32, height: u32, stride: u32, format: PixelFormat) -> Self {
         assert!(
             pixels.len() >= (height as usize) * (stride as usize),
             "pixel buffer too small for image dimensions"
@@ -234,25 +228,13 @@ pub trait RenderBackend: Send + Sync {
     fn name(&self) -> &str;
 
     /// Create a new surface with the given size and present mode.
-    fn create_surface(
-        &self,
-        size: SurfaceSize,
-        present: PresentMode,
-    ) -> anyhow::Result<Box<dyn ErasedSurface + Send>>;
+    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> anyhow::Result<Box<dyn ErasedSurface + Send>>;
 
     /// Render the current state of the browsing context to the given surface.
-    fn render(
-        &mut self,
-        context: &mut BrowsingContext,
-        surface: &mut dyn ErasedSurface,
-    ) -> anyhow::Result<()>;
+    fn render(&mut self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
 
     /// Generate a small RGBA8 snapshot of the surface, suitable for thumbnails or previews.
-    fn snapshot(
-        &mut self,
-        surface: &mut dyn ErasedSurface,
-        max_dim: u32,
-    ) -> anyhow::Result<RgbaImage>;
+    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
 
     /// Returns an external handle for the surface, if supported.
     fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;

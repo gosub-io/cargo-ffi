@@ -111,10 +111,10 @@ impl CookieJar for DefaultCookieJar {
     fn store_response_cookies(&mut self, url: &Url, headers: &HeaderMap) {
         let origin = url.origin().ascii_serialization();
         let _host = url.host_str().unwrap_or_default();
-        let default_path =
-            url.path()
-                .rsplit_once('/')
-                .map_or("/", |(a, _)| if a.is_empty() { "/" } else { a });
+        let default_path = url
+            .path()
+            .rsplit_once('/')
+            .map_or("/", |(a, _)| if a.is_empty() { "/" } else { a });
 
         let bucket = self.entries.entry(origin).or_default();
 
@@ -142,9 +142,7 @@ impl CookieJar for DefaultCookieJar {
                         if let Some((k, v)) = part.split_once('=') {
                             match k.to_ascii_lowercase().as_str() {
                                 "path" => cookie.path = Some(v.to_string()),
-                                "domain" => {
-                                    cookie.domain = Some(v.trim_start_matches('.').to_string())
-                                }
+                                "domain" => cookie.domain = Some(v.trim_start_matches('.').to_string()),
                                 "expires" => cookie.expires = Some(v.to_string()),
                                 "samesite" => {
                                     // normalize to "Lax" | "Strict" | "None"

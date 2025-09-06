@@ -1,7 +1,7 @@
 use crate::compositor::GtkCompositor;
 use crate::tiling::{
-    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols,
-    split_leaf_into_rows, LayoutHandle, LayoutNode, Rect,
+    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle,
+    LayoutNode, Rect,
 };
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::render::backend::ExternalHandle;
@@ -13,8 +13,8 @@ use gtk4::glib::clone;
 use gtk4::prelude::*;
 use gtk4::GestureClick;
 use gtk4::{
-    glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry,
-    EventControllerMotion, EventControllerScroll, EventControllerScrollFlags, Orientation,
+    glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion,
+    EventControllerScroll, EventControllerScrollFlags, Orientation,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
