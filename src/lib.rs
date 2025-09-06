@@ -28,7 +28,7 @@
 //!     let backend = NullBackend::new().expect("null renderer cannot be created (!?)");
 //!     let mut engine_handle = GosubEngine::new(Some(EngineConfig::default()), Box::new(backend));
 //!
-//!     // 3) Zone services (ephemeral cookies here; use a CookieStore for persistence)
+//!     // 2) Zone services (ephemeral cookies here; use a CookieStore for persistence)
 //!     let services = ZoneServices {
 //!         storage: Arc::new(StorageService::new(
 //!             Arc::new(InMemoryLocalStore::new()),
@@ -39,17 +39,17 @@
 //!         partition_policy: PartitionPolicy::None,
 //!     };
 //!
-//!     // 4) Create a zone (ZoneHandle)
+//!     // 3) Create a zone (ZoneHandle)
 //!     let mut zone = engine_handle.create_zone(ZoneConfig::default(), services, None)?;
 //!
-//!     // 5) Create a tab (TabHandle)
-//!     let tab = zone.create_tab(Default::default(), None).await?;
+//!     // 4) Create a tab (TabHandle)
+//!     let tab_handle = zone.create_tab(Default::default(), None).await?;
 //!
-//!     // 6) Drive the tab
-//!     tab.send(TabCommand::Navigate{ url: "https://example.com".to_string() }).await?;
-//!     tab.send(TabCommand::SetViewport{ x: 0, y: 0, width: 1280, height: 800 }).await?;
+//!     // 5) Drive the tab
+//!     tab_handle.send(TabCommand::Navigate{ url: "https://example.com".to_string() }).await?;
+//!     tab_handle.send(TabCommand::SetViewport{ x: 0, y: 0, width: 1280, height: 800 }).await?;
 //!
-//!     // 7) Handle engine events in your UA
+//!     // 6) Handle engine events in your UA
 //!     let mut event_rx = engine_handle.subscribe_events();
 //!     while let Ok(ev) = event_rx.recv().await {
 //!         match ev {
@@ -72,8 +72,7 @@
 //!
 //! ## Concepts
 //! - [`GosubEngine`] — engine entry point; creates zones, owns backend and event bus.
-//! - **Event channel** — `(event_tx, event_rx) = engine.create_event_channel()`; UA keeps `event_rx`.
-//! - [`Zone`](crate::engine::zone::Zone) / **ZoneHandle** — per-profile/session state (cookies, storage, tabs).
+//! - [`Zone`](crate::zone::Zone) / **ZoneHandle** — per-profile/session state (cookies, storage, tabs).
 //! - **Tab task** / **TabHandle** — a single browsing context controlled via [`TabCommand`](crate::events::TabCommand).
 //! - [`Viewport`](crate::render::Viewport) — target surface description for rendering.
 //! - [`RenderBackend`](crate::render::backend::RenderBackend) — pluggable renderer (e.g., Null, Cairo, Vello).
@@ -84,10 +83,10 @@
 //! [`PersistentCookieJar`](crate::cookies::PersistentCookieJar).
 //!
 //! ## Modules
-//! - [`engine::zone`](crate::engine::zone)
-//! - [`engine::tab`](crate::engine::tab)
-//! - [`engine::cookies`](crate::engine::cookies)
-//! - [`engine::storage`](crate::engine::storage)
+//! - [`zone`](crate::zone)
+//! - [`tab`](crate::tab)
+//! - [`cookies`](crate::cookies)
+//! - [`storage`](crate::storage)
 //! - [`render`](crate::render)
 //! - [`net`](crate::net)
 //!
@@ -105,15 +104,19 @@ pub mod render;
 pub use engine::{EngineError, GosubEngine};
 
 #[doc(inline)]
+/// Tab management and browsing context API.
 pub use engine::tab;
 
 #[doc(inline)]
+/// Per-profile/session state (cookies, storage, tabs).
 pub use engine::zone;
 
 #[doc(inline)]
+/// Cookie handling and storage.
 pub use engine::cookies;
 
 #[doc(inline)]
+/// Storage APIs for local/session data.
 pub use engine::storage;
 
 // EngineConfig at crate root:
@@ -132,3 +135,5 @@ pub mod config {
         TlsConfig,
     };
 }
+
+// Advice: When using the Gosub engine, always ensure that your async runtime (e.g., Tokio) is properly initialized before interacting with engine handles or channels. Carefully manage the lifetimes of handles and event receivers to avoid resource leaks. For persistent cookies or storage, provide the appropriate services in [`ZoneServices`](crate::zone::ZoneServices).

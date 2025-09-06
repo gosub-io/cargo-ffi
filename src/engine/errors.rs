@@ -1,3 +1,8 @@
+//! Public engine error types.
+//!
+//! This module defines the main error enum [`EngineError`] used throughout the engine and
+//! exposed to users. Each variant represents a specific error case that can occur in engine
+//! operations, such as invalid IDs, network errors, configuration issues, and more.
 /// Public engine errors available for the outside world
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

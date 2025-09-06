@@ -1,5 +1,5 @@
 use crate::cookies::CookieJarHandle;
-use crate::engine::events::EngineEvent;
+use crate::events::EngineEvent;
 use crate::events::TabCommand;
 use crate::net::Response;
 use crate::render::Viewport;

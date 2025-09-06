@@ -1,3 +1,56 @@
+//! Browsing context and tab runtime state.
+//!
+//! This module defines the [`BrowsingContext`] struct, which represents the runtime
+//! state for a single tab, including its storage, rendering, and loading state. It
+//! provides methods for loading URLs, binding storage, and managing the tab's state.
+//!
+//! # Overview
+//!
+//! The `BrowsingContext` is responsible for handling all aspects of a tab's state in
+//! the browser engine. This includes managing the raw HTML content, the rendering
+//! process, the viewport settings, and the storage for local and session data. It
+//! also handles loading new content from URLs and updating the tab's state
+//! accordingly.
+//!
+//! # Usage
+//!
+//! To use a `BrowsingContext`, you typically create a new instance, configure it as
+//! needed (e.g., set the viewport, bind storage), and then load a URL. After loading,
+//! you can access the rendered content and other state information. The context also
+//! provides mechanisms to handle navigation events, such as redirects or loading
+//! errors.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use crate::net::Response;
+//! use url::Url;
+//!
+//! // Create a new browsing context
+//! let mut context = BrowsingContext::new();
+//!
+//! // Set up storage, if needed
+//! // context.bind_storage(local_storage, session_storage);
+//!
+//! // Define a URL to load
+//! let url = Url::parse("https://example.com").unwrap();
+//!
+//! // Load the URL (in an async context)
+//! let response: Response = context.load(url, cancel_token).await?;
+//!
+//! // Access the rendered content
+//! let render_list = context.render_list();
+//! ```
+//!
+//! # Structs
+//!
+//! - [`BrowsingContext`]: The main struct representing the browsing context for a tab.
+//!
+//! # Errors
+//!
+//! - [`LoadError`]: Represents errors that can occur while loading content, such as
+//! navigation cancellations or network errors.
+
 use crate::engine::storage::{StorageArea, StorageHandles};
 use crate::net::{fetch, Response};
 use crate::render::{Color, DisplayItem, RenderList, Viewport};
@@ -115,7 +168,7 @@ impl BrowsingContext {
 
         // Decode body to string using Content-Type charset when available
         let html = decode_response_body(&resp.headers, &resp.body);
-        self.set_raw_html(&html); // marks DOM/style/layout dirty and invalidates render
+        self.set_raw_html(&html); // marks DOM/style/layout and invalidates render
 
         Ok(resp)
     }

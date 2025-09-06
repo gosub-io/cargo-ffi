@@ -1,3 +1,17 @@
+//! Engine event types and commands.
+//!
+//! This module defines the core event types, commands, and enums used for communication
+//! between the engine, zones, and tabs. It includes user input events, engine events,
+//! and tab commands for navigation, rendering, and control.
+//!
+//! # Main Types
+//!
+//! - [`MouseButton`]: Represents mouse buttons (left, middle, right).
+//! - [`Modifiers`]: Keyboard modifiers (Shift, Control, Alt, Meta).
+//! - [`TabCommand`]: Commands for tab navigation and control.
+//! - [`EngineCommand`]: Commands for engine control.
+//! - [`EngineEvent`]: Events emitted by the engine, such as lifecycle events, rendering events, and errors.
+
 use crate::config::LogLevel;
 use crate::cookies::Cookie;
 use crate::render::backend::ExternalHandle;
