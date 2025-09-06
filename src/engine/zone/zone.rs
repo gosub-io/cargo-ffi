@@ -43,7 +43,8 @@ use uuid::Uuid;
 /// let id = ZoneId::new();
 /// println!("New zone ID: {:?}", id);
 ///
-/// let fixed_id = ZoneId::from("123e4567-e89b-12d3-a456-426614174000");
+/// let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("invalid uuid");
+/// let fixed_id = ZoneId::from(uuid);
 /// println!("Fixed zone ID: {}", fixed_id);
 /// ```
 ///
@@ -205,7 +206,7 @@ impl Zone {
             config,
         };
 
-        zone.spawn_storage_events_to_engine();
+        _ = zone.spawn_storage_events_to_engine();
         zone
     }
 

@@ -9,7 +9,7 @@ use crate::tab::structs::{InflightLoad, TabActivityMode, TabState};
 use crate::tab::{EffectiveTabServices, TabHandle};
 use crate::zone::{ZoneContext, ZoneId};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -63,6 +63,9 @@ pub(crate) struct TabRuntime {
     viewport: Viewport,
     /// Has something changed that requires a redraw
     dirty: bool,
+
+    // When the last tick draw was done
+    last_tick_draw: Instant
 }
 
 impl Default for TabRuntime {
@@ -76,6 +79,7 @@ impl Default for TabRuntime {
             load: None,
             viewport: Viewport::default(),
             dirty: false,
+            last_tick_draw: Instant::now(),
         }
     }
 }
@@ -120,7 +124,7 @@ pub struct Tab {
 
     /// Backend rendering
     pub thumbnail: Option<RgbaImage>, // Thumbnail image of the tab in case the tab is not visible
-    surface: Option<Box<dyn ErasedSurface>>, // Surface on which the browsing context can render the tab
+    surface: Option<Box<dyn ErasedSurface + Send>>, // Surface on which the browsing context can render the tab
     surface_size: SurfaceSize, // Size of the surface (does not have to match viewport)
     present_mode: PresentMode, // Present mode for the surface?
 
@@ -293,7 +297,7 @@ impl Tab {
             tokio::select! {
                 // Tick interval for driving the redraws
                 _ = self.runtime.interval.tick(), if self.runtime.drawing_enabled => {
-                    if let Err(e) = self.drive_once().await {
+                    if let Err(e) = self.tick_draw().await {
                         self.state = TabState::Failed(format!("Tab {:?} tick error: {}", self.tab_id, e));
                         self.runtime.dirty = true;
                     }
@@ -302,7 +306,7 @@ impl Tab {
                 // Handle in-flight load completion
                 res = async {
                     if let Some(load) = &mut self.runtime.load {
-                        load.rx.await
+                        (&mut load.rx).await
                     } else {
                         futures::future::pending().await
                     }
@@ -325,8 +329,9 @@ impl Tab {
                             );
 
                             self.runtime.dirty = true;
+                            self.runtime.load = None;
 
-                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadFinished { tab_id: self.tab_id, url: resp.url.clone() });
+                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadFinished { tab_id: self.tab_id, url: resp.url.to_string() });
                         }
                         // Loading errrored
                         Ok(Err(e)) => {
@@ -334,15 +339,17 @@ impl Tab {
                             self.is_loading = false;
                             self.is_error = true;
                             self.runtime.dirty = true;
+                            self.runtime.load = None;
 
-                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadFailed { tab_id: self.tab_id, url: resp.url.clone(), error: e.to_string()});
+                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadFailed { tab_id: self.tab_id, url: "".to_string(), error: e.to_string()});
                         }
                         // Loading was cancelled or replaced
                         Err(_cancelled_or_replaced) => {
                             // Load was cancelled or replaced, do nothing
                             println!("Tab {:?} load was cancelled or replaced", self.tab_id);
 
-                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadCancelled { tab_id: self.tab_id, url: resp.url.clone()});
+                            self.runtime.load = None;
+                            let _ = self.zone_context.event_tx.send(EngineEvent::LoadCancelled { tab_id: self.tab_id, url: "".into()});
                         }
                     }
                 }
@@ -385,13 +392,15 @@ impl Tab {
             }
             TabCommand::Reload { ignore_cache } => {
                 println!("Tab {:?} reloading current URL", self.tab_id);
-                self.navigate_to(
-                    self.current_url
-                        .as_ref()
-                        .map(|u| u.as_str())
-                        .unwrap_or("about:blank"),
-                    ignore_cache,
-                );
+
+                let url = self.current_url
+                    .as_ref()
+                    .map(|u| u.as_str())
+                    .unwrap_or("about:blank")
+                    .to_string()
+                ;
+
+                self.navigate_to(url.as_str(), ignore_cache);
                 self.runtime.dirty = true;
             }
             TabCommand::Resize { width, height } => {
@@ -404,12 +413,10 @@ impl Tab {
                 self.runtime.viewport.height = height;
                 self.runtime.dirty = true;
             }
-
             TabCommand::MouseMove { x, y } => {
                 println!("Tab {:?} received mouse move: {},{}", self.tab_id, x, y);
                 self.runtime.dirty = true;
             }
-
             TabCommand::MouseDown { button, x, y } => {
                 println!(
                     "Tab {:?} received mouse down: {} / {}, {}",
@@ -417,7 +424,6 @@ impl Tab {
                 );
                 self.runtime.dirty = true;
             }
-
             TabCommand::MouseUp { button, x, y } => {
                 println!(
                     "Tab {:?} received mouse up: {} / {}, {}",
@@ -425,33 +431,21 @@ impl Tab {
                 );
                 self.runtime.dirty = true;
             }
-
-            TabCommand::KeyDown {
-                key,
-                code,
-                modifiers,
-            } => {
+            TabCommand::KeyDown { key, code, modifiers } => {
                 println!(
                     "Tab {:?} received key down: {} / {} / {}",
                     self.tab_id, key, code, modifiers
                 );
                 self.runtime.dirty = true;
             }
-
-            TabCommand::KeyUp {
-                key,
-                code,
-                modifiers,
-            } => {
+            TabCommand::KeyUp { key, code, modifiers} => {
                 println!("Tab {:?} received key up: {} / {} / {}", self.tab_id, key, code, modifiers);
                 self.runtime.dirty = true;
             }
-
             TabCommand::CharInput { ch } => {
                 println!("Tab {:?} received char input: {}", self.tab_id, ch);
                 self.runtime.dirty = true;
             }
-
             TabCommand::ResumeDrawing { fps: wanted_fps } => {
                 self.runtime.drawing_enabled = true;
                 self.runtime.fps = wanted_fps.max(1) as u32;
@@ -472,7 +466,7 @@ impl Tab {
             }
             _ => {
                 println!("Tab {:?} received command: {:?}", self.tab_id, cmd);
-                self.runtime.dirty = true;
+                // self.runtime.dirty = true;
             }
         }
     }
@@ -494,6 +488,7 @@ impl Tab {
     // }
 
     fn navigate_to(&mut self, url: impl Into<String>, ignore_cache: bool) {
+/*
         // Cancel any in-flight load
         if let Some(load) = self.runtime.load.take() {
             load.cancel.cancel();
@@ -563,29 +558,52 @@ impl Tab {
         self.state = TabState::PendingLoad(url.clone());
         self.is_loading = true;
         self.pending_url = Some(url);
+*/
     }
 
-    /// "Tick" the tab once, driving state transitions, rendering, etc.
-    async fn drive_once(&mut self) -> anyhow::Result<()> {
-        match self.state.clone() {
-            TabState::Idle => {
-                if self.runtime.dirty {
-                    self.state = TabState::PendingRendering(*self.context.viewport());
-                }
-            }
 
-            TabState::PendingLoad(url) => {
-                self.state = TabState::Loading;
-                self.is_loading = true;
-                self.pending_url = Some(url.clone());
-                self.context.start_loading(url.clone());
-            }
-            _ => {
-                // Handle other states as needed
-                println!("Tab {:?} in state: {:?}", self.tab_id, self.state);
-            }
-        }
+    /// Do a draw tick. This will be called based on the FPS that is requested
+    async fn tick_draw(&mut self) -> anyhow::Result<()> {
+        println!("tick_draw()");
+
+        let now = Instant::now();
+        let elapsed_time = now - self.runtime.last_tick_draw;
+
+        // Convert to FPS
+        let fps = if elapsed_time.as_secs_f32() > 0.0 {
+            1.0 / elapsed_time.as_secs_f32()
+        } else {
+            0.0
+        };
+
+        println!("TickDraw: FPS: {:.2}", fps);
+
+        self.runtime.last_tick_draw = now;
 
         Ok(())
     }
+
+    // /// "Tick" the tab once, driving state transitions, rendering, etc.
+    // async fn drive_once(&mut self) -> anyhow::Result<()> {
+    //     match self.state.clone() {
+    //         TabState::Idle => {
+    //             if self.runtime.dirty {
+    //                 self.state = TabState::PendingRendering(*self.context.viewport());
+    //             }
+    //         }
+    //
+    //         TabState::PendingLoad(url) => {
+    //             self.state = TabState::Loading;
+    //             self.is_loading = true;
+    //             self.pending_url = Some(url.clone());
+    //             self.context.start_loading(url.clone());
+    //         }
+    //         _ => {
+    //             // Handle other states as needed
+    //             println!("Tab {:?} in state: {:?}", self.tab_id, self.state);
+    //         }
+    //     }
+    //
+    //     Ok(())
+    // }
 }

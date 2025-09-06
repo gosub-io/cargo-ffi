@@ -57,10 +57,7 @@
 //!
 //! // 2) Engine + backend
 //! let backend = NullBackend::new()?;
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! // 3) Create the engine's event channel (UA keeps `rx`; engine/zones/tabs clone `tx`)
-//! let (event_tx, _event_rx) = engine.create_event_channel(1024);
+//! let mut engine_handle = GosubEngine::new(None, Box::new(backend));
 //!
 //! // 4) Attach storage via ZoneServices and create the zone
 //! let services = ZoneServices {
@@ -70,7 +67,7 @@
 //!     partition_policy: PartitionPolicy::None,
 //! };
 //!
-//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! let _zone = engine_handle.create_zone(ZoneConfig::default(), services, None)?;
 //! # Ok(()) }
 //! ```
 //!

@@ -238,7 +238,7 @@ pub trait RenderBackend: Send + Sync {
         &self,
         size: SurfaceSize,
         present: PresentMode,
-    ) -> anyhow::Result<Box<dyn ErasedSurface>>;
+    ) -> anyhow::Result<Box<dyn ErasedSurface + Send>>;
 
     /// Render the current state of the browsing context to the given surface.
     fn render(

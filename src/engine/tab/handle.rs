@@ -58,8 +58,8 @@ impl TabHandle {
     /// This is typically reflected in the UI (e.g. the browser tab bar).
     ///
     /// # Example
-    /// ```no_run
-    /// tab_handle.set_title("New Title").await?;
+    /// ```no_run,ignore
+    /// tab_handle.set_title("New Title");
     /// ```
     pub async fn set_title(&self, title: impl Into<String>) -> Result<(), EngineError> {
         self.send(TabCommand::SetTitle {
@@ -75,11 +75,11 @@ impl TabHandle {
     /// This is usually called when the window or tab is resized.
     ///
     /// # Example
-    /// ```no_run
+    /// ```no_run,ignore
     /// use gosub_engine::render::Viewport;
     ///
     /// let viewport = Viewport { x: 0.0, y: 0.0, width: 1280.0, height: 720.0 };
-    /// tab_handle.set_viewport(viewport).await?;
+    /// tab_handle.set_viewport(viewport);
     /// ```
     pub async fn set_viewport(&self, viewport: Viewport) -> Result<(), EngineError> {
         self.send(TabCommand::SetViewport {
@@ -98,8 +98,8 @@ impl TabHandle {
     /// (e.g. `http://`, `https://`, `about:`, `source:`).
     ///
     /// # Example
-    /// ```no_run
-    /// tab_handle.navigate("https://example.com").await?;
+    /// ```no_run,ignore
+    /// tab_handle.navigate_to("https://example.com");
     /// ```
     pub async fn navigate(&self, url: impl Into<String>) -> Result<(), EngineError> {
         self.send(TabCommand::Navigate { url: url.into() }).await

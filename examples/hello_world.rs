@@ -12,6 +12,8 @@ use gosub_engine::events::{MouseButton, TabCommand};
 use gosub_engine::storage::PartitionKey;
 use gosub_engine::tab::{TabCacheMode, TabCookieJar, TabDefaults, TabOverrides, TabStorageScope};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
@@ -117,7 +119,7 @@ async fn main() -> Result<(), EngineError> {
         viewport: Some(Viewport::new(0, 0, 800, 600)),
     };
 
-    let _private_tab_handle = zone
+    let private_tab_handle = zone
         .create_tab(
             def_values,
             Some(TabOverrides {
@@ -132,6 +134,13 @@ async fn main() -> Result<(), EngineError> {
         )
         .await
         .expect("cannot create tab");
+
+
+    tokio::spawn(async move {
+        _ = private_tab_handle.send(TabCommand::ResumeDrawing { fps: 10 }).await;
+        sleep(Duration::from_secs(5)).await;
+        _ = private_tab_handle.send(TabCommand::SuspendDrawing).await;
+    });
 
     // This is the application's main loop, where we receive events from the engine and
     // act on them. In a real application, you would probably want to run this in

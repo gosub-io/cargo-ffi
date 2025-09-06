@@ -26,11 +26,7 @@
 //! async fn main() -> anyhow::Result<()> {
 //!     // 1) Engine + backend
 //!     let backend = NullBackend::new().expect("null renderer cannot be created (!?)");
-//!     let mut engine = GosubEngine::new(Some(EngineConfig::default()), Box::new(backend));
-//!
-//!     // 2) Event channel: UA keeps `event_rx` to receive EngineEvent;
-//!     //    engine/zones/tabs clone `event_tx` to send events.
-//!     let (event_tx, mut event_rx) = engine.create_event_channel(1024);
+//!     let mut engine_handle = GosubEngine::new(Some(EngineConfig::default()), Box::new(backend));
 //!
 //!     // 3) Zone services (ephemeral cookies here; use a CookieStore for persistence)
 //!     let services = ZoneServices {
@@ -44,8 +40,7 @@
 //!     };
 //!
 //!     // 4) Create a zone (ZoneHandle)
-//!     let zone = engine
-//!         .create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//!     let mut zone = engine_handle.create_zone(ZoneConfig::default(), services, None)?;
 //!
 //!     // 5) Create a tab (TabHandle)
 //!     let tab = zone.create_tab(Default::default(), None).await?;
@@ -55,7 +50,8 @@
 //!     tab.send(TabCommand::SetViewport{ x: 0, y: 0, width: 1280, height: 800 }).await?;
 //!
 //!     // 7) Handle engine events in your UA
-//!     while let Some(ev) = event_rx.recv().await {
+//!     let mut event_rx = engine_handle.subscribe_events();
+//!     while let Ok(ev) = event_rx.recv().await {
 //!         match ev {
 //!             EngineEvent::LoadStarted { tab_id, url } => {
 //!                 println!("[{tab_id:?}] Starting loading: {url}");
@@ -67,6 +63,8 @@
 //!             _ => {}
 //!         }
 //!     }
+//!
+//!     engine_handle.shutdown().await;
 //!
 //!     Ok(())
 //! }

@@ -22,7 +22,7 @@
 //! use gosub_engine::cookies::SqliteCookieStore;
 //! # use tokio::sync::mpsc;
 //!
-//! # async fn demo(mut engine: GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! # async fn demo(mut engine: GosubEngine) -> anyhow::Result<()> {
 //! let services = ZoneServices {
 //!     storage: Arc::new(StorageService::new(
 //!         Arc::new(InMemoryLocalStore::new()),
@@ -32,7 +32,7 @@
 //!     cookie_jar: None, // engine will attach a PersistentCookieJar that snapshots to the store
 //!     partition_policy: PartitionPolicy::None,
 //! };
-//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! let _zone = engine.create_zone(ZoneConfig::default(), services, None)?;
 //! # Ok(()) }
 //! ```
 //!
@@ -45,7 +45,7 @@
 //! use gosub_engine::cookies::DefaultCookieJar;
 //! # use tokio::sync::mpsc;
 //!
-//! # async fn demo(mut engine: GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! # async fn demo(mut engine: GosubEngine) -> anyhow::Result<()> {
 //! let services = ZoneServices {
 //!     storage: Arc::new(StorageService::new(
 //!         Arc::new(InMemoryLocalStore::new()),
@@ -55,7 +55,7 @@
 //!     cookie_jar: Some(DefaultCookieJar::new().into()),
 //!     partition_policy: PartitionPolicy::None,
 //! };
-//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! let _zone = engine.create_zone(ZoneConfig::default(), services, None)?;
 //! # Ok(()) }
 //! ```
 //!
@@ -68,7 +68,7 @@
 //! use gosub_engine::cookies::JsonCookieStore;
 //! # use tokio::sync::mpsc;
 //!
-//! # async fn demo(mut engine: GosubEngine, event_tx: mpsc::Sender<gosub_engine::events::EngineEvent>) -> anyhow::Result<()> {
+//! # async fn demo(mut engine: GosubEngine) -> anyhow::Result<()> {
 //! let services = ZoneServices {
 //!     storage: Arc::new(StorageService::new(
 //!         Arc::new(InMemoryLocalStore::new()),
@@ -78,7 +78,7 @@
 //!     cookie_jar: None,
 //!     partition_policy: PartitionPolicy::None,
 //! };
-//! let _zone = engine.create_zone(ZoneConfig::default(), services, None, event_tx)?;
+//! let _zone = engine.create_zone(ZoneConfig::default(), services, None)?;
 //! # Ok(()) }
 //! ```
 //!

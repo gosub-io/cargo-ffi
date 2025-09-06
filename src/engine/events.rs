@@ -210,7 +210,7 @@ pub enum EngineEvent {
     /// Favicon of tab has changed
     FavIconChanged { tab_id: TabId, favicon: Vec<u8> },
     /// Location of the tab has changed
-    LocationChanged { tab_id: TabId, url: Url },
+    LocationChanged { tab_id: TabId, url: String },
     /// Viewport of the tab has changed
     TabResized { tab_id: TabId, viewport: Viewport },
 
@@ -225,17 +225,17 @@ pub enum EngineEvent {
     /// Loading of the HTML started
     LoadStarted { tab_id: TabId, url: String },
     /// Network connection has been established
-    ConnectionEstablished { tab_id: TabId, url: Url },
+    ConnectionEstablished { tab_id: TabId, url: String },
     /// Redirect occurred
-    Redirect { tab_id: TabId, from: Url, to: Url },
+    Redirect { tab_id: TabId, from: String, to: String },
     /// Progress of loading
     LoadProgress { tab_id: TabId, progress: f32 },
     /// Loading of the HTML has finished
-    LoadFinished { tab_id: TabId, url: Url },
+    LoadFinished { tab_id: TabId, url: String },
     /// Loading has failed
     LoadFailed {
         tab_id: TabId,
-        url: Url,
+        url: String,
         error: String,
     },
     /// Load has been cancelled (by user)

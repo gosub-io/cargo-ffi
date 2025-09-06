@@ -24,7 +24,7 @@ impl RenderBackend for NullBackend {
         &self,
         size: SurfaceSize,
         _present: PresentMode,
-    ) -> Result<Box<dyn ErasedSurface>> {
+    ) -> Result<Box<dyn ErasedSurface + Send>> {
         Ok(Box::new(NullSurface::new(size)?))
     }
 
