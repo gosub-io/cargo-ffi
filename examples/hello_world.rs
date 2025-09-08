@@ -12,6 +12,10 @@ use gosub_engine::events::{LoadEvent, MouseButton, NavigationEvent, ResourceEven
 use gosub_engine::storage::PartitionKey;
 use gosub_engine::tab::{TabCacheMode, TabCookieJar, TabDefaults, TabOverrides, TabStorageScope};
 use std::sync::Arc;
+use std::time::Duration;
+use rand::rng;
+use rand::prelude::IndexedRandom;
+use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
@@ -135,15 +139,38 @@ async fn main() -> Result<(), EngineError> {
         .await
         .expect("cannot create tab");
 
-    // let autoexec_handle = tokio::spawn(async move {
-    //     _ = private_tab_handle.send(TabCommand::ResumeDrawing { fps: 5 }).await;
-    //     sleep(Duration::from_secs(5)).await;
-    //     _ = private_tab_handle.send(TabCommand::SuspendDrawing).await;
-    //     sleep(Duration::from_secs(5)).await;
-    //     _ = private_tab_handle.send(TabCommand::ResumeDrawing { fps: 60 }).await;
-    //     sleep(Duration::from_secs(1)).await;
-    //     _ = private_tab_handle.send(TabCommand::SuspendDrawing).await;
-    // });
+    let autoexec_handle = tokio::spawn(async move {
+
+        let domains: Vec<&'static str> = vec![
+            "google.com", "bing.com", "yahoo.com",
+            "wikipedia.org", "archive.org", "rust-lang.org",
+            "github.com", "stackoverflow.com", "news.ycombinator.com",
+            "x.com", "twitter.com", "facebook.com", "instagram.com", "linkedin.com", "tiktok.com", "reddit.com",
+            "youtube.com", "netflix.com", "spotify.com", "imdb.com",
+            "amazon.com", "apple.com", "microsoft.com", "cloudflare.com",
+            "nytimes.com", "bbc.co.uk", "theguardian.com", "reuters.com", "bloomberg.com", "cnn.com", "arstechnica.com", "theverge.com",
+        ];
+
+        fn random_url_from(domains: &[&str]) -> String {
+            let mut rng = rng();
+            let dn = domains.choose(&mut rng).unwrap_or(&"gosub.io");
+
+            format!("https://{dn}/")
+        }
+
+        loop {
+            _private_tab_handle.navigate(random_url_from(&domains)).await.unwrap();
+            sleep(Duration::from_secs(5)).await;
+        }
+
+        // _ = _private_tab_handle.send(TabCommand::ResumeDrawing { fps: 5 }).await;
+        // sleep(Duration::from_secs(5)).await;
+        // _ = _private_tab_handle.send(TabCommand::SuspendDrawing).await;
+        // sleep(Duration::from_secs(5)).await;
+        // _ = _private_tab_handle.send(TabCommand::ResumeDrawing { fps: 60 }).await;
+        // sleep(Duration::from_secs(1)).await;
+        // _ = _private_tab_handle.send(TabCommand::SuspendDrawing).await;
+    });
 
     // This is the application's main loop, where we receive events from the engine and
     // act on them. In a real application, you would probably want to run this in
@@ -173,7 +200,7 @@ async fn main() -> Result<(), EngineError> {
                 println!("Ticking the UA interval");
 
                 seen_intervals += 1;
-                if seen_intervals >= 10 {
+                if seen_intervals >= 1000 {
                     println!("Seen {seen_intervals} intervals, exiting main loop");
                     break;
                 }

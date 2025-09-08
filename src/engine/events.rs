@@ -204,15 +204,6 @@ pub enum LoadEvent {
     Cancelled { nav_id: NavigationId, url: String, reason: CancelReason },
 }
 
-/// Priority for fetching resources. This comes into effect when the fetcher does not have enough
-/// slots to process all the backlog resources and must make decisions on what to fetch first
-#[allow(unused)]
-pub const PRIO_HIGHEST: i8 = i8::MAX;
-#[allow(unused)]
-pub const PRIO_DEFAULT: i8 = 0;
-#[allow(unused)]
-pub const PRIO_LOWEST: i8 = i8::MIN;
-
 /// Events triggered by load resources for a main document. Note that resources can trigger other
 /// resources. @TODO: how do we see this?
 #[derive(Debug, Clone)]
@@ -229,8 +220,6 @@ pub enum ResourceEvent {
         kind: ResourceKind,
         /// Source that initiated this resource load
         initiator: Initiator,
-        /// Priority of the resource
-        priority: i8,
     },
     /// Resource responded by a redirection to another resource (will trigger a new "Started")
     Redirected {

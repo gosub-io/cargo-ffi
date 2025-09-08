@@ -16,8 +16,9 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
+use crate::net::types::FetchRequest;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -90,6 +91,8 @@ pub struct ZoneContext {
     pub(crate) shared_flags: SharedFlags,
     /// Event channel to send events back to the UI
     pub(crate) event_tx: broadcast::Sender<EngineEvent>,
+    /// Channel to communicate to the network I/O thread
+    pub(crate) io_tx: mpsc::UnboundedSender<FetchRequest>,
 }
 
 // Things that are shared upwards to the engine
@@ -178,8 +181,11 @@ impl Zone {
         ];
 
         let storage_rx = services.storage.subscribe();
-
         let event_tx = engine_context.event_tx.clone();
+        let io_tx = {
+            let guard = engine_context.io_tx.read().unwrap();
+            guard.as_ref().cloned().expect("I/O thread not running")
+        };
 
         let zone = Self {
             engine_context,
@@ -196,6 +202,7 @@ impl Zone {
                     share_cookiejar: false,
                 },
                 event_tx,
+                io_tx,
             }),
             id: zone_id,
             tabs: HashMap::new(),

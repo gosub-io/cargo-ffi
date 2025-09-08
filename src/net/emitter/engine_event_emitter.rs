@@ -1,5 +1,5 @@
 use tokio::sync::broadcast;
-use crate::engine::events::{CancelReason, ResourceEvent, PRIO_DEFAULT};
+use crate::engine::events::{CancelReason, ResourceEvent};
 use crate::engine::types::{NavigationId, RequestId};
 use crate::events::EngineEvent;
 use crate::tab::TabId;
@@ -34,7 +34,6 @@ impl NetObserver for EngineEventEmitter {
                     url: url.to_string(),
                     kind: self.kind,
                     initiator: self.initiator,
-                    priority: PRIO_DEFAULT,
                 });
             }
             NetEvent::Redirected { from, to, status } => {

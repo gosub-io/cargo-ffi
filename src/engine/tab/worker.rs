@@ -10,14 +10,17 @@ use crate::zone::{ZoneContext, ZoneId};
 use std::sync::Arc;
 use std::time::Instant;
 use anyhow::Context;
+use futures_util::TryStreamExt;
+use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
+use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::engine::types::NavigationId;
-use crate::net::{load_main_document, DocumentLoadResult};
-use crate::net::types::{Initiator, ResourceKind};
+use crate::net::DocumentLoadResult;
+use crate::net::types::{FetchKey, FetchRequest, FetchResult, Initiator, Priority, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
 
@@ -378,32 +381,107 @@ impl TabWorker {
         // Setup cancellation, the response channel and spwan the load task
         let cancel = CancellationToken::new();
         let cancel_child = cancel.child_token();
-        let (tx, rx) = oneshot::channel::<(NavigationId, DocumentLoadResult)>();
-
-        let event_tx = self.zone_context.event_tx.clone();
+        let (tx_done, rx_done) = oneshot::channel::<(NavigationId, DocumentLoadResult)>();
 
         let tab_id = self.tab_id;
+        let event_tx = self.zone_context.event_tx.clone();
+        let io_tx = self.zone_context.io_tx.clone();
+        let request_url = real_url.clone();
 
-        tokio::task::Builder::new()
-            .name(&format!("Tab Load {} {}", self.tab_id.to_string(), nav_id.0))
-            .spawn(async move {
-                // Replace with your real loader; this is what your comment implied:
-                let res = load_main_document(
-                    tab_id,
+        let span = tracing::info_span!(
+            "tab_nav",
+            tab_id=%tab_id,
+            nav_id=%nav_id.0,
+            scheme=%request_url.scheme(),
+            host=%request_url.host_str().unwrap_or(""),
+            path=%request_url.path(),
+        );
+
+        tokio::spawn(async move {
+            let _e = span.enter();
+
+            // Submit a streaming fetch for the main document
+            let (tx_fetch, rx_fetch) = oneshot::channel::<FetchResult>();
+            let req = FetchRequest {
+                key: FetchKey {
+                    url: request_url.clone(),
+                    accept: None,
+                    range: None,
+                },
+                priority: Priority::High,
+                kind: ResourceKind::Document,
+                initiator: Initiator::Navigation,
+                tab_id,
+                streaming: true,
+                reply: Some(tx_fetch),
+            };
+
+            if io_tx.send(req).is_err() {
+                // Coudln't send the request to the I/O thread
+                let _ = tx_done.send((
                     nav_id,
-                    real_url.clone(),
-                    cancel_child,
-                    ignore_cache,
-                    event_tx,
-                    ResourceKind::Document,         // This might not be correct
-                    Initiator::Navigation,          // This might not be correct
-                ).await;
-                let _ = tx.send((nav_id, res)); // ignore if receiver was dropped (replaced/cancelled)
-            })
-            .expect("failed to spawn tab loader");
+                    DocumentLoadResult::NetworkError("I/O channel closed".into())
+                ));
+                return;
+            }
 
-        // Store the inflight data, so we can cancel the load if needed
-        self.runtime.load = Some(InflightLoad { nav_id, cancel, rx });
+            // Wait for fetch to complete or cancellation
+            let fetch_result = select! {
+                _ = cancel_child.cancelled() => {
+                    let _ = tx_done.send((nav_id, DocumentLoadResult::Cancelled("Navigation cancelled".into())));
+                    return;
+                }
+                r = rx_fetch => match r {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let _ = tx_done.send((nav_id, DocumentLoadResult::NetworkError("Fetch response channel closed".into())));
+                        return;
+                    }
+                }
+            };
+
+            // Handle fetch result
+            match fetch_result {
+                FetchResult::Stream { meta, body } => {
+                    let reader = StreamReader::new(
+                        body.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                    );
+
+                    // Do some progress reporting. TTFB. We have a Progress EngineEvent for this
+
+                    let parse_res = parse_main_document_stream(
+                        tab_id,
+                        nav_id,
+                        meta.final_url.clone(),
+                        reader,
+                        cancel_child.clone(),
+                        ignore_cache,
+                        event_tx.clone()
+                    ).await;
+
+                    let _ = tx_done.send((nav_id, parse_res));
+                }
+                FetchResult::Buffered { meta, body } => {
+                    let parse_res = parse_main_document_bytes(
+                        tab_id,
+                        nav_id,
+                        meta.final_url.clone(),
+                        &body,
+                        cancel_child.clone(),
+                        ignore_cache,
+                        event_tx.clone()
+                    ).await;
+
+                    let _ = tx_done.send((nav_id, parse_res));
+                }
+
+                FetchResult::Error(err) => {
+                    let _ = tx_done.send((nav_id, DocumentLoadResult::NetworkError(format!("Fetch error: {}", err))));
+                }
+            }
+        });
+
+        self.runtime.load = Some(InflightLoad { nav_id, cancel, rx: rx_done });
     }
 
     /// Do a draw tick. This will be called based on the FPS that is requested
