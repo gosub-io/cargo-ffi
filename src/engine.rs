@@ -14,6 +14,7 @@ pub mod zone;
 
 pub mod config;
 pub mod types;
+mod downloader;
 
 pub use context::BrowsingContext;
 pub use engine::GosubEngine;

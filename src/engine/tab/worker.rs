@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use crate::engine::events::{CancelReason, EngineEvent, LoadEvent, NavigationEvent};
 use crate::engine::BrowsingContext;
 use crate::events::TabCommand;
@@ -8,18 +9,49 @@ use crate::storage::{StorageEvent, StorageHandles};
 use crate::tab::{TabId, TabSink};
 use crate::zone::{ZoneContext, ZoneId};
 use std::sync::Arc;
-use std::time::Instant;
-use anyhow::Context;
-use tokio::sync::{mpsc, oneshot};
+use anyhow::{anyhow, Context};
+use http::Method;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::select;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::engine::types::NavigationId;
-use crate::net::{load_main_document, DocumentLoadResult};
-use crate::net::types::{Initiator, ResourceKind};
+use crate::net::{NavigationError, Resource, ResourceLoadResult, SharedBody};
+use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta, Initiator, Priority, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
+use tokio::time::{sleep, Duration, Instant};
+use crate::engine::types::NavigationId;
+use crate::net::loader::{Document, NavigationOutput, ResourceMeta};
+use crate::net::mime::MimeKind;
+
+#[allow(unused)]
+enum InFlightState {
+    WaitingMeta {
+        cancel: CancellationToken,
+    },
+    WaitingDecision {
+        meta: FetchResultMeta,
+        // lease: BodyLease,
+        cancel: CancellationToken,
+    },
+    ConsumingByUA {
+        cancel: CancellationToken,
+    },
+    ConsumingByEngine {
+        cancel: CancellationToken,
+    },
+    Done,
+}
+
+impl InFlightState {
+    #[allow(unused)]
+    fn is_done(&self) -> bool {
+        matches!(self, InFlightState::Done)
+    }
+}
 
 pub struct TabWorker {
     /// ID of the tab
@@ -63,14 +95,18 @@ pub struct TabWorker {
     // Thumbnail image of the tab in case the tab is not visible
     pub thumbnail: Option<RgbaImage>,
     // Surface on which the browsing context can render the tab
+    #[allow(unused)]
     surface: Option<Box<dyn ErasedSurface + Send>>,
     // // Size of the surface (does not have to match viewport)
     // surface_size: SurfaceSize,
     // Present mode for the surface?
+    #[allow(unused)]
     present_mode: PresentMode,
     /// Device Pixel Ratio
+    #[allow(unused)]
     dpr: DevicePixelRatio,
     /// The viewport that was committed for the in-flight/last render
+    #[allow(unused)]
     committed_viewport: Viewport,
     /// The newest viewport requested by the tab, which may differ from the committed one.
     desired_viewport: Viewport,
@@ -80,7 +116,6 @@ pub struct TabWorker {
     /// Keeps track of the tab worker runtime data
     pub(crate) runtime: TabRuntime,
 }
-
 
 impl TabWorker {
     /// Creates a new tab. Does NOT spawn the tab worker
@@ -110,7 +145,6 @@ impl TabWorker {
             is_error: false,
             thumbnail: None,
             surface: None,
-            // surface_size: SurfaceSize { width: 1, height: 1 },
             present_mode: PresentMode::Fifo,
             dpr: DevicePixelRatio(1.0),
             committed_viewport: Default::default(),
@@ -120,13 +154,14 @@ impl TabWorker {
         }
     }
 
-    pub fn spawn_named(self, name: impl AsRef<str>) -> anyhow::Result<JoinHandle<()>> {
-        let name = name.as_ref().to_owned();
-        let join = tokio::task::Builder::new().name(&name).spawn(self.run())?;
-        Ok(join)
+    pub fn spawn_worker(self) -> anyhow::Result<JoinHandle<()>> {
+        let name = format!("Tab Worker {}", self.tab_id);
+        let join_handle = tokio::task::Builder::new().name(&name).spawn(self.run())?;
+
+        Ok(join_handle)
     }
 
-    pub async fn run(mut self) {
+    async fn run(mut self) {
         self.sink.set_worker_started_now();
 
         // Announce creation
@@ -136,7 +171,7 @@ impl TabWorker {
         });
 
         loop {
-            tokio::select! {
+            select! {
                 // Tick for redraws
                 _ = self.runtime.interval.tick(), if self.runtime.drawing_enabled => {
                     if let Err(e) = self.tick_draw().await {
@@ -148,14 +183,13 @@ impl TabWorker {
                 // In-flight load completion
                 res = async {
                     // Wait until the self.runtime.load.rx channel (if any) resolves
-                    if let Some(load) = &mut self.runtime.load {
-                        (&mut load.rx).await
-                    } else {
-                        // No self.runtime.load found, so we await indefinitately (thus not triggering this branch)
-                        futures::future::pending().await
+                    let load = self.runtime.load.take().expect("select! branch is guarded by is_some()");
+                    load.rx.await
+                },
+                if self.runtime.load.is_some() => {
+                    if let Some(loaded_url) = self.runtime.loaded_url.take() {
+                        self.on_load_result(loaded_url, res);
                     }
-                } => {
-                    self.on_load_result(res);
                 }
 
                 // Handle incoming tab commands
@@ -172,22 +206,22 @@ impl TabWorker {
         self.services.storage.drop_tab(self.zone_id, self.tab_id);
     }
 
-    fn on_load_result(&mut self, res: Result<(NavigationId, DocumentLoadResult), oneshot::error::RecvError>) {
+    fn on_load_result(&mut self, url: Url, res: Result<(NavigationId, ResourceLoadResult), oneshot::error::RecvError>) {
         let Some(current) = self.runtime.load.as_ref() else {
             return;
         };
         let current_nav = current.nav_id;
 
         match res {
-            Ok((completed_nav , Ok(resp))) => {
+            Ok((completed_nav, Ok(resp))) => {
                 if completed_nav != current_nav {
                     return
                 }
 
                 // Store any cookies found in the response into the cookie jar
-                self.services.cookie_jar.write().store_response_cookies(&resp.url, &resp.headers);
+                self.services.cookie_jar.write().store_response_cookies(&resp.meta.final_url, &resp.meta.headers);
 
-                self.current_url = Some(resp.url.clone());
+                self.current_url = Some(resp.meta.final_url.clone());
                 self.pending_url = None;
                 self.is_loading = false;
                 self.is_error = false;
@@ -195,17 +229,21 @@ impl TabWorker {
                 self.runtime.dirty = true;
                 self.runtime.load = None;
 
-                self.sink.set_current_url(resp.url.clone());
+                self.sink.set_current_url(resp.meta.final_url.clone());
 
-                self.context.set_raw_html(String::from_utf8_lossy(resp.body.as_slice()).as_ref());
+                // Set the document into the browsing context
+                if let Resource::Html(doc) = resp.resource {
+                    self.context.set_raw_html(doc.0.as_str())
+                }
+                // self.context.set_raw_html(String::from_utf8_lossy(resp.body.as_slice()).as_ref());
 
                 self.send_event(EngineEvent::Load {
                     tab_id: self.tab_id,
                     event: LoadEvent::Finished {
                         nav_id: completed_nav,
-                        url: resp.url.to_string(),
-                        bytes: resp.body.len() as u64,
-                        content_type: resp.headers
+                        url: resp.meta.final_url.clone(),
+                        bytes: 0,
+                        content_type: resp.meta.headers
                             .get("content_type")
                             .and_then(|v| v.to_str().ok())
                             .map(|s| s.to_string()),
@@ -216,7 +254,7 @@ impl TabWorker {
                     tab_id: self.tab_id,
                     event: NavigationEvent::Finished {
                         nav_id: completed_nav,
-                        url: resp.url.to_string(),
+                        url: resp.meta.final_url.clone(),
                     }
                 });
             }
@@ -231,16 +269,18 @@ impl TabWorker {
                 self.runtime.dirty = true;
                 self.runtime.load = None;
 
+                let err = Arc::new(anyhow!(e));
+
                 self.send_event(EngineEvent::Load {
                     tab_id: self.tab_id,
                     event: LoadEvent::Failed {
-                        nav_id: Some(completed_nav), url: "".into(), error: e.to_string()
+                        nav_id: Some(completed_nav), url: url.clone(), error: err.clone(),
                     },
                 });
                 self.send_event(EngineEvent::Navigation {
                     tab_id: self.tab_id,
                     event: NavigationEvent::Failed {
-                        nav_id: Some(completed_nav), url: "".into(), error: e.to_string()
+                        nav_id: Some(completed_nav), url: url.clone(), error: err.clone(),
                     },
                 });
             }
@@ -249,36 +289,35 @@ impl TabWorker {
 
                 self.send_event(EngineEvent::Load {
                     tab_id: self.tab_id,
-                    event: LoadEvent::Cancelled { nav_id: current_nav, url: "".into(), reason: CancelReason::ExplicitCancel },
+                    event: LoadEvent::Cancelled { nav_id: current_nav, url: url.clone(), reason: CancelReason::ExplicitCancel },
                 });
                 self.send_event(EngineEvent::Navigation {
                     tab_id: self.tab_id,
-                    event: NavigationEvent::Cancelled { nav_id: current_nav, url: "".into(), reason: CancelReason::ExplicitCancel },
+                    event: NavigationEvent::Cancelled { nav_id: current_nav, url: url.clone(), reason: CancelReason::ExplicitCancel },
                 });
             }
         }
     }
 
     fn handle_tab_command(&mut self, cmd: TabCommand) -> ControlFlow {
-        use ControlFlow::*;
         match cmd {
             TabCommand::CloseTab => {
-                println!("Tab {:?} received Close command, exiting", self.tab_id);
-                Break
+//                println!("Tab {:?} received Close command, exiting", self.tab_id);
+                ControlFlow::Break
             }
             TabCommand::Navigate { url } => {
                 self.navigate_to(&url, false);
-                Continue
+                ControlFlow::Continue
             }
             TabCommand::Reload { ignore_cache } => {
                 let url = self.current_url.as_ref().map(|u| u.as_str()).unwrap_or("about:blank").to_string();
                 self.navigate_to(url.as_str(), ignore_cache);
-                Continue
+                ControlFlow::Continue
             }
             TabCommand::SetViewport { x, y, width, height } => {
                 self.set_viewport(Viewport::new(x, y, width, height));
                 self.runtime.dirty = true;
-                Continue
+                ControlFlow::Continue
             }
             TabCommand::MouseMove { .. } |
             TabCommand::MouseDown { .. } |
@@ -287,24 +326,24 @@ impl TabWorker {
             TabCommand::KeyUp { .. } |
             TabCommand::CharInput { .. } => {
                 self.runtime.dirty = true;
-                Continue
+                ControlFlow::Continue
             }
             TabCommand::ResumeDrawing { fps: wanted_fps } => {
                 self.runtime.drawing_enabled = true;
                 self.runtime.fps = wanted_fps.max(1) as u32;
-                let period = std::time::Duration::from_secs_f64(1.0 / (self.runtime.fps as f64));
+                let period = Duration::from_secs_f64(1.0 / (self.runtime.fps as f64));
                 self.runtime.interval = tokio::time::interval(period);
                 self.runtime.interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 self.runtime.dirty = true;
-                Continue
+                ControlFlow::Continue
             }
             TabCommand::SuspendDrawing => {
                 self.runtime.drawing_enabled = false;
-                Continue
+                ControlFlow::Continue
             }
             _ => {
                 // Keep your other commands here
-                Continue
+                ControlFlow::Continue
             }
         }
     }
@@ -321,6 +360,7 @@ impl TabWorker {
     fn navigate_to(&mut self, url: impl Into<String>, ignore_cache: bool) {
         // Cancel any in-flight load
         if let Some(load) = self.runtime.load.take() {
+            log::warn!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
             load.cancel.cancel();
         }
 
@@ -332,11 +372,7 @@ impl TabWorker {
                 log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
                 self.send_event(EngineEvent::Navigation {
                     tab_id: self.tab_id,
-                    event: NavigationEvent::Failed {
-                        nav_id: None,            // no nav_id could be created
-                        url: unvalidated_url,
-                        error: format!("Cannot parse URL: {e}"),
-                    },
+                    event: NavigationEvent::FailedUrl { nav_id: None, url: unvalidated_url , error: Arc::new(e.into()) },
                 });
                 return;
             }
@@ -348,8 +384,8 @@ impl TabWorker {
                 tab_id: self.tab_id,
                 event: NavigationEvent::Failed {
                     nav_id: None,
-                    url: real_url.to_string(),
-                    error: e.to_string(),
+                    url: real_url.clone(),
+                    error: Arc::new(e),
                 },
             });
             return;
@@ -367,52 +403,167 @@ impl TabWorker {
 
         self.send_event(EngineEvent::Navigation {
             tab_id: self.tab_id,
-            event: NavigationEvent::Started { nav_id, url: real_url.to_string() }
+            event: NavigationEvent::Started { nav_id, url: real_url.clone() }
         });
         self.send_event(EngineEvent::Load {
             tab_id: self.tab_id,
-            event: LoadEvent::Started { nav_id, url: real_url.to_string() }
+            event: LoadEvent::Started { nav_id, url: real_url.clone() }
         });
 
 
-        // Setup cancellation, the response channel and spwan the load task
+        // Setup cancellation, the response channel and spawn the load task
         let cancel = CancellationToken::new();
         let cancel_child = cancel.child_token();
-        let (tx, rx) = oneshot::channel::<(NavigationId, DocumentLoadResult)>();
-
-        let event_tx = self.zone_context.event_tx.clone();
+        let (tx_done, rx_done) = oneshot::channel::<(NavigationId, ResourceLoadResult)>();
 
         let tab_id = self.tab_id;
+        let event_tx = self.zone_context.event_tx.clone();
+        let io_tx = self.zone_context.io_tx.clone();
+        let request_url = real_url.clone();
 
-        tokio::task::Builder::new()
-            .name(&format!("Tab Load {} {}", self.tab_id.to_string(), nav_id.0))
-            .spawn(async move {
-                // Replace with your real loader; this is what your comment implied:
-                let res = load_main_document(
-                    tab_id,
+        let span = tracing::info_span!(
+            "tab_nav",
+            tab_id=%tab_id,
+            nav_id=%nav_id.0,
+            scheme=%request_url.scheme(),
+            host=%request_url.host_str().unwrap_or(""),
+            path=%request_url.path(),
+        );
+
+        tokio::spawn(async move {
+            let _e = span.enter();
+
+            // Submit a streaming fetch for the main document
+            let (tx_fetch, rx_fetch) = oneshot::channel::<FetchResult>();
+            let req = FetchRequest {
+                key_data: FetchKeyData {
+                    url: request_url.clone(),
+                    method: Method::GET,
+                    headers: Default::default(),
+                },
+                priority: Priority::High,
+                kind: ResourceKind::Document,
+                initiator: Initiator::Navigation,
+                tab_id,
+                streaming: true,
+                reply: Some(tx_fetch),
+                auto_decode: true,
+                max_bytes: None,
+                cancel: cancel_child.clone(),
+            };
+
+            if io_tx.send(req).is_err() {
+                // Couldn't send the request to the I/O thread
+                let _ = tx_done.send((
                     nav_id,
-                    real_url.clone(),
-                    cancel_child,
-                    ignore_cache,
-                    event_tx,
-                    ResourceKind::Document,         // This might not be correct
-                    Initiator::Navigation,          // This might not be correct
-                ).await;
-                let _ = tx.send((nav_id, res)); // ignore if receiver was dropped (replaced/cancelled)
-            })
-            .expect("failed to spawn tab loader");
+                    Err(NavigationError::NetworkError("I/O channel closed".into()))
+                ));
+                return;
+            }
 
-        // Store the inflight data, so we can cancel the load if needed
-        self.runtime.load = Some(InflightLoad { nav_id, cancel, rx });
+            // Wait for fetch to complete or cancellation
+            let fetch_result = select! {
+                _ = cancel_child.cancelled() => {
+                    let _ = tx_done.send((nav_id, Err(NavigationError::Cancelled("Navigation cancelled".into()))));
+                    return;
+                }
+                r = rx_fetch => match r {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let _ = tx_done.send((nav_id, Err(NavigationError::NetworkError("Fetch response channel closed".into()))));
+                        return;
+                    }
+                }
+            };
+
+            // Handle fetch result
+            match fetch_result {
+                FetchResult::Stream { meta, peek, shared } => {
+                    let reader = SharedBody::combined_reader(peek, shared);
+
+                    // Do some progress reporting. TTFB. We have a Progress EngineEvent for this
+
+                    let doc = parse_main_document_stream(
+                        tab_id,
+                        nav_id,
+                        meta.final_url.clone(),
+                        reader,
+                        cancel_child.clone(),
+                        ignore_cache,
+                        event_tx.clone()
+                    ).await;
+
+                    if doc.is_err() {
+                        let _ = tx_done.send((nav_id, Err(NavigationError::Other(doc.err().unwrap()))));
+                        return;
+                    }
+
+                    let doc = doc.unwrap();
+
+                    let resource_meta = ResourceMeta {
+                        mime: MimeKind::Html,
+                        final_url: meta.final_url.clone(),
+                        content_length: Some(doc.0.len() as u64),
+                        etag: None,
+                        charset: None,
+                        last_modified: None,
+                        headers: meta.headers.clone(),
+                    };
+
+                    let _ = tx_done.send((nav_id, Ok(NavigationOutput{
+                        meta: resource_meta,
+                        resource: Resource::Html(doc),
+                    })));
+                }
+                FetchResult::Buffered { meta, body } => {
+                    let doc = parse_main_document_bytes(
+                        tab_id,
+                        nav_id,
+                        meta.final_url.clone(),
+                        &body,
+                        ignore_cache,
+                        event_tx.clone()
+                    ).await;
+
+                    if doc.is_err() {
+                        let _ = tx_done.send((nav_id, Err(NavigationError::Other(doc.err().unwrap()))));
+                        return;
+                    }
+
+                    let doc = doc.unwrap();
+
+                    let resource_meta = ResourceMeta {
+                        mime: MimeKind::Html,
+                        final_url: meta.final_url.clone(),
+                        content_length: Some(doc.0.len() as u64),
+                        etag: None,
+                        charset: None,
+                        last_modified: None,
+                        headers: meta.headers.clone(),
+                    };
+
+                    let _ = tx_done.send((nav_id, Ok(NavigationOutput{
+                        meta: resource_meta,
+                        resource: Resource::Html(Document(String::from_utf8_lossy(body.as_ref()).to_string())),
+                    })));
+                }
+
+                FetchResult::Error(err) => {
+                    let _ = tx_done.send((nav_id, Err(NavigationError::NetworkError(format!("Fetch error: {}", err)))));
+                }
+            }
+        });
+
+        self.runtime.load = Some(InflightLoad { nav_id, cancel: cancel.clone(), rx: rx_done });
     }
 
     /// Do a draw tick. This will be called based on the FPS that is requested
     async fn tick_draw(&mut self) -> anyhow::Result<()> {
-        println!("tick_draw()");
+//        println!("tick_draw()");
 
         self.sink.inc_frame();
 
-        let now = Instant::now();
+        let now = std::time::Instant::now();
         let elapsed = now - self.runtime.last_tick_draw;
         self.runtime.last_tick_draw = now;
 
@@ -420,7 +571,7 @@ impl TabWorker {
         if elapsed.as_secs_f32() > 0.0 {
             let fps = 1.0 / elapsed.as_secs_f32();
             self.sink.set_fps(fps);
-            println!("TickDraw: FPS: {:.2}", fps);
+//            println!("TickDraw: FPS: {:.2}", fps);
         };
 
         Ok(())
@@ -459,6 +610,7 @@ impl TabWorker {
 
     /// Dispatch a storage event to same-origin documents in this tab (placeholder).
     /// Intended for HTML5 storage event semantics.
+    #[allow(unused)]
     pub(crate) fn dispatch_storage_events(&mut self, origin: &url::Origin, include_iframes: bool, ev: &StorageEvent) {
         println!("Tab {:?} dispatch_storage_events called", self.tab_id);
         dbg!(&origin);
@@ -484,6 +636,7 @@ impl TabWorker {
     }
 
     /// Ensure the tab has a surface of the given size, creating it if necessary.
+    #[allow(unused)]
     fn ensure_surface(&mut self, backend: &dyn RenderBackend, size: SurfaceSize) -> anyhow::Result<()> {
         if let Some(ref surf) = self.surface {
             if surf.size() == size {
@@ -512,7 +665,7 @@ impl TabWorker {
         Ok(())
     }
 
-
+    #[allow(unused)]
     fn begin_render(&mut self, backend: &dyn RenderBackend) -> anyhow::Result<()> {
         if self.committed_viewport != self.desired_viewport {
             self.committed_viewport = self.desired_viewport;
@@ -525,6 +678,7 @@ impl TabWorker {
         Ok(())
     }
 
+    #[allow(unused)]
     fn end_render(&mut self) {
         if self.dirty_after_inflight {
             self.dirty_after_inflight = false;
@@ -544,4 +698,250 @@ enum ControlFlow {
 
 impl ControlFlow {
     fn is_break(&self) -> bool { matches!(self, ControlFlow::Break) }
+}
+
+// const PEEK_BUF_SIZE: usize = 5 * 1024;     // 5KB peek buffer
+
+const PROGRESS_BYTES_STEP: usize = 32 * 1024;       // Emit events after every 32KB received
+
+const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+
+
+async fn parse_main_document_stream<R>(
+    tab_id: TabId,
+    nav_id: NavigationId,
+    final_url: Url,
+    mut reader: R,
+    cancel_token: CancellationToken,
+    _ignore_cache: bool,
+    event_tx: broadcast::Sender<EngineEvent>,
+) -> anyhow::Result<Document>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let time_start = Instant::now();
+
+    let mut buf = vec![0u8; 16 * 1024];     // 16K buffer
+    let mut total: usize = 0;
+    let mut last_progress_total: usize = 0;
+    let idle = sleep(IDLE_TIMEOUT);
+    tokio::pin!(idle);
+
+    let mut document_buffer = Vec::new();
+
+    loop {
+        select! {
+            _ = cancel_token.cancelled() => {
+                return Err(NavigationError::Cancelled("stream cancelled".into()).into());
+            }
+            _ = &mut idle => {
+                return Err(NavigationError::Timeout("stream timeout".into()).into());
+            }
+            read_res = reader.read(&mut buf) => {
+                let n = match read_res {
+                    Ok(n) => n,
+                    Err(e) => return Err(e.into()),
+                };
+
+                if n == 0 {
+                    if total != last_progress_total {
+                        let _ = event_tx.send(EngineEvent::Load{ tab_id, event: LoadEvent::Progress {
+                            nav_id,
+                            url: final_url.clone(),
+                            finished: false,
+                            ttfb: false,
+                            bytes_received: total as u64,
+                            elapsed: time_start.elapsed(),
+                        }});
+
+                        // last_progress_total = total;
+                    }
+                    break;
+                }
+
+                idle.as_mut().reset(Instant::now() + IDLE_TIMEOUT);
+
+                if total == 0 {
+                    let _ = event_tx.send(EngineEvent::Load { tab_id, event: LoadEvent::Progress {
+                        nav_id,
+                        url: final_url.clone(),
+                        finished: false,
+                        bytes_received: 0,
+                        ttfb: true,
+                        elapsed: time_start.elapsed(),
+                    }});
+                }
+
+                document_buffer.extend_from_slice(&buf[..n]);
+                total += n;
+
+                // @TODO: here we can feed our HTML5 parser / bytestream with more bytes
+
+
+                let bytes_since = total - last_progress_total;
+                if bytes_since >= PROGRESS_BYTES_STEP {
+                    last_progress_total = total;
+
+                    let _ = event_tx.send(EngineEvent::Load{tab_id, event: LoadEvent::Progress {
+                        nav_id,
+                        url: final_url.clone(),
+                        finished: false,
+                        ttfb: false,
+                        bytes_received: total as u64,
+                        elapsed: time_start.elapsed(),
+                    }});
+                }
+            }
+        }
+    }
+
+    // Parser should finish up and return a document
+
+    let _ = event_tx.send(EngineEvent::Load{tab_id, event: LoadEvent::Progress {
+        nav_id,
+        url: final_url.clone(),
+        ttfb: false,
+        finished: true,
+        bytes_received: total as u64,
+        elapsed: time_start.elapsed(),
+    }});
+
+    match String::from_utf8(document_buffer) {
+        Ok(s) => Ok(Document(s)),
+        Err(e) => Err(NavigationError::Other(anyhow!("invalid utf8: {e}")).into())
+    }
+}
+
+// async fn handle_stream(
+//     tab_id: TabId,
+//     nav_id: NavigationId,
+//     meta: &ContentMeta,
+//     shared: Arc<SharedBody>,
+//     cancel: CancellationToken,
+//     ignore_cache: bool,
+//     event_tx: broadcast::Sender<EngineEvent>,
+// ) -> ResourceLoadResult {
+//     let stream = shared.subscribe_stream()
+//         .map_err(|e: NetError| e.to_io());
+//     let mut reader = StreamReader::new(stream);
+//
+//     let mut peek = vec![0u8; PEEK_BUF_SIZE];
+//     let n_peek = match select! {
+//         _ = cancel.cancelled() => return Err(NavigationError::Cancelled("navigation cancelled".into())),
+//         r = reader.read(&mut peek) => r.map_err(|e| NavigationError::from(e))?,
+//     };
+//     peek.truncate(n_peek);
+//
+//     // Create a new reader that first reads from the peek buffer, then continues with the rest of the stream
+//     let mut first = &peek[..];
+//     let mut chain = tokio_util::io::StreamReader::new(
+//         futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::copy_from_slice(first)) })
+//     );
+//
+//     // Figure out from the content-type and/or the first PEEK_BUF_SIZE bytes what kind of type this resource is
+//     let header_ct = meta.content_type.as_deref();
+//     let kind = classify_mime(header_ct, Some(&peek));
+//
+//     match kind {
+//         MimeKind::Html => {
+//             let doc = parse_main_document_stream(
+//                 tab_id,
+//                 nav_id,
+//                 meta.final_url.clone(),
+//                 chain,
+//                 cancel,
+//                 ignore_cache,
+//                 event_tx
+//             ).await?;
+//             Resource::Html(doc)
+//         }
+//         MimeKind::Json => {
+//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
+//             let value: serde_json::Value = serde_json::from_slice(&bytes) {
+//                 Ok(v) => v,
+//                 Err(e) => return Err(NavigationError::Other(anyhow!("Invalid JSON: {e}"))),
+//             };
+//             Resource::Json(value).into()
+//         }
+//         MimeKind::Image => {
+//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
+//             Resource::Image { bytes: bytes.into(), mime: meta.content_type.clone().unwrap_or_else(|| "image/*".into()) }.into()
+//         }
+//         MimeKind::Text => {
+//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
+//
+//             let s = String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+//             Resource::Text { text: s, mime: header_ct.unwrap_or("text/plain").to_string() }.into()
+//         }
+//         MimeKind::Binary => {
+//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
+//             Resource::Binary { bytes: bytes.into(), mime: header_ct.unwrap_or("application/octet-stream").to_string() }.into()
+//         }
+//     }
+// }
+
+async fn parse_main_document_bytes(
+    tab_id: TabId,
+    nav_id: NavigationId,
+    final_url: Url,
+    bytes: &[u8],
+    _ignore_cache: bool,
+    event_tx: broadcast::Sender<EngineEvent>,
+) -> anyhow::Result<Document> {
+    let reader = Cursor::new(bytes.to_vec());       // @TODO: can we remove the to_vec() copy)
+    let cancel = CancellationToken::new();
+
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            parse_main_document_stream(
+                tab_id,
+                nav_id,
+                final_url,
+                reader,
+                cancel,
+                _ignore_cache,
+                event_tx,
+            ).await
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures_util::TryStreamExt;
+    use crate::net::SharedBody;
+
+    #[tokio::test]
+    async fn shared_body_streamreader_eof() {
+        use tokio_util::io::StreamReader;
+        use tokio::io::AsyncReadExt;
+        use std::io;
+
+        let sb = SharedBody::new(16);
+
+        // Consumer
+        let mut reader = StreamReader::new(
+            sb.subscribe_stream().map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        );
+
+        // Producer
+        sb.push(Bytes::from_static(&[0u8; 8192]));
+        sb.push(Bytes::from_static(&[0u8; 8192]));
+        sb.push(Bytes::from_static(&[0u8; 8192]));
+        sb.push(Bytes::from_static(&[0u8; 8192]));
+        sb.push(Bytes::from_static(&[0u8; 1948]));
+        sb.finish();
+
+        // Drain all
+        let mut total = 0usize;
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = reader.read(&mut buf).await.unwrap();
+            if n == 0 { break; }
+            total += n;
+        }
+        assert_eq!(total, 4*8192 + 1948);
+    }
 }

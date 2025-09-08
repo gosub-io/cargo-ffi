@@ -1,39 +1,52 @@
 use std::time::Duration;
+use http::HeaderMap;
 use url::Url;
 
+/// A NetObserver allows to send NetEvents to emitters
 pub trait NetObserver: Send + Sync {
     fn on_event(&self, ev: NetEvent);
 }
 
+/// Events that are send by the net::fetch() functions
 #[derive(Debug)]
 pub enum NetEvent {
+    /// Resource is started to load
     Started {
         url: Url,
     },
+    /// Resource is redirected to another URL
     Redirected {
         from: Url,
         to: Url,
         status: u16,
     },
+    /// Response headers are received
     ResponseHeaders {
         url: Url,
         status: u16,
-        content_length: Option<u64>,
-        content_type: Option<String>,
+        headers: HeaderMap,
     },
+    /// Progress updates, how many bytes already read
     Progress {
-        received_bytes: u64, // cumulative
-    },
-    Finished {
-        url: Url,
-        bytes: u64,
+        // How many bytes received in this resource
+        received_bytes: u64,
+        // Expected length of the resource (if known)
+        expected_length: Option<u64>,
+        // Time spent loading so far on this resource
         elapsed: Duration,
-        content_type: Option<String>,
     },
+    /// Resource is finished
+    Finished {
+        received_bytes: u64,
+        elapsed: Duration,
+        url: Url,
+    },
+    /// Resource failed to fetch
     Failed {
         url: Url,
-        error: String,
+        error: anyhow::Error,
     },
+    /// Resource fetching was cancelled
     Cancelled {
         url: Url,
         reason: &'static str,

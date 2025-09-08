@@ -75,4 +75,7 @@ pub enum EngineError {
 
     #[error("Engine is not running")]
     NotRunning,
+
+    #[error("I/O runtime not started")]
+    IoNotStarted,
 }

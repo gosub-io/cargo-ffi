@@ -74,7 +74,7 @@ pub fn create_tab_and_spawn(
     services: EffectiveTabServices,
     zone_context: Arc<ZoneContext>,
 ) -> anyhow::Result<(TabHandle, JoinHandle<()>)> {
-    let (handle, worker) = create_tab(zone_id, services, zone_context)?;
-    let join = worker.spawn_named(format!("Tab Worker {}", handle.tab_id.0))?;
-    Ok((handle, join))
+    let (tab_handle, worker) = create_tab(zone_id, services, zone_context)?;
+    let join_handle = worker.spawn_worker()?;
+    Ok((tab_handle, join_handle))
 }

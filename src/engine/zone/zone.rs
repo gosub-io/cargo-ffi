@@ -16,8 +16,10 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
+use crate::net::types::FetchRequest;
+use crate::util::spawn_named;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -90,6 +92,8 @@ pub struct ZoneContext {
     pub(crate) shared_flags: SharedFlags,
     /// Event channel to send events back to the UI
     pub(crate) event_tx: broadcast::Sender<EngineEvent>,
+    /// Channel to communicate to the network I/O thread
+    pub(crate) io_tx: mpsc::UnboundedSender<FetchRequest>,
 }
 
 // Things that are shared upwards to the engine
@@ -139,7 +143,9 @@ impl Debug for Zone {
 
 /// Simple structure to hold tab info inside the zone
 struct TabInfo {
+    #[allow(unused)]
     join_handle: tokio::task::JoinHandle<()>,
+    #[allow(unused)]
     sink: Arc<TabSink>,
 }
 
@@ -178,8 +184,11 @@ impl Zone {
         ];
 
         let storage_rx = services.storage.subscribe();
-
         let event_tx = engine_context.event_tx.clone();
+        let io_tx = {
+            let guard = engine_context.io_tx.read().unwrap();
+            guard.as_ref().cloned().expect("I/O thread not running")
+        };
 
         let zone = Self {
             engine_context,
@@ -196,6 +205,7 @@ impl Zone {
                     share_cookiejar: false,
                 },
                 event_tx,
+                io_tx,
             }),
             id: zone_id,
             tabs: HashMap::new(),
@@ -339,9 +349,7 @@ impl Zone {
         let tx = self.context.event_tx.clone();
         let zone_id = self.id;
 
-        let join_handle = tokio::task::Builder::new()
-            .name("storage-events-forwarder")
-            .spawn(async move {
+        let join_handle = spawn_named("storage-events-forwarder", async move {
                 while let Ok(ev) = rx.recv().await {
                     let _ = tx.send(EngineEvent::StorageChanged {
                         tab_id: ev.source_tab,
@@ -354,7 +362,7 @@ impl Zone {
                 }
             });
 
-        join_handle.map_err(|e| EngineError::Internal(e.into()))
+        Ok(join_handle)
     }
 
     /// Closes a tab.

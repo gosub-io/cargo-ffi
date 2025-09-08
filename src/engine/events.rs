@@ -21,12 +21,13 @@ use crate::tab::TabId;
 use crate::zone::ZoneId;
 use crate::EngineError;
 use bitflags::bitflags;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use url::Url;
-use crate::engine::types::{NavigationId, RequestId};
-use crate::net::types::{Initiator, ResourceKind};
+use crate::engine::types::{NavigationId, RequestId, Action};
+use crate::net::types::{FetchResultMeta, Initiator, Priority, ResourceKind};
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -92,8 +93,10 @@ pub enum TabCommand {
     Navigate { url: String },
     /// Reload current URL (with or without cache)
     Reload { ignore_cache: bool },
-    /// Cancel the current load (if any)
-    StopLoading,
+    /// Cancel the current navigation
+    CancelNavigation,
+    /// Make a decision what to do with the navigated resource
+    Decision { nav_id: NavigationId, action: Action },
     /// Close tab
     CloseTab,
 
@@ -188,35 +191,41 @@ pub enum EngineCommand {
 /// events triggered in this navigation will have the same navigation id.
 #[derive(Debug, Clone)]
 pub enum NavigationEvent {
-    Started   { nav_id: NavigationId, url: String },
-    Committed { nav_id: NavigationId, url: String }, // new doc will replace old one
-    Finished  { nav_id: NavigationId, url: String },
-    Failed    { nav_id: Option<NavigationId>, url: String, error: String },
-    Cancelled { nav_id: NavigationId, url: String, reason: CancelReason },
+    Started   { nav_id: NavigationId, url: Url },
+    Committed { nav_id: NavigationId, url: Url }, // new doc will replace old one
+    Finished  { nav_id: NavigationId, url: Url },
+    Failed    { nav_id: Option<NavigationId>, url: Url, error: Arc<anyhow::Error> },
+    Progress  { nav_id: NavigationId, received_bytes: u64, expected_length: Option<u64>, elapsed: Duration },
+    FailedUrl { nav_id: Option<NavigationId>, url: String, error: Arc<anyhow::Error> },
+    Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
 }
 
 /// Start of loading the main document for this navigation
 #[derive(Debug, Clone)]
 pub enum LoadEvent {
-    Started   { nav_id: NavigationId, url: String },
-    Finished  { nav_id: NavigationId, url: String, bytes: u64, content_type: Option<String> },
-    Failed    { nav_id: Option<NavigationId>, url: String, error: String },
-    Cancelled { nav_id: NavigationId, url: String, reason: CancelReason },
+    Started   { nav_id: NavigationId, url: Url },
+    Finished  { nav_id: NavigationId, url: Url, bytes: u64, content_type: Option<String> },
+    Failed    { nav_id: Option<NavigationId>, url: Url, error: Arc<anyhow::Error> },
+    Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
+    Progress  { nav_id: NavigationId, url: Url, finished: bool, bytes_received: u64, ttfb: bool, elapsed: Duration },
 }
-
-/// Priority for fetching resources. This comes into effect when the fetcher does not have enough
-/// slots to process all the backlog resources and must make decisions on what to fetch first
-#[allow(unused)]
-pub const PRIO_HIGHEST: i8 = i8::MAX;
-#[allow(unused)]
-pub const PRIO_DEFAULT: i8 = 0;
-#[allow(unused)]
-pub const PRIO_LOWEST: i8 = i8::MIN;
 
 /// Events triggered by load resources for a main document. Note that resources can trigger other
 /// resources. @TODO: how do we see this?
 #[derive(Debug, Clone)]
 pub enum ResourceEvent {
+    Queued {
+        /// Navigation ID that triggered loading this resource
+        nav_id: NavigationId,
+        /// Actual URL of the resource
+        url: String,
+        /// Type of resource
+        kind: ResourceKind,
+        /// Source that initiated this resource load
+        initiator: Initiator,
+        /// At which priority it is queued
+        priority: Priority,
+    },
     /// Loading of the resource started
     Started {
         /// Navigation ID that triggered loading this resource
@@ -229,8 +238,6 @@ pub enum ResourceEvent {
         kind: ResourceKind,
         /// Source that initiated this resource load
         initiator: Initiator,
-        /// Priority of the resource
-        priority: i8,
     },
     /// Resource responded by a redirection to another resource (will trigger a new "Started")
     Redirected {
@@ -249,16 +256,18 @@ pub enum ResourceEvent {
         req_id: RequestId,
         /// Amount of bytes received
         received_bytes: u64,
+        /// Expected length (based on content-length for instance)
+        expected_length: Option<u64>,
+        /// Time since start of the resource fetch
+        elapsed: Duration
     },
     /// Emitted when we have finished the complete resource
     Finished {
         nav_id: NavigationId,
         req_id: RequestId,
-        url: String,
+        url: Url,
         /// Total bytes received
-        bytes: u64,
-        /// Content type received (if any)
-        content_type: Option<String>,
+        received_bytes: u64,
         /// Time spend from connection open to complete fetch of the resource
         elapsed: Option<Duration>,
     },
@@ -268,7 +277,7 @@ pub enum ResourceEvent {
         req_id: RequestId,
         url: String,
         /// Reason the resource fetch failed
-        error: String,
+        error: Arc<anyhow::Error>,
     },
     /// Emitted when the resource loading has been cancelled
     Cancelled {
@@ -277,6 +286,15 @@ pub enum ResourceEvent {
         url: String,
         /// Reason for cancellation
         reason: CancelReason,
+    },
+    Headers {
+        nav_id: NavigationId,
+        req_id: RequestId,
+        url: String,
+        status: u16,
+        content_length: Option<u64>,
+        content_type: Option<String>,
+        headers: Vec<(String, String)>,
     },
 }
 
@@ -293,6 +311,19 @@ pub enum CancelReason {
     Timeout,
     /// Custom reason
     Custom(String),
+}
+
+impl Display for CancelReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CancelReason::NewNavigation => write!(f, "Cancelling Navigation"),
+            CancelReason::TabClosed => write!(f, "Cancelling tab closed"),
+            CancelReason::ExplicitCancel => write!(f, "Cancelling explicit cancel"),
+            CancelReason::Timeout => write!(f, "Cancelling timeout"),
+            CancelReason::Custom(msg) => write!(f, "{}", msg),
+        }
+
+    }
 }
 
 /// Engine events
@@ -341,8 +372,13 @@ pub enum EngineEvent {
     // ****************************************
     // ** Navigation
 
+    // Navigation events (for main document)
     Navigation { tab_id: TabId, event: NavigationEvent },
+    /// Response metadata for decision on navigation
+    DecisionRequest { tab_id: TabId, nav_id: NavigationId, meta: FetchResultMeta },
+    /// Load events for main document
     Load { tab_id: TabId, event: LoadEvent },
+    /// Lowlevel resource events for all resources loaded
     Resource { tab_id: TabId, event: ResourceEvent },
 
     // /// Redirect occurred
@@ -353,7 +389,6 @@ pub enum EngineEvent {
 
     /// Network connection has been established
     ConnectionEstablished { tab_id: TabId, url: String },
-
 
     // ****************************************
     // ** Tab lifecycle
@@ -381,6 +416,7 @@ pub enum EngineEvent {
 
     // ****************************************
     // ** Media / scripting
+
     /// Media has started
     MediaStarted { tab_id: TabId, element_id: u64 },
     /// Media has paused
@@ -388,7 +424,9 @@ pub enum EngineEvent {
     /// Result of a script is returned (console stuff?)
     ScriptResult { tab_id: TabId, result: serde_json::Value },
 
-    // Errors / diagnostics
+    // ****************************************
+    // ** Errors / diagnostics
+
     /// Network error occurred
     NetworkError { tab_id: TabId, url: Url, message: String },
     /// Javascript (parse) error
@@ -400,6 +438,7 @@ pub enum EngineEvent {
     },
     /// Engine crashed
     TabCrashed { tab_id: TabId, reason: String },
+
     // Uncategorized / generic
 }
 

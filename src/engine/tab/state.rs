@@ -1,8 +1,8 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::engine::types::NavigationId;
-use crate::net::Response;
+use crate::net::ResourceLoadResult;
 use crate::render::Viewport;
 
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
@@ -11,7 +11,7 @@ use crate::render::Viewport;
 pub(crate) struct InflightLoad {
     pub nav_id: NavigationId,
     pub cancel: CancellationToken,
-    pub rx: tokio::sync::oneshot::Receiver<(NavigationId, anyhow::Result<Response>)>,
+    pub rx: tokio::sync::oneshot::Receiver<(NavigationId, ResourceLoadResult)>,
 }
 
 /// State for the tab task driving a single tab.
@@ -24,12 +24,14 @@ pub(crate) struct TabRuntime {
     pub interval: tokio::time::Interval,
     /// Current in-flight load operation, if any
     pub load: Option<InflightLoad>,
+    /// Currently loading URL (if any)
+    pub loaded_url: Option<Url>,
     // /// Current viewport size
     // pub viewport: Viewport,
     /// Has something changed that requires a redraw
     pub dirty: bool,
     // When the last tick draw was done
-    pub last_tick_draw: Instant,
+    pub last_tick_draw: std::time::Instant,
 }
 
 impl Default for TabRuntime {
@@ -41,9 +43,10 @@ impl Default for TabRuntime {
             fps,
             interval: tokio::time::interval(Duration::from_secs_f64(1.0 / fps as f64)),
             load: None,
+            loaded_url: None,
             // viewport: Viewport::default(),
             dirty: false,
-            last_tick_draw: Instant::now(),
+            last_tick_draw: std::time::Instant::now(),
         }
     }
 }
