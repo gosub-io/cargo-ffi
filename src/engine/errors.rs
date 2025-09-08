@@ -1,3 +1,8 @@
+//! Public engine error types.
+//!
+//! This module defines the main error enum [`EngineError`] used throughout the engine and
+//! exposed to users. Each variant represents a specific error case that can occur in engine
+//! operations, such as invalid IDs, network errors, configuration issues, and more.
 /// Public engine errors available for the outside world
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -26,8 +31,8 @@ pub enum EngineError {
     RendererError(String),
 
     /// Some internal issue within the engine has occurred
-    #[error("Internal engine error")]
-    Internal,
+    #[error("Internal engine error: {0}")]
+    Internal(#[source] anyhow::Error),
 
     /// The zone provided by the zone id is not found (permissions or does not exist)
     #[error("Zone not found")]
@@ -48,4 +53,26 @@ pub enum EngineError {
     /// An invalid configuration was provided for the engine or zone
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),
+
+    /// Task/Tab creation failed
+    #[error("Task init failed: {0}")]
+    TaskInitFailed(#[source] anyhow::Error),
+
+    #[error("poisoned")]
+    Poisoned,
+
+    #[error("Failed to create tab: {0}")]
+    CreateTab(#[source] anyhow::Error),
+
+    #[error("Channel closed")]
+    ChannelClosed,
+
+    #[error("Failed to create zone: {0}")]
+    CreateZone(#[source] anyhow::Error),
+
+    #[error("Engine is already running")]
+    AlreadyRunning,
+
+    #[error("Engine is not running")]
+    NotRunning,
 }

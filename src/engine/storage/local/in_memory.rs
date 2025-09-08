@@ -19,12 +19,7 @@ impl InMemoryLocalStore {
 }
 
 impl LocalStore for InMemoryLocalStore {
-    fn area(
-        &self,
-        zone: ZoneId,
-        part: &PartitionKey,
-        origin: &url::Origin,
-    ) -> Result<Arc<dyn StorageArea>> {
+    fn area(&self, zone: ZoneId, part: &PartitionKey, origin: &url::Origin) -> Result<Arc<dyn StorageArea>> {
         let key = (zone, part.clone(), origin.clone());
         let mut guard = self.areas.lock().unwrap();
         Ok(guard

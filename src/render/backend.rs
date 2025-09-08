@@ -1,4 +1,4 @@
-//! Render backend abstraction.
+//! Render backend ab3action.
 //!
 //! This module defines the traits and data structures needed to implement
 //! different rendering backends (e.g. Cairo, Vello, Skia). Backends provide
@@ -19,7 +19,18 @@
 
 use crate::engine::BrowsingContext;
 use crate::render::Viewport;
-use std::{any::Any, ptr::NonNull};
+use std::any::Any;
+
+
+/// A surface rect has the same properties as a viewport, but a surface rect
+/// is usually computed with DevicePixelRatio.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SurfaceRect {
+    pub x: i32,      // physical px
+    pub y: i32,
+    pub width: u32,  // physical px
+    pub height: u32,
+}
 
 /// Size of a rendering surface in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,6 +44,17 @@ pub struct SurfaceSize {
 impl From<Viewport> for SurfaceSize {
     fn from(vp: Viewport) -> Self {
         Self {
+            width: vp.width,
+            height: vp.height,
+        }
+    }
+}
+
+impl From<Viewport> for SurfaceRect {
+    fn from(vp: Viewport) -> Self {
+        Self {
+            x: vp.x,
+            y: vp.y,
             width: vp.width,
             height: vp.height,
         }
@@ -103,19 +125,18 @@ pub enum ExternalHandle {
         format: PixelFormat,
     },
 
-    /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
-    /// Valid for at least `height * stride` bytes until the next `render()` call on this surface.
-    CpuPixelsPtr {
-        /// Width of the image in pixels.
-        width: u32,
-        /// Height of the image in pixels.
-        height: u32,
-        /// Stride in bytes. This is the number of bytes per row of pixels.
-        stride: u32,
-        /// Raw pixel data pointer in RGBA8 format.
-        ptr: NonNull<u8>,
-    },
-
+    // /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
+    // /// Valid for at least `height * stride` bytes until the next `render()` call on this surface.
+    // CpuPixelsPtr {
+    //     /// Width of the image in pixels.
+    //     width: u32,
+    //     /// Height of the image in pixels.
+    //     height: u32,
+    //     /// Stride in bytes. This is the number of bytes per row of pixels.
+    //     stride: u32,
+    //     /// Raw pixel data pointer in RGBA8 format.
+    //     ptr: NonNull<[u8]>,
+    // },
     /// GL / GLES texture. `target` is usually GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES.
     /// Optional `frame_id` helps hosts avoid sampling stale frames.
     GlTexture {
@@ -179,13 +200,7 @@ impl RgbaImage {
     /// # Panics
     ///
     /// Panics if `pixels.len()` is smaller than `height * stride`.
-    pub fn from_raw(
-        pixels: Vec<u8>,
-        width: u32,
-        height: u32,
-        stride: u32,
-        format: PixelFormat,
-    ) -> Self {
+    pub fn from_raw(pixels: Vec<u8>, width: u32, height: u32, stride: u32, format: PixelFormat) -> Self {
         assert!(
             pixels.len() >= (height as usize) * (stride as usize),
             "pixel buffer too small for image dimensions"
@@ -231,27 +246,17 @@ pub trait ErasedSurface: Any {
 ///
 /// Implemented by all rendering backends. The engine calls these methods
 /// on the backend’s owning thread.
-pub trait RenderBackend {
+pub trait RenderBackend: Send + Sync {
+    fn name(&self) -> &str;
+
     /// Create a new surface with the given size and present mode.
-    fn create_surface(
-        &self,
-        size: SurfaceSize,
-        present: PresentMode,
-    ) -> anyhow::Result<Box<dyn ErasedSurface>>;
+    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> anyhow::Result<Box<dyn ErasedSurface + Send>>;
 
     /// Render the current state of the browsing context to the given surface.
-    fn render(
-        &mut self,
-        context: &mut BrowsingContext,
-        surface: &mut dyn ErasedSurface,
-    ) -> anyhow::Result<()>;
+    fn render(&mut self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
 
     /// Generate a small RGBA8 snapshot of the surface, suitable for thumbnails or previews.
-    fn snapshot(
-        &mut self,
-        surface: &mut dyn ErasedSurface,
-        max_dim: u32,
-    ) -> anyhow::Result<RgbaImage>;
+    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
 
     /// Returns an external handle for the surface, if supported.
     fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;

@@ -21,19 +21,14 @@ impl InMemorySessionStore {
 }
 
 impl SessionStore for InMemorySessionStore {
-    fn area(
-        &self,
-        zone: ZoneId,
-        tab: TabId,
-        part: &PartitionKey,
-        origin: &url::Origin,
-    ) -> Arc<dyn StorageArea> {
+    fn area(&self, zone: ZoneId, tab: TabId, part: &PartitionKey, origin: &url::Origin) -> Arc<dyn StorageArea> {
         let k = (
             zone,
             tab,
             match part {
                 PartitionKey::None => "".to_string(),
                 PartitionKey::TopLevel(o) => format!("top:{}", o.ascii_serialization()),
+                PartitionKey::Custom(s) => s.to_string(),
             },
             origin.ascii_serialization(),
         );

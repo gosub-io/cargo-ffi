@@ -1,8 +1,9 @@
 use crate::engine::BrowsingContext;
 use crate::render::backend::GpuPixelFormat;
-use crate::render::backend::{
-    ErasedSurface, ExternalHandle, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
-};
+use crate::render::backend::{ErasedSurface, ExternalHandle, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
+use crate::render::backends::vello::font_cache::FontCache;
+use crate::render::backends::vello::font_manager::FontManager;
+use crate::render::backends::vello::text_renderer::{TextKey, TextRenderer};
 use crate::render::DisplayItem;
 use anyhow::{anyhow, Result};
 use std::any::Any;
@@ -11,14 +12,10 @@ use vello::kurbo::Affine;
 use vello::peniko::{Color, Fill};
 use vello::wgpu;
 use vello::{RenderParams, Renderer, RendererOptions, Scene};
-use crate::render::backends::vello::font_cache::FontCache;
-use crate::render::backends::vello::font_manager::FontManager;
-use crate::render::backends::vello::text_renderer::{TextKey, TextRenderer};
 
-mod font_manager;
 mod font_cache;
+mod font_manager;
 mod text_renderer;
-
 
 /// This trait abstracts over the wgpu context (device, queue, texture management) so we can connect
 /// UI based wgpu contexts (like eframe) to the Vello backend.
@@ -99,21 +96,16 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                     );
                 }
                 DisplayItem::Rect { x, y, w, h, color } => {
-                    let x = (*x as f32) - offset_x;
-                    let y = (*y as f32) - offset_y;
-                    let w = *w as f32;
-                    let h = *h as f32;
+                    let x = *x - offset_x;
+                    let y = *y - offset_y;
+                    let w = *w;
+                    let h = *h;
                     scene.fill(
                         Fill::NonZero,
                         Affine::IDENTITY,
                         Color::new([color.r, color.g, color.b, color.a]),
                         None,
-                        &vello::kurbo::Rect::new(
-                            x as f64,
-                            y as f64,
-                            (x + w) as f64,
-                            (y + h) as f64,
-                        ),
+                        &vello::kurbo::Rect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64),
                     );
                 }
                 DisplayItem::TextRun {
@@ -124,8 +116,8 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                     color,
                     max_width,
                 } => {
-                    let x = (*x as f32) - offset_x;
-                    let y = (*y as f32) - offset_y;
+                    let x = *x - offset_x;
+                    let y = *y - offset_y;
 
                     let key = TextKey {
                         text: Arc::from(text.as_str()),
@@ -141,7 +133,8 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
                         &mut self.font_cache,
                         &mut scene,
                         &key,
-                        x, y,
+                        x,
+                        y,
                         (*color).into(),
                     );
                 }
@@ -152,15 +145,15 @@ impl<C: WgpuContextProvider> VelloBackend<C> {
     }
 }
 
-impl<C: WgpuContextProvider> RenderBackend for VelloBackend<C> {
-    fn create_surface(
-        &self,
-        size: SurfaceSize,
-        _present: PresentMode,
-    ) -> Result<Box<dyn ErasedSurface>> {
-        let texture_store_id =
-            self.context
-                .create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
+impl RenderBackend for VelloBackend {
+    fn name(&self) -> &str {
+        "vello"
+    }
+
+    fn create_surface(&self, size: SurfaceSize, _present: PresentMode) -> Result<Box<dyn ErasedSurface>> {
+        let texture_store_id = self
+            .context
+            .create_texture(size.width, size.height, wgpu::TextureFormat::Rgba8Unorm);
 
         Ok(Box::new(VelloSurface {
             texture_store_id,
@@ -219,7 +212,7 @@ impl ErasedSurface for VelloSurface {
         self
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 

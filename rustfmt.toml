@@ -1,0 +1,10 @@
+max_width = 120
+hard_tabs = false
+tab_spaces = 4
+fn_params_layout = "Tall"
+fn_call_width = 60
+reorder_imports = true
+chain_width = 60
+single_line_if_else_max_width = 50
+use_field_init_shorthand = true
+edition = "2021"

@@ -1,167 +1,257 @@
-use crate::cookies::CookieJarHandle;
-use crate::engine::storage::StorageService;
-use crate::engine::tab::{Tab, TabId};
-use crate::engine::tick::TickResult;
-use crate::engine::zone::ZoneManager;
-use crate::render::backend::{CompositorSink, RenderBackend};
-use crate::render::Viewport;
-use crate::zone::ZoneConfig;
-use crate::zone::{Zone, ZoneId};
-use crate::{EngineCommand, EngineConfig, EngineError, EngineEvent};
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
-use tokio::runtime::Runtime;
+//! Engine core implementation.
+//!
+//! This module defines the [`GosubEngine`] struct, which is the main entry point for
+//! creating and managing the engine, zones, and event bus. It also provides the
+//! [`EngineContext`] struct for sharing resources and configuration across the engine.
+//!
+//! # Overview
+//!
+//! The engine is responsible for running zones and handling events. It provides a
+//! command interface for starting, stopping, and configuring zones, as well as
+//! subscribing to events from the engine and zones.
+//!
+//! # Main Types
+//!
+//! - [`GosubEngine`]: The main engine struct.
+//! - [`EngineContext`]: Shared context for the engine, containing configuration and
+//!   backend information.
+//! - [`Zone`]: Represents a zone managed by the engine.
+//! - [`EngineCommand`]: Commands that can be sent to the engine.
+//! - [`EngineEvent`]: Events emitted by the engine, such as zone creation and
+//!   destruction.
 
-/// Entry point to the Gosub engine.
-///
-/// Create an engine, then create zones and open tabs.
-///
-/// See [`Viewport`], [`ZoneId`], [`TabId`], [`EngineEvent`], [`EngineCommand`].
+use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
+use crate::render::backend::RenderBackend;
+use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices, ZoneSink};
+use crate::{EngineConfig, EngineError};
+use anyhow::Result;
+use std::borrow::BorrowMut;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
+
 pub struct GosubEngine {
-    /// Configuration for the whole engine
-    _config: EngineConfig,
-    /// Manages zones
-    zone_manager: ZoneManager,
-    /// Tokio runtime for async operations
-    pub runtime: Arc<Runtime>,
-    // Render backend for the engine
-    backend: Box<dyn RenderBackend>,
+    /// Context is what can be shared downstream
+    context: Arc<EngineContext>,
+    /// Zones managed by this engine, indexed by [`ZoneId`].
+    zones: HashMap<ZoneId, Arc<ZoneSink>>,
+    /// Command sender used to send commands to the engine run loop.
+    cmd_tx: mpsc::Sender<EngineCommand>,
+    /// Command receiver (owned by the engine run loop).
+    cmd_rx: Option<mpsc::Receiver<EngineCommand>>,
+    /// Is the engine running?
+    running: bool,
+}
+
+// Engine context that is shared downwards to zones.
+#[derive(Clone)]
+pub struct EngineContext {
+    /// Active render backend for the engine.
+    pub backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
+    /// Event sender
+    pub event_tx: broadcast::Sender<EngineEvent>,
+    /// Global engine configuration
+    pub config: Arc<EngineConfig>,
 }
 
 impl GosubEngine {
-    pub fn update_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend>) {
-        self.backend = new_backend;
-    }
-
     /// Create a new engine.
     ///
-    /// If `config` is `None`, defaults are used.
+    /// If `config` is `None`, [`EngineConfig::default`] is used.
     ///
     /// ```
-    /// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-    /// let engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
+    /// # use gosub_engine as ge;
+    /// let backend = ge::render::backends::null::NullBackend::new().unwrap();
+    /// let engine = ge::GosubEngine::new(None, Box::new(backend));
     /// ```
-    pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend>) -> Self {
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create Tokio runtime"),
-        );
-
-        // I don't like that we have to clone the config but we need it in the "engine" and the zone manager as well.
+    pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend + Send + Sync>) -> Self {
         let resolved_config = config.unwrap_or_else(EngineConfig::default);
 
+        // Command channel on which to send and receive engine commands from the UA.
+        let (cmd_tx, cmd_rx) = mpsc::channel::<EngineCommand>(DEFAULT_CHANNEL_CAPACITY);
+
+        // Broadcast event bus. Subscribe to receive engine events (including zone and tab events)
+        let (event_tx, _first_rx) = broadcast::channel::<EngineEvent>(DEFAULT_CHANNEL_CAPACITY);
+
         Self {
-            _config: resolved_config.clone(),
-            zone_manager: ZoneManager::new(resolved_config),
-            runtime,
-            backend,
+            context: Arc::new(EngineContext {
+                backend: Arc::new(RwLock::new(backend)),
+                event_tx: event_tx.clone(),
+                config: Arc::new(resolved_config),
+            }),
+            zones: HashMap::new(),
+            cmd_tx,
+            cmd_rx: Some(cmd_rx),
+            running: false,
         }
     }
 
-    /// Create a new zone and return its [`ZoneId`].
-    pub(crate) fn create_zone(
+    /// Starts the engine and returns the join handle of the main run loop task.
+    pub fn start(&mut self) -> Result<Option<JoinHandle<()>>, EngineError> {
+        if self.running {
+            return Err(EngineError::AlreadyRunning);
+        }
+
+        let join_handle = if let Some(task) = self.run() {
+            Some(
+                tokio::task::Builder::new()
+                    .name("Engine runner")
+                    .spawn(task)
+                    .map_err(|e| EngineError::Internal(e.into()))?,
+            )
+        } else {
+            None
+        };
+
+        Ok(join_handle)
+    }
+
+    /// Return a receiver for engine events.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<EngineEvent> {
+        self.context.event_tx.subscribe()
+    }
+
+    /// Replace the active render backend.
+    pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
+        {
+            let binding = self.context.backend.read().unwrap();
+            let old_name = binding.name();
+            let _ = self.context.event_tx.send(EngineEvent::BackendChanged {
+                old: old_name.to_string(),
+                new: new_backend.name().to_string(),
+            });
+        }
+
+        let binding = self.context.borrow_mut();
+        let mut backend = binding.backend.write().unwrap();
+        *backend = new_backend;
+    }
+
+    /// Get a clone of the engine’s command sender (mainly for testing or
+    /// custom handles).
+    #[cfg(test)]
+    #[allow(unused)]
+    fn command_sender(&self) -> mpsc::Sender<EngineCommand> {
+        self.cmd_tx.clone()
+    }
+
+    /// Run the engine’s inbound command loop in a dedicated thread/task.
+    pub fn run<'a, 'b>(&'a mut self) -> Option<impl std::future::Future<Output = ()> + 'b> {
+        self.running = true;
+
+        println!("Sending engine started event");
+        let _ = self.context.event_tx.send(EngineEvent::EngineStarted);
+
+        let mut cmd_rx = self.cmd_rx.take()?;
+
+        Some(async move {
+            while let Some(cmd) = cmd_rx.recv().await {
+                match cmd {
+                    EngineCommand::Shutdown { reply } => {
+                        println!("Engine received shutdown command. Shutting down main engine::run() loop");
+                        let _ = reply.send(Ok(()));
+                        break;
+                    }
+                    _ => {
+                        unimplemented!("unhandled engine command: {:?}", cmd);
+                    }
+                }
+            }
+            println!("run() loop has exited")
+        })
+    }
+
+    /// Shuts down the engine (will not take of zones and tabs at the moment)
+    pub async fn shutdown(&mut self) -> Result<(), EngineError> {
+        if !self.running {
+            return Err(EngineError::NotRunning);
+        }
+
+        // Send shutdown command to the run loop
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = self.cmd_tx.try_send(EngineCommand::Shutdown { reply: tx });
+
+        // Wait for confirmation that the run loop has exited
+        let _ = rx.await.map_err(|e| EngineError::Internal(e.into()))?;
+
+        // // Tabs should be closed first, then zones
+        // let tab_cmds: Vec<_> = {
+        //     // snapshot without holding locks across awaits
+        //     let zones_guard = self.zones.read().map_err(|_| EngineError::Poisoned)?;
+        //     zones_guard
+        //         .values()
+        //         .flat_map(|zone| zone.tabs_snapshot_handles()) // -> Vec<(TabId, mpsc::Sender<TabCommand>, Option<JoinHandle<()>>)>
+        //         .collect()
+        // };
+        //
+        // for (_tab_id, tx, _jh) in &tab_cmds {
+        //     let _ = tx.send(crate::events::TabCommand::CloseTab).await;
+        // }
+        //
+        // let mut joins = JoinSet::new();
+        // for (_id, _tx, maybe_jh) in tab_cmds {
+        //     if let Some(jh) = maybe_jh {
+        //         joins.spawn(async move {
+        //             let _ = jh.await;
+        //         });
+        //     }
+        // }
+        //
+        // // Wait for a few seconds for tabs to close
+        // let _ = timeout(Duration::from_secs(2), async {
+        //     while let Some(_res) = joins.join_next().await {}
+        // }).await;
+        //
+        // // Flush any outstanding cookies, storage etc.
+        // self.flush_persistence();
+
+        // self.context.event_tx.send(EngineEvent::EngineShutdown { reason: reason.into() }).map_err(|_| EngineError::Internal)?;
+
+        Ok(())
+    }
+
+    #[allow(unused)]
+    fn flush_persistence(&mut self) {
+        // if let Ok(zones) = self.zones.read() {
+        //     for zone in zones.values() {
+        //         if let Some(store) = zone.cookie_store_handle() {
+        //             store.persist_all();
+        //         }
+        //     }
+        // }
+    }
+
+    /// Create and register a new zone, returning a [`ZoneHandle`] for userland code.
+    ///
+    /// - `config`: zone configuration (features, limits, identity)
+    /// - `services`: storage, cookie store/jar, partition policy, etc.
+    /// - `zone_id`: optional id; if `None`, a fresh one is generated
+    /// - `event_tx`: channel where the zone (and its tabs) will emit [`EngineEvent`]s
+    ///
+    /// The returned handle contains the [`ZoneId`] and a clone of the engine’s
+    /// command sender, allowing the caller to send zone commands without holding
+    /// a reference to the engine.
+    pub fn create_zone(
         &mut self,
+        config: ZoneConfig,
+        services: ZoneServices,
         zone_id: Option<ZoneId>,
-        config: Option<ZoneConfig>,
-        storage_service: Option<Arc<StorageService>>,
-        cookie_jar: Option<CookieJarHandle>,
-    ) -> Result<ZoneId, EngineError> {
-        self.zone_manager
-            .create_zone(zone_id, config, storage_service, cookie_jar)
-    }
+    ) -> Result<Zone, EngineError> {
+        let zone = match zone_id {
+            Some(zone_id) => Zone::new_with_id(zone_id, config, services, self.context.clone()),
+            None => Zone::new(config, services, self.context.clone()),
+        };
 
-    /// Get a mutable handle to a zone.
-    ///
-    /// This returns an [`Arc<Mutex<Zone>>`]; lock it before use.
-    pub fn get_zone_mut(&mut self, zone_id: ZoneId) -> Option<Arc<Mutex<Zone>>> {
-        self.zone_manager.get_zone_mut(&zone_id)
-    }
+        let zone_id = zone.id;
+        self.zones.insert(zone.id, zone.sink.clone());
 
-    /// Retrieves a reference to a tab regardless of its zone
-    pub fn get_tab(&self, tab_id: TabId) -> Option<Arc<Mutex<Tab>>> {
-        for zone_id in self.zone_manager.iter() {
-            let zone = self.zone_manager.get_zone_mut(&zone_id)?;
-            let zone = zone.lock().ok()?;
+        self.context
+            .event_tx
+            .send(EngineEvent::ZoneCreated { zone_id })
+            .map_err(|e| EngineError::Internal(e.into()))?;
 
-            if let Some(tab) = zone.get_tab(tab_id) {
-                return Some(tab);
-            }
-        }
-
-        None
-    }
-
-    /// Open a new tab in a zone and return its [`TabId`].
-    ///
-    /// ```
-    /// let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-    /// let mut engine = gosub_engine::GosubEngine::new(None, Box::new(backend));
-    ///
-    /// let zone_id = engine.zone_builder().create().unwrap();
-    ///
-    /// let viewport = gosub_engine::render::Viewport::new(0, 0, 800, 600);
-    /// let tab_id = engine.open_tab_in_zone(zone_id, viewport).unwrap();
-    /// ```
-    pub fn open_tab_in_zone(
-        &mut self,
-        zone_id: ZoneId,
-        viewport: Viewport,
-    ) -> Result<TabId, EngineError> {
-        let zone_arc = self
-            .zone_manager
-            .get_zone(zone_id)
-            .ok_or(EngineError::ZoneNotFound)?;
-        let mut zone = zone_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
-
-        zone.open_tab(self.runtime.clone(), viewport)
-    }
-
-    /// Do an engine tick, processing all zones and tabs
-    pub fn tick(&mut self, host: &mut impl CompositorSink) -> BTreeMap<TabId, TickResult> {
-        let mut results = BTreeMap::new();
-
-        for zone_id in self.zone_manager.iter() {
-            let Some(zone_arc) = self.zone_manager.get_zone(zone_id) else {
-                continue;
-            };
-
-            let Ok(mut zone) = zone_arc.lock() else {
-                continue;
-            };
-
-            // Process and storage events currently pending in the zone
-            zone.pump_storage_events();
-
-            // Tick each tab and aggregate the results
-            for (tab_id, result) in zone.tick_all_tabs(&mut *self.backend, host) {
-                results.insert(tab_id, result);
-            }
-        }
-
-        results
-    }
-
-    /// Handle an event for a specific tab
-    pub fn handle_event(&mut self, tab_id: TabId, event: EngineEvent) -> Result<(), EngineError> {
-        let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
-        let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
-
-        tab.handle_event(event);
-        Ok(())
-    }
-
-    /// Executes a command for a specific tab
-    pub fn execute_command(
-        &mut self,
-        tab_id: TabId,
-        command: EngineCommand,
-    ) -> Result<(), EngineError> {
-        let tab_arc = self.get_tab(tab_id).ok_or(EngineError::InvalidTabId)?;
-        let mut tab = tab_arc.lock().map_err(|_| EngineError::ZoneLocked)?;
-
-        tab.execute_command(command);
-        Ok(())
+        Ok(zone)
     }
 }

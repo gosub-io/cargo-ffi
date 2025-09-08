@@ -1,4 +1,6 @@
+use crate::zone::ZoneId;
 use url::{Origin, Url};
+use uuid::Uuid;
 
 /// Partitioning key (future-proof for state partitioning).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -7,6 +9,8 @@ pub enum PartitionKey {
     None,
     /// Top-level partitioning key based on the origin of the URL.
     TopLevel(Origin),
+    /// Custom partition key
+    Custom(String),
 }
 
 impl Default for PartitionKey {
@@ -16,19 +20,32 @@ impl Default for PartitionKey {
 }
 
 impl PartitionKey {
+    pub fn random() -> Self {
+        let random = Uuid::new_v4();
+        PartitionKey::Custom(random.to_string())
+    }
+
     /// Creates a new `PartitionKey` from a URL string.
     pub fn from_str(s: &str) -> Self {
         if s.is_empty() {
             PartitionKey::None
         } else {
-            let url = Url::parse(s).expect("valid URL for PartitionKey");
+            let Ok(url) = Url::parse(s) else {
+                return PartitionKey::Custom(s.to_string());
+            };
+
             PartitionKey::TopLevel(url.origin())
         }
+    }
+
+    pub fn from_zone(zone_id: ZoneId) -> Self {
+        let url_str = format!("https://zone-{}.local", zone_id.to_string());
+        Self::from_str(&url_str)
     }
 }
 
 /// Partitioning policy for determining how to compute the partition key.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PartitionPolicy {
     /// No partitioning, uses a global state.
     None,

@@ -1,10 +1,51 @@
+//! Browsing context and tab runtime state.
+//!
+//! This module defines the [`BrowsingContext`] struct, which represents the runtime
+//! state for a single tab, including its storage, rendering, and loading state. It
+//! provides methods for loading URLs, binding storage, and managing the tab's state.
+//!
+//! # Overview
+//!
+//! The `BrowsingContext` is responsible for handling all aspects of a tab's state in
+//! the browser engine. This includes managing the raw HTML content, the rendering
+//! process, the viewport settings, and the storage for local and session data. It
+//! also handles loading new content from URLs and updating the tab's state
+//! accordingly.
+//!
+//! # Usage
+//!
+//! To use a `BrowsingContext`, you typically create a new instance, configure it as
+//! needed (e.g., set the viewport, bind storage), and then load a URL. After loading,
+//! you can access the rendered content and other state information. The context also
+//! provides mechanisms to handle navigation events, such as redirects or loading
+//! errors.
+//!
+//! # Example
+//!
+//! ```no_run
+//! ```
+//!
+//! # Structs
+//!
+//! - [`BrowsingContext`]: The main struct representing the browsing context for a tab.
+//!
+//! # Errors
+//!
+//! - [`LoadError`]: Represents errors that can occur while loading content, such as
+//! navigation cancellations or network errors.
+
 use crate::engine::storage::{StorageArea, StorageHandles};
-use crate::net::{fetch, Response};
 use crate::render::{Color, DisplayItem, RenderList, Viewport};
 use std::sync::Arc;
-use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
 use url::Url;
+
+// #[derive(Debug, thiserror::Error)]
+// pub enum LoadError {
+//     #[error("navigation canceled")]
+//     Canceled,
+//     #[error(transparent)]
+//     Net(#[from] reqwest::Error),
+// }
 
 /// BrowsingContext dedicated to a specific tab
 ///
@@ -21,11 +62,8 @@ pub struct BrowsingContext {
     /// True when the tab has failed loading (mostly net issues)
     failed: bool,
 
-    /// Tokio runtime for async operations
-    runtime: Arc<Runtime>,
-    /// Handle for loading the task (async)
-    loading_task: Option<JoinHandle<Result<Response, reqwest::Error>>>,
-
+    // Tokio runtime for async operations
+    // runtime: Arc<Runtime>,
     /// Storage handles for local and session storage
     storage: Option<StorageHandles>,
 
@@ -48,13 +86,10 @@ pub struct BrowsingContext {
 
 impl BrowsingContext {
     /// Creates a new runtime browsing context.
-    pub(crate) fn new(runtime: Arc<Runtime>) -> BrowsingContext {
+    pub(crate) fn new() -> BrowsingContext {
         Self {
-            // dirty: DirtyFlags::default(),
             current_url: None,
             raw_html: String::new(),
-            runtime,
-            loading_task: None,
             failed: false,
             storage: None, // Default no storage unless binding manually by a tab
             render_list: RenderList::new(),
@@ -69,11 +104,7 @@ impl BrowsingContext {
 
     /// Binds the storage handles to the browsing context (@TODO: Why not via the ::new()?).
     pub fn bind_storage(&mut self, local: Arc<dyn StorageArea>, session: Arc<dyn StorageArea>) {
-        self.storage = Some(StorageHandles {
-            local: local.clone(),
-            session: session.clone(),
-        });
-        // At this point, we would probably want to hook our storage handles into the javascript/lua runtime
+        self.storage = Some(StorageHandles { local, session });
     }
     pub fn local_storage(&self) -> Option<Arc<dyn StorageArea>> {
         self.storage.as_ref().map(|s| s.local.clone())
@@ -82,35 +113,44 @@ impl BrowsingContext {
         self.storage.as_ref().map(|s| s.session.clone())
     }
 
-    /// Starts a task that will load the actual url
-    pub fn start_loading(&mut self, url: Url) {
-        let url_clone = url.clone();
-        let handle = self.runtime.spawn(async move { fetch(url_clone).await });
+    // /// Load a URL, mutate the context, and return the raw Response.
+    // /// - On success: sets current_url (after redirects), raw_html (decoded), clears `failed`, invalidates render.
+    // /// - On error/cancel: sets `failed = true` (and leaves previous HTML intact), returns a descriptive error.
+    // ///
+    // /// Caller (e.g., the tab task) can also use `resp.headers` to store cookies into the zone jar.
+    // pub async fn load(&mut self, url: Url, cancel: tokio_util::sync::CancellationToken) -> Result<Response, LoadError> {
+    //     self.failed = false;
+    //     self.current_url = Some(url.clone());
+    //
+    //     let resp = tokio::select! {
+    //         _ = cancel.cancelled() => {
+    //             self.failed = true;
+    //             self.set_raw_html("<pre>Load cancelled</pre>");
+    //             return Err(LoadError::Canceled);
+    //         }
+    //         r = fetch(url) => {
+    //             match r {
+    //                 Ok(resp) => resp,
+    //                 Err(e) => {
+    //                     self.failed = true;
+    //                     self.set_raw_html(&format!("<pre>Load error: {e}</pre>"));
+    //                     return Err(LoadError::Net(e));
+    //                 }
+    //             }
+    //         }
+    //     };
+    //
+    //     // Update to the final URL after redirects (if your fetch follows redirects)
+    //     self.current_url = Some(resp.url.clone());
+    //
+    //     // Decode body to string using Content-Type charset when available
+    //     let html = decode_response_body(&resp.headers, &resp.body);
+    //     self.set_raw_html(&html); // marks DOM/style/layout and invalidates render
+    //
+    //     Ok(resp)
+    // }
 
-        self.loading_task = Some(handle);
-        self.failed = false;
-        self.current_url = Some(url);
-    }
-
-    /// Polls the loading to see if it is still running or not.
-    pub fn poll_loading(&mut self) -> Option<Result<Response, String>> {
-        use futures::FutureExt;
-
-        if let Some(handle) = &mut self.loading_task {
-            if let Some(join_result) = handle.now_or_never() {
-                self.loading_task = None;
-                return Some(match join_result {
-                    Ok(Ok(resp)) => Ok(resp),
-                    Ok(Err(e)) => Err(e.to_string()),
-                    Err(e) => Err(format!("Join error: {}", e)),
-                });
-            }
-        }
-
-        None
-    }
-
-    /// Sets the rab HTML for the given tab
+    /// Sets the raw HTML for the given tab
     pub fn set_raw_html(&mut self, html: &str) {
         self.raw_html = html.to_string();
         self.dom_dirty = true; // Mark the DOM as dirty, so it will be rendered
@@ -152,22 +192,23 @@ impl BrowsingContext {
 
         // Example scene: clear + show raw HTML as text
         rl.items.push(DisplayItem::Clear {
-            color: Color::new(0.75, 0.75, 0.75, 1.0),
+            color: Color::new(0.55, 0.25, 0.45, 1.0),
         });
 
         // Text color: black
         let c = Color::new(0.0, 0.0, 0.0, 1.0);
-        let mut y = 24.0;
+        let font_size = 16.0;
+        let mut y = 0.0;
         for line in self.raw_html.lines() {
             rl.items.push(DisplayItem::TextRun {
-                x: 14.0,
+                x: 0.0,
                 y,
                 text: line.to_string(),
-                size: 23.0,
+                size: font_size,
                 color: c,
                 max_width: Some(self.viewport.width as f32),
             });
-            y += 16.0;
+            y += font_size;
         }
 
         self.render_list = rl;
@@ -179,6 +220,7 @@ impl BrowsingContext {
         self.layout_dirty = false;
     }
 
+    /// Returns the render list
     #[inline]
     pub fn render_list(&self) -> &RenderList {
         &self.render_list
@@ -189,8 +231,12 @@ impl BrowsingContext {
         self.failed
     }
 
-    /// Returns the raw HTML of the tab
+    /// Returns the current loaded the tab (or None when nothing has loaded yet)
     pub fn current_url(&self) -> Option<&Url> {
         self.current_url.as_ref()
     }
+}
+
+#[cfg(test)]
+mod tests {
 }

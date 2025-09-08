@@ -1,81 +1,30 @@
-//! Zone system: [`Zone`], and [`ZoneId`].
+//! Zone system.
 //!
-//! A **zone** in Gosub is an isolated browsing context that groups together:
+//! A *zone* acts like a browser profile/container inside the Gosub engine.
+//! It encapsulates persistent state (cookies, passwords, local/session
+//! storage), identity (user agent, languages), and runtime services
+//! (tabs, networking, timers).
 //!
-//! - A set of [`Tab`](crate::engine::tab::Tab) instances
-//! - Shared session/local storage
-//! - A cookie jar
-//! - Zone-scoped configuration and metadata
-//! - Optional password store, bookmarks, autocomplete entries, etc.
+//! The `zone` module organizes this functionality into smaller components:
 //!
-//! Zones are the Gosub equivalent of browser profiles. They can be:
+//! - [`ZoneConfig`] — configuration for creating a new zone
+//!   application to access a zone
+//! - [`ZoneId`] — a unique identifier for a zone
+//! - [`ZoneServices`] — collection of shared services bound to a zone
+//! - [`ZoneContext`] — context for zone operations
+//! - [`ZoneSink`] — a sink for zone events
 //!
-//! - **Private** — only the tabs within that zone can access its data.
-//! - **Shared** — marked with flags in [`SharedFlags`](crate::engine::zone::Zone) so
-//!   other zones can read or write certain datasets (cookies, passwords, etc.).
-//!
-//! # Key Types
-//!
-//! - [`Zone`] — The struct representing one zone instance.
-//! - [`ZoneId`] — Opaque, globally unique identifier for a zone.
-//! - [`ZoneConfig`] — Per-zone configuration settings.
-//!
-//! # Example
-//!
-//! Creating a zone with defaults:
-//!
-//! ```no_run
-//! use gosub_engine::GosubEngine;
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//! let zone_id = engine.zone_builder().create().unwrap();
-//! println!("Created zone: {:?}", zone_id);
-//! ```
-//!
-//! Creating a zone with a fixed ID and custom config:
-//!
-//! ```no_run
-//! use gosub_engine::GosubEngine;
-//! use gosub_engine::zone::{ZoneConfig, ZoneId};
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! let zone_id = engine.zone_builder()
-//!     .id(ZoneId::new())
-//!     .create()
-//!     .unwrap();
-//! ```
-//!
-//! Attaching a persistent cookie jar to a zone:
-//!
-//! ```no_run
-//! use std::sync::{Arc, RwLock};
-//! use gosub_engine::cookies::{SqliteCookieStore, PersistentCookieJar, DefaultCookieJar};
-//! use gosub_engine::GosubEngine;
-//! use gosub_engine::zone::ZoneId;
-//!
-//! let jar = DefaultCookieJar::new();
-//!
-//! let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null renderer cannot be created (!?)");
-//! let mut engine = GosubEngine::new(None, Box::new(backend));
-//!
-//! let zone_id = engine.zone_builder()
-//!     .cookie_jar(Arc::new(RwLock::new(jar)))
-//!     .create()
-//!     .unwrap();
-//!
-//! ```
-//!
-//! See [`Zone`] docs for field-level details.
+//! Internally, the [`Zone`] type manages the full state and lifecycle.
 
 mod config;
-mod manager;
-mod password_store;
 mod zone;
 
-pub use config::ZoneConfig;
-pub use manager::ZoneManager;
-pub use zone::Zone;
+pub use zone::ZoneContext;
 pub use zone::ZoneId;
+pub use zone::ZoneServices;
+pub use zone::ZoneSink;
+
+pub use config::ZoneConfig;
+
+// Internal type, not exposed publicly.
+pub(crate) use zone::Zone;

@@ -1,7 +1,7 @@
 use crate::compositor::VelloCompositor;
 use crate::tiling::{
-    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols,
-    split_leaf_into_rows, LayoutHandle, LayoutNode, Rect,
+    close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle,
+    LayoutNode, Rect,
 };
 use crate::wgpu_context_provider::EguiWgpuContextProvider;
 use eframe::{egui, CreationContext};
@@ -17,6 +17,7 @@ use gosub_engine::{EngineCommand, EngineEvent, GosubEngine};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use tokio::sync::mpsc::channel;
 use url::Url;
 
 mod compositor;
@@ -24,17 +25,17 @@ mod tiling;
 mod wgpu_context_provider;
 
 const DEFAULT_MAIN_ZONE: &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
-const DEFAULT_WIDTH: i32 = 800;
-const DEFAULT_HEIGHT: i32 = 600;
+const DEFAULT_WIDTH: u32 = 800;
+const DEFAULT_HEIGHT: u32 = 600;
 
-fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
-    eng.get_tab(tab_id)
-        .unwrap()
-        .lock()
-        .unwrap()
-        .current_url
-        .clone()
-}
+// fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
+//     eng.get_tab(tab_id)
+//         .unwrap()
+//         .lock()
+//         .unwrap()
+//         .current_url
+//         .clone()
+// }
 
 struct GosubApp {
     engine: Arc<RefCell<GosubEngine>>,
@@ -43,12 +44,14 @@ struct GosubApp {
     active_tab: Arc<RefCell<gosub_engine::tab::TabId>>,
     last_size: Arc<RefCell<(i32, i32)>>,
     compositor: Arc<RefCell<VelloCompositor>>,
-    storage: Arc<StorageService>,
+    // storage: Arc<StorageService>,
     current_url_input: String,
     needs_redraw: bool,
     pointer_pos: (f64, f64),
     backend_initialized: bool,
     ctx_provider: Arc<EguiWgpuContextProvider>,
+    // Keep track of last panel size to detect changes
+    last_panel_size: egui::Vec2,
 }
 
 impl GosubApp {
@@ -62,18 +65,17 @@ impl GosubApp {
 
         // Set up the engine with a null backend for now. We will update this once we have an egui context
         // so we can initialize the vello renderer properly.
-        let backend = gosub_engine::render::backends::null::NullBackend::new()
-            .expect("NullBackend::new failed");
+        let backend = gosub_engine::render::backends::null::NullBackend::new().expect("NullBackend::new failed");
         let engine = Arc::new(RefCell::new(GosubEngine::new(None, Box::new(backend))));
 
-        let ctx_provider = Arc::new(
-            EguiWgpuContextProvider::from_eframe(cc)
-                .expect("Failed to create EguiWgpuContextProvider"),
-        );
+        let ctx_provider =
+            Arc::new(EguiWgpuContextProvider::from_eframe(cc).expect("Failed to create EguiWgpuContextProvider"));
+
+        let (tx, rx) = channel();
 
         // Create our main zone ID
         let config = ZoneConfig::builder().max_tabs(100).build().unwrap();
-        let zone_id = engine
+        let zone = engine
             .borrow_mut()
             .zone_builder()
             .id(ZoneId::from(DEFAULT_MAIN_ZONE))
@@ -82,6 +84,8 @@ impl GosubApp {
             .config(config)
             .create()
             .expect("zone creation failed");
+
+        let tabs: Vec<Tabhandle> = Vec![];
 
         // Open a tab in our zone
         let viewport = Viewport::new(0, 0, DEFAULT_WIDTH as u32, DEFAULT_HEIGHT as u32);
@@ -93,7 +97,7 @@ impl GosubApp {
         // Setup titing state and add our first tab
         let root: Rc<RefCell<LayoutNode>> = Rc::new(RefCell::new(LayoutNode::Leaf(tab0)));
         let active_tab = Arc::new(RefCell::new(tab0));
-        let last_size = Arc::new(RefCell::new((DEFAULT_WIDTH, DEFAULT_HEIGHT)));
+        let last_size = Arc::new(RefCell::new((DEFAULT_WIDTH as i32, DEFAULT_HEIGHT as i32)));
 
         // Connect compositor to the engine
         let compositor = Arc::new(RefCell::new(VelloCompositor::new()));
@@ -105,12 +109,13 @@ impl GosubApp {
             active_tab,
             last_size,
             compositor,
-            storage,
+            // storage,
             current_url_input: String::new(),
             needs_redraw: true,
             pointer_pos: (0.0, 0.0),
             backend_initialized: false,
             ctx_provider,
+            last_panel_size: egui::Vec2::ZERO,
         }
     }
 
@@ -118,12 +123,11 @@ impl GosubApp {
         let composed_url = self.current_url_input.clone();
 
         // Check if composed_url starts with a scheme like http:// or https://
-        let url_str =
-            if !composed_url.starts_with("http://") && !composed_url.starts_with("https://") {
-                format!("https://{}", composed_url)
-            } else {
-                composed_url
-            };
+        let url_str = if !composed_url.starts_with("http://") && !composed_url.starts_with("https://") {
+            format!("https://{}", composed_url)
+        } else {
+            composed_url
+        };
 
         let Ok(url) = Url::parse(&url_str) else {
             return;
@@ -222,82 +226,6 @@ impl GosubApp {
         }
     }
 
-    fn handle_set_ls(&mut self) {
-        let tab_id = *self.active_tab.borrow();
-        let eng_ref = self.engine.borrow();
-        let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-            eprintln!("[LS] No current URL for active tab; navigate somewhere first.");
-            return;
-        };
-        let origin = url.origin();
-        let pk = gosub_engine::storage::PartitionKey::default();
-
-        let area = self.storage.local_for(self.zone_id, &pk, &origin).unwrap();
-        if let Err(e) = area.set_item("foo", "bar") {
-            eprintln!("[LS] set_item error: {e}");
-        } else {
-            println!(
-                "[LS] set foo=bar for origin {}",
-                url.origin().ascii_serialization()
-            );
-        }
-    }
-
-    fn handle_get_ls(&mut self) {
-        let tab_id = *self.active_tab.borrow();
-        let eng_ref = self.engine.borrow();
-        let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-            eprintln!("[LS] No current URL.");
-            return;
-        };
-        let origin = url.origin();
-        let pk = gosub_engine::storage::PartitionKey::default();
-
-        let area = self.storage.local_for(self.zone_id, &pk, &origin).unwrap();
-        match area.get_item("foo") {
-            Some(v) => println!("[LS] get foo -> {v}"),
-            None => println!("[LS] key foo not set"),
-        }
-    }
-
-    fn handle_set_ss(&mut self) {
-        let tab_id = *self.active_tab.borrow();
-        let eng_ref = self.engine.borrow();
-        let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-            eprintln!("[SS] No current URL.");
-            return;
-        };
-        let origin = url.origin();
-        let pk = gosub_engine::storage::PartitionKey::default();
-
-        let area = self.storage.session_for(self.zone_id, tab_id, &pk, &origin);
-        if let Err(e) = area.set_item("foo", "bar") {
-            eprintln!("[SS] set_item error: {e}");
-        } else {
-            println!(
-                "[SS] set foo=bar for origin {}",
-                url.origin().ascii_serialization()
-            );
-        }
-    }
-
-    fn handle_get_ss(&mut self) {
-        let tab_id = *self.active_tab.borrow();
-        let eng_ref = self.engine.borrow();
-        let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-            eprintln!("[SS] No current URL.");
-            return;
-        };
-        let origin = url.origin();
-        let pk = gosub_engine::storage::PartitionKey::default();
-
-        let area = self.storage.session_for(self.zone_id, tab_id, &pk, &origin);
-        match area.get_item("foo") {
-            Some(v) => println!("[SS] get foo -> {v}"),
-            None => println!("[SS] key foo not set"),
-        }
-    }
-
     fn handle_click(&mut self, pos: egui::Pos2) {
         let (w, h) = *self.last_size.borrow();
         if let Some(tab_id) = find_leaf_at(
@@ -321,13 +249,10 @@ impl GosubApp {
             let dy_px = delta.y * line_h;
 
             // Send to the engine
-            let _ = self.engine.borrow_mut().handle_event(
-                tab_id,
-                EngineEvent::Scroll {
-                    dx: dx_px,
-                    dy: dy_px,
-                },
-            );
+            let _ = self
+                .engine
+                .borrow_mut()
+                .handle_event(tab_id, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
             self.needs_redraw = true;
         }
     }
@@ -346,7 +271,7 @@ impl GosubApp {
             Ok(backend) => {
                 self.engine
                     .borrow_mut()
-                    .update_backend_renderer(Box::new(backend));
+                    .set_backend_renderer(Box::new(backend));
                 self.backend_initialized = true;
                 self.needs_redraw = true;
             }
@@ -359,7 +284,6 @@ impl GosubApp {
 
 impl eframe::App for GosubApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
 
         // Initialize vello backend if not already done
@@ -474,40 +398,13 @@ impl eframe::App for GosubApp {
                     {
                         self.handle_close_pane();
                     }
-
-                    if ui
-                        .add(egui::Button::new("Set LS").min_size(button_size))
-                        .clicked()
-                    {
-                        self.handle_set_ls();
-                    }
-
-                    if ui
-                        .add(egui::Button::new("Get LS").min_size(button_size))
-                        .clicked()
-                    {
-                        self.handle_get_ls();
-                    }
-
-                    if ui
-                        .add(egui::Button::new("Set SS").min_size(button_size))
-                        .clicked()
-                    {
-                        self.handle_set_ss();
-                    }
-
-                    if ui
-                        .add(egui::Button::new("Get SS").min_size(button_size))
-                        .clicked()
-                    {
-                        self.handle_get_ss();
-                    }
                 });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        let panel = egui::CentralPanel::default().show(ctx, |ui| {
             // Update the last_size with the current avaiable space
             let available_size = ui.available_size();
+            println!("Available size: {}", available_size);
             *self.last_size.borrow_mut() = (available_size.x as i32, available_size.y as i32);
 
             // Compute layout for all tabs
@@ -521,31 +418,28 @@ impl eframe::App for GosubApp {
             for (tab_id, rect) in pairs {
                 let is_active = tab_id == active_tab_id;
 
+                println!("Rect: {:?}", rect);
+
                 // Get the compositor frame from this tab
                 let mut compositor = self.compositor.borrow_mut();
                 if let Some(handle) = compositor.frame_for_mut(tab_id) {
-                    let rect_ui = egui::Rect::from_min_size(
+                    let rect_ui = egui::Rect::from_min_max(
                         egui::pos2(rect.x as f32, rect.y as f32),
-                        egui::vec2(rect.w as f32, rect.h as f32),
+                        egui::pos2(rect.w as f32, rect.h as f32),
                     );
 
                     match handle {
-                        ExternalHandle::WgpuTextureId {
-                            id, width, height, ..
-                        } => {
+                        ExternalHandle::WgpuTextureId { id, width, height, .. } => {
                             let (_, view) = self.ctx_provider.get_texture(*id).unwrap();
 
                             let mut renderer = frame.wgpu_render_state().unwrap().renderer.write();
                             let device = &frame.wgpu_render_state().unwrap().device;
 
-                            let tid = renderer.register_native_texture(
-                                device,
-                                &view,
-                                wgpu::FilterMode::Nearest,
-                            );
+                            let tid = renderer.register_native_texture(device, &view, wgpu::FilterMode::Nearest);
 
                             let ppp = ui.ctx().pixels_per_point();
-                            let size_points = egui::Vec2::new(*width as f32 / ppp, *height as f32 / ppp);
+                            // let size_points = egui::Vec2::new(*width as f32 / ppp, *height as f32 / ppp);
+                            let size_points = egui::Vec2::new((*width - 25) as f32, (*height - 25) as f32);
                             ui.add(egui::Image::new(SizedTexture::new(tid, size_points)));
                         }
                         _ => {
@@ -573,6 +467,42 @@ impl eframe::App for GosubApp {
                 self.needs_redraw = false;
             }
         });
+
+        // Check tab panel dimensions to see if we need to recalculate layouts (ie: resize occurred)
+        let size = panel.response.rect.size();
+        if size != self.last_panel_size {
+            println!("Redraw needed due to panel size change: {}", size);
+            // let pixels_per_point = ctx.pixels_per_point();
+            // let size_in_pixels = size * pixels_per_point;
+            // self.last_panel_size = size_in_pixels;
+
+            self.last_panel_size = size;
+
+            // Calculate new panel layouts
+            let mut pairs = Vec::new();
+            compute_layout(
+                &self.root.borrow(),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: size.x as i32,
+                    h: size.y as i32,
+                },
+                &mut pairs,
+            );
+
+            // Signal all tabs that we have resized them
+            let mut eng = self.engine.borrow_mut();
+            for (tab_id, r) in pairs {
+                let _ = eng.handle_event(
+                    tab_id,
+                    EngineEvent::Resize {
+                        width: r.w as u32,
+                        height: r.h as u32,
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -580,7 +510,7 @@ fn main() -> Result<(), eframe::Error> {
     // Setup eframe options
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([DEFAULT_WIDTH as f32, DEFAULT_HEIGHT as f32])
+            // .with_inner_size([DEFAULT_WIDTH as f32, DEFAULT_HEIGHT as f32])
             .with_title("Gosub Browser"),
         ..Default::default()
     };
