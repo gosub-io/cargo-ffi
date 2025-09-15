@@ -23,7 +23,7 @@ use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
 use tokio::time::{sleep, Duration, Instant};
-use crate::engine::types::NavigationId;
+use crate::engine::types::{NavigationId, RequestId};
 use crate::net::loader::{Document, NavigationOutput, ResourceMeta};
 use crate::net::mime::MimeKind;
 
@@ -436,6 +436,9 @@ impl TabWorker {
             // Submit a streaming fetch for the main document
             let (tx_fetch, rx_fetch) = oneshot::channel::<FetchResult>();
             let req = FetchRequest {
+                tab_id,
+                nav_id,
+                req_id: RequestId::new(),
                 key_data: FetchKeyData {
                     url: request_url.clone(),
                     method: Method::GET,
@@ -444,7 +447,6 @@ impl TabWorker {
                 priority: Priority::High,
                 kind: ResourceKind::Document,
                 initiator: Initiator::Navigation,
-                tab_id,
                 streaming: true,
                 reply: Some(tx_fetch),
                 auto_decode: true,
@@ -547,10 +549,12 @@ impl TabWorker {
                         resource: Resource::Html(Document(String::from_utf8_lossy(body.as_ref()).to_string())),
                     })));
                 }
-
                 FetchResult::Error(err) => {
                     let _ = tx_done.send((nav_id, Err(NavigationError::NetworkError(format!("Fetch error: {}", err)))));
                 }
+                FetchResult::DownloadStarted { .. } => {}
+                FetchResult::OpenExternal { .. } => {}
+                FetchResult::Cancelled => {}
             }
         });
 

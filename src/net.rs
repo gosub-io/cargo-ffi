@@ -11,6 +11,9 @@ mod io_runtime;
 mod fetch;
 mod shared_body;
 pub mod mime;
+mod decider;
+mod pump;
+mod fs_utils;
 
 pub use loader::ResourceLoadResult;
 pub use loader::NavigationError;

@@ -2,8 +2,9 @@ use crate::net::fetcher::{Fetcher, FetcherConfig};
 use crate::net::types::FetchRequest;
 use crate::util::spawn_named;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
+use crate::events::EngineEvent;
 
 /// IoHandle is the handle that controls the IO thread.
 pub struct IoHandle {
@@ -53,12 +54,12 @@ impl IoHandle {
 /// Spawns the IO thread and runs a single fetcher on top. If needed, we can expand this system to
 /// run multiple fetchers on different OS threads for instance, but most likely the fetching itself
 /// isn't the biggest bottleneck.
-pub fn spawn_io_thread(cfg: FetcherConfig) -> IoHandle {
+pub fn spawn_io_thread(cfg: FetcherConfig, event_tx: broadcast::Sender<EngineEvent>) -> IoHandle {
     let (tx_submit, mut rx_submit) = mpsc::unbounded_channel::<FetchRequest>();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
     let join_handle = spawn_named("I/O Thread", async move {
-        let fetcher = Arc::new(Fetcher::new(cfg, None));
+        let fetcher = Arc::new(Fetcher::new(cfg, event_tx.clone()));
         let sched_f = fetcher.clone();
         let sched_stop_rx = shutdown_rx.clone();
 

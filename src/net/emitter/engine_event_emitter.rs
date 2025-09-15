@@ -1,23 +1,43 @@
+use http::StatusCode;
 use tokio::sync::broadcast;
 use crate::engine::events::{CancelReason, ResourceEvent};
 use crate::engine::types::{NavigationId, RequestId};
-use crate::events::EngineEvent;
+use crate::events::{EngineEvent, NavigationEvent};
 use crate::tab::TabId;
 use crate::net::events::{NetEvent, NetObserver};
-use crate::net::types::{Initiator, ResourceKind};
+use crate::net::types::{FetchResultMeta, Initiator, ResourceKind};
 
 /// Converts NetEvents into EngineEvents and send them over to the event_tx channel
-#[allow(unused)]
 pub struct EngineEventEmitter {
-    pub tab_id: TabId,
-    pub nav_id: NavigationId,
-    pub req_id: RequestId,
-    pub event_tx: broadcast::Sender<EngineEvent>,
-    pub kind: ResourceKind,
-    pub initiator: Initiator,
+    tab_id: TabId,
+    nav_id: NavigationId,
+    req_id: RequestId,
+    event_tx: broadcast::Sender<EngineEvent>,
+    kind: ResourceKind,
+    initiator: Initiator,
 }
 
 impl EngineEventEmitter {
+    #[must_use]
+    pub fn new(
+        tab_id: TabId,
+        nav_id: NavigationId,
+        req_id: RequestId,
+        event_tx: broadcast::Sender<EngineEvent>,
+        kind: ResourceKind,
+        initiator: Initiator,
+    ) -> Self {
+        Self { tab_id, nav_id, req_id, event_tx, kind, initiator }
+    }
+
+    #[allow(unused)]
+    fn emit_navigation_event(&self, ev: NavigationEvent) {
+        let _ = self.event_tx.send(EngineEvent::Navigation {
+            tab_id: self.tab_id,
+            event: ev,
+        });
+    }
+
     #[allow(unused)]
     fn emit(&self, ev: ResourceEvent) {
         let _ = self.event_tx.send(EngineEvent::Resource {
@@ -29,6 +49,7 @@ impl EngineEventEmitter {
 
 impl NetObserver for EngineEventEmitter {
     fn on_event(&self, ev: NetEvent) {
+        dbg!(&ev);
         match ev {
             NetEvent::Started { url } => {
                 self.emit(ResourceEvent::Started {
@@ -100,6 +121,29 @@ impl NetObserver for EngineEventEmitter {
                     req_id: self.req_id,
                     url: url.to_string(),
                     reason: CancelReason::Custom(reason.to_string()),
+                });
+            }
+
+            NetEvent::Io { .. } => {
+                // Do nothing
+            }
+            NetEvent::Warning { .. } => {
+                // Do nothing
+            }
+            NetEvent::DecisionRequired { url, status, headers, content_length, peek, .. } => {
+                let has_body = peek.len() > 0;
+
+                self.emit_navigation_event(NavigationEvent::DecisionRequired {
+                    nav_id: self.nav_id,
+                    meta: FetchResultMeta {
+                        final_url: url.clone(),
+                        status,
+                        status_text: StatusCode::from_u16(status).map(|s| s.canonical_reason().unwrap_or("").to_string()).unwrap_or_default(),
+                        headers: headers.clone(),
+                        content_length,
+                        peek,
+                        has_body,
+                    }
                 });
             }
         }

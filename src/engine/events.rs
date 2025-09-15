@@ -96,7 +96,7 @@ pub enum TabCommand {
     /// Cancel the current navigation
     CancelNavigation,
     /// Make a decision what to do with the navigated resource
-    Decision { nav_id: NavigationId, action: Action },
+    SubmitDecision { nav_id: NavigationId, action: Action },
     /// Close tab
     CloseTab,
 
@@ -198,6 +198,7 @@ pub enum NavigationEvent {
     Progress  { nav_id: NavigationId, received_bytes: u64, expected_length: Option<u64>, elapsed: Duration },
     FailedUrl { nav_id: Option<NavigationId>, url: String, error: Arc<anyhow::Error> },
     Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
+    DecisionRequired { nav_id: NavigationId, meta: FetchResultMeta },
 }
 
 /// Start of loading the main document for this navigation
@@ -214,6 +215,7 @@ pub enum LoadEvent {
 /// resources. @TODO: how do we see this?
 #[derive(Debug, Clone)]
 pub enum ResourceEvent {
+    /// Response metadata for decision on navigation
     Queued {
         /// Navigation ID that triggered loading this resource
         nav_id: NavigationId,
@@ -374,8 +376,6 @@ pub enum EngineEvent {
 
     // Navigation events (for main document)
     Navigation { tab_id: TabId, event: NavigationEvent },
-    /// Response metadata for decision on navigation
-    DecisionRequest { tab_id: TabId, nav_id: NavigationId, meta: FetchResultMeta },
     /// Load events for main document
     Load { tab_id: TabId, event: LoadEvent },
     /// Lowlevel resource events for all resources loaded

@@ -76,6 +76,9 @@ impl Waiter {
                     let _ = tx.send(res.clone());
                 }
             }
+            FetchResult::DownloadStarted { .. } => {}
+            FetchResult::OpenExternal { .. } => {}
+            FetchResult::Cancelled => {}
         }
     }
 }

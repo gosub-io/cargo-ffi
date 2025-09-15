@@ -1,6 +1,7 @@
 use std::time::Duration;
 use http::HeaderMap;
 use url::Url;
+use crate::net::decider::DecisionToken;
 
 /// A NetObserver allows to send NetEvents to emitters
 pub trait NetObserver: Send + Sync {
@@ -10,6 +11,13 @@ pub trait NetObserver: Send + Sync {
 /// Events that are send by the net::fetch() functions
 #[derive(Debug)]
 pub enum NetEvent {
+    Io {
+        message: String
+    },
+    Warning {
+        url: Url,
+        message: String
+    },
     /// Resource is started to load
     Started {
         url: Url,
@@ -50,5 +58,14 @@ pub enum NetEvent {
     Cancelled {
         url: Url,
         reason: &'static str,
+    },
+    /// Resource top has been loaded, and UA needs to decide what to do next
+    DecisionRequired {
+        url: Url,
+        status: u16,
+        headers: HeaderMap,
+        content_length: Option<u64>,
+        peek: Vec<u8>,
+        token: DecisionToken
     },
 }

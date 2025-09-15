@@ -1,11 +1,15 @@
 use bytes::Bytes;
 use std::fmt::{Debug, Display};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use http::{header, HeaderMap, Method};
 use tokio::io::{AsyncRead, ReadBuf};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use crate::engine::types::RequestId;
+use crate::NavigationId;
 use crate::net::shared_body::SharedBody;
 use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
 use crate::tab::TabId;
@@ -216,6 +220,12 @@ impl FetchKeyData {
 /// A fetch request defines what needs to be fetched, how and where to send the result to
 #[derive(Debug)]
 pub struct FetchRequest {
+    // Which Tab is asking for this resource
+    pub tab_id: TabId,
+    /// Which navigation is this request part of (if any)
+    pub nav_id: NavigationId,
+    /// Unique ID of this request (for logging and tracking)
+    pub req_id: RequestId,
     /// Key data identifying the resource to fetch
     pub key_data: FetchKeyData,
     /// Priority of this request
@@ -224,8 +234,6 @@ pub struct FetchRequest {
     pub initiator: Initiator,
     /// What kind of resource is being fetched
     pub kind: ResourceKind,
-    // Which Tab is asking for this resource
-    pub tab_id: TabId,
     // whether to stream or buffer
     pub streaming: bool,
     /// Auto decode the request (if for instance, gzipped), or pass directly through to the caller
@@ -241,11 +249,17 @@ pub struct FetchRequest {
 /// FetchResult defines the resource response. Either a stream or buffered response are possible
 #[derive(Clone)]
 pub enum FetchResult {
-    /// Buffered response body
-    Buffered { meta: FetchResultMeta, body: Bytes },
     /// Streamed response body
     Stream { meta: FetchResultMeta, peek: Vec<u8>, shared: Arc<SharedBody> },
-    /// Error
+    /// Buffered response body
+    Buffered { meta: FetchResultMeta, body: Bytes },
+    /// File download started (for large files, or files that should be saved directly)
+    DownloadStarted { meta: FetchResultMeta, dest: PathBuf, handle: Arc<JoinHandle<Result<Option<PathBuf>, NetError>>> },
+    /// File download completed and ready to be opened externally
+    OpenExternal { meta: FetchResultMeta, staged_path: PathBuf },
+    /// Request was cancelled
+    Cancelled,
+    /// Network error
     Error(NetError),
 }
 
@@ -262,6 +276,22 @@ impl Debug for FetchResult {
                 .field("body_len", &body.len())
                 .finish(),
             FetchResult::Error(e) => f.debug_tuple("FetchResult::Error").field(e).finish(),
+            FetchResult::DownloadStarted { meta, dest, handle } => {
+                f.debug_struct("FetchResult::DownloadStarted")
+                    .field("meta", meta)
+                    .field("dest", dest)
+                    .field("handle", handle)
+                    .finish()
+            }
+            FetchResult::OpenExternal { meta, staged_path } => {
+                f.debug_struct("FetchResult::OpenExternal")
+                    .field("meta", meta)
+                    .field("staged_path", staged_path)
+                    .finish()
+            }
+            FetchResult::Cancelled => {
+                f.debug_struct("FetchResult::Cancelled").finish()
+            }
         }
     }
 }
@@ -343,7 +373,7 @@ mod tests {
 
     fn dummy_meta() -> FetchResultMeta {
         FetchResultMeta {
-            final_url: Url::parse("http://example.org/").unwrap(),
+            final_url: Url::parse("https://example.org/").unwrap(),
             status: 200,
             status_text: "OK".into(),
             headers: HeaderMap::new(),

@@ -106,11 +106,11 @@ impl GosubEngine {
 
         // Start I/O thread
         let io_cfg = FetcherConfig::default();
-        let io_handle = spawn_io_thread(io_cfg);
-        let tx_submit = io_handle.subscribe();
+        let io_handle = spawn_io_thread(io_cfg, self.context.event_tx.clone());
+        let io_tx = io_handle.subscribe();
         {
             let mut guard = self.context.io_tx.write().unwrap();
-            *guard = Some(tx_submit);
+            *guard = Some(io_tx);
         }
         self.io_handle= Some(io_handle);
 

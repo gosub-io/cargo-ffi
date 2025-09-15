@@ -1,10 +1,9 @@
 use gosub_engine::events::{LoadEvent, MouseButton, NavigationEvent, ResourceEvent, TabCommand};
-use gosub_engine::tab::TabDefaults;
+use gosub_engine::tab::{TabDefaults, TabHandle};
 use gosub_engine::{cookies::DefaultCookieJar, events::EngineEvent, render::Viewport, storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService}, zone::ZoneConfig, zone::ZoneServices, EngineConfig, EngineError, GosubEngine, NavigationId, Action};
 use std::sync::Arc;
 use std::time::Duration;
 use http::header;
-use tokio::sync::mpsc;
 use gosub_engine::net::types::FetchResultMeta;
 
 #[tokio::main]
@@ -119,23 +118,13 @@ async fn main() -> Result<(), EngineError> {
             Ok(ev) = event_rx.recv() => {
                 // println!("Received event: {:?}", ev);
 
-                // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
-                if let EngineEvent::DecisionRequest { tab_id, nav_id, meta } = ev {
-                    println!("[event][meta] ResponseMeta found: {tab_id} {nav_id} {meta:?}");
-                    // Normally, we should check if the tab_id we get actually matches one of our tabs.
-                    if tab_clone.tab_id == tab_id {
-                        on_response_meta(nav_id, meta, tab_clone.cmd_tx.clone()).await;
-                    }
-                    continue;
-                }
-
                 // Just count the frames we see for now
                 if matches!(ev, EngineEvent::Redraw { .. }) {
                     seen_frames += 1;
                     println!("Total frames seen so far: {seen_frames}");
                 }
 
-                handle_event(ev);
+                handle_event(ev, tab_clone.clone()).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 println!("Received Ctrl-C, shutting down...");
@@ -167,7 +156,7 @@ async fn main() -> Result<(), EngineError> {
     Ok(())
 }
 
-async fn on_response_meta(nav_id: NavigationId, meta: FetchResultMeta, cmd_tx: mpsc::Sender<TabCommand>) {
+async fn on_decision_required(tab_handle: TabHandle, nav_id: NavigationId, meta: FetchResultMeta) {
     let action = if let Some(disp) = meta.headers.get(http::header::CONTENT_DISPOSITION) {
         let s = disp.to_str().unwrap_or_default().to_ascii_lowercase();
         if s.contains("attachment") {
@@ -186,15 +175,15 @@ async fn on_response_meta(nav_id: NavigationId, meta: FetchResultMeta, cmd_tx: m
     };
 
     // Send back to the engine what we like to do with this navigation
-    let _ = cmd_tx
-        .send(TabCommand::Decision {
+    let _ = tab_handle.cmd_tx
+        .send(TabCommand::SubmitDecision {
             nav_id,
             action,
         })
         .await;
 }
 
-fn handle_event(ev: EngineEvent) {
+async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
     match ev {
         EngineEvent::TabCreated { tab_id, .. } => {
             // let tab = self.tabs.get(&tab_id).expect("Unknown tab");
@@ -224,6 +213,19 @@ fn handle_event(ev: EngineEvent) {
             }
         },
         EngineEvent::Navigation { tab_id, event } => match event {
+            NavigationEvent::DecisionRequired { nav_id, meta } => {
+                // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
+                println!("[event] DecisionRequest found: {tab_id} {nav_id} {meta:?}");
+
+                if tab_id != tab_handle.tab_id {
+                    println!("Warning: DecisionRequired event for unknown tab_id: {tab_id}");
+                    return;
+                }
+
+                // Normally, we should check if the tab_id we get actually matches one of our tabs.
+                on_decision_required(tab_handle, nav_id, meta).await;
+            }
+
             NavigationEvent::Started { nav_id, url } => {
                 println!("[event] NavigationStarted:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
             }
