@@ -31,6 +31,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
+use crate::net::types::FetchRequest;
+use crate::util::spawn_named;
 
 pub struct GosubEngine {
     /// Context is what can be shared downstream
@@ -43,6 +46,9 @@ pub struct GosubEngine {
     cmd_rx: Option<mpsc::Receiver<EngineCommand>>,
     /// Is the engine running?
     running: bool,
+
+    /// I/O thread handle
+    io_handle: Option<IoHandle>,
 }
 
 // Engine context that is shared downwards to zones.
@@ -54,6 +60,8 @@ pub struct EngineContext {
     pub event_tx: broadcast::Sender<EngineEvent>,
     /// Global engine configuration
     pub config: Arc<EngineConfig>,
+    /// I/O thread handle
+    pub io_tx: Arc<RwLock<Option<mpsc::UnboundedSender<FetchRequest>>>>,
 }
 
 impl GosubEngine {
@@ -80,10 +88,12 @@ impl GosubEngine {
                 backend: Arc::new(RwLock::new(backend)),
                 event_tx: event_tx.clone(),
                 config: Arc::new(resolved_config),
+                io_tx: Arc::new(RwLock::new(None)),
             }),
             zones: HashMap::new(),
             cmd_tx,
             cmd_rx: Some(cmd_rx),
+            io_handle: None,
             running: false,
         }
     }
@@ -94,13 +104,19 @@ impl GosubEngine {
             return Err(EngineError::AlreadyRunning);
         }
 
+        // Start I/O thread
+        let io_cfg = FetcherConfig::default();
+        let io_handle = spawn_io_thread(io_cfg);
+        let tx_submit = io_handle.subscribe();
+        {
+            let mut guard = self.context.io_tx.write().unwrap();
+            *guard = Some(tx_submit);
+        }
+        self.io_handle= Some(io_handle);
+
+        // Start main engine run loop
         let join_handle = if let Some(task) = self.run() {
-            Some(
-                tokio::task::Builder::new()
-                    .name("Engine runner")
-                    .spawn(task)
-                    .map_err(|e| EngineError::Internal(e.into()))?,
-            )
+            Some(spawn_named("Engine runner", task))
         } else {
             None
         };
@@ -141,7 +157,6 @@ impl GosubEngine {
     pub fn run<'a, 'b>(&'a mut self) -> Option<impl std::future::Future<Output = ()> + 'b> {
         self.running = true;
 
-        println!("Sending engine started event");
         let _ = self.context.event_tx.send(EngineEvent::EngineStarted);
 
         let mut cmd_rx = self.cmd_rx.take()?;
@@ -150,7 +165,7 @@ impl GosubEngine {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     EngineCommand::Shutdown { reply } => {
-                        println!("Engine received shutdown command. Shutting down main engine::run() loop");
+                        // println!("Engine received shutdown command. Shutting down main engine::run() loop");
                         let _ = reply.send(Ok(()));
                         break;
                     }
@@ -159,7 +174,7 @@ impl GosubEngine {
                     }
                 }
             }
-            println!("run() loop has exited")
+//            println!("run() loop has exited")
         })
     }
 
@@ -167,6 +182,12 @@ impl GosubEngine {
     pub async fn shutdown(&mut self) -> Result<(), EngineError> {
         if !self.running {
             return Err(EngineError::NotRunning);
+        }
+
+        // Shutdown I/O thread
+//        println!("Shutting down I/O thread");
+        if let Some(io_handle) = self.io_handle.take() {
+            io_handle.shutdown().await
         }
 
         // Send shutdown command to the run loop

@@ -17,8 +17,12 @@ impl CairoBackend {
 }
 
 impl RenderBackend for CairoBackend {
+    fn name(&self) -> &str {
+        "cairo"
+    }
+
     /// Will create a new Cairo surface with the given size and present mode.
-    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> Result<Box<dyn ErasedSurface>> {
+    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> Result<Box<dyn ErasedSurface + Send>> {
         Ok(Box::new(CairoSurface::new(size, present)?))
     }
 
@@ -78,6 +82,7 @@ impl RenderBackend for CairoBackend {
                         text,
                         size,
                         color,
+                        ..
                     } => {
                         // Draw text at the specified position with the specified size and color.
                         cr.set_source_rgba(

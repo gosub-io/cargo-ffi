@@ -41,8 +41,8 @@ use url::Url;
 
 // #[derive(Debug, thiserror::Error)]
 // pub enum LoadError {
-//     #[error("navigation canceled")]
-//     Canceled,
+//     #[error("navigation cancelled")]
+//     Cancelled,
 //     #[error(transparent)]
 //     Net(#[from] reqwest::Error),
 // }
@@ -126,7 +126,7 @@ impl BrowsingContext {
     //         _ = cancel.cancelled() => {
     //             self.failed = true;
     //             self.set_raw_html("<pre>Load cancelled</pre>");
-    //             return Err(LoadError::Canceled);
+    //             return Err(LoadError::Cancelled);
     //         }
     //         r = fetch(url) => {
     //             match r {

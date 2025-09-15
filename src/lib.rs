@@ -103,7 +103,14 @@ pub mod net;
 
 pub mod render;
 
+pub mod util;
+
+pub mod html;
+
 pub use engine::{EngineError, GosubEngine};
+
+pub use engine::types::Action;
+pub use engine::types::NavigationId;
 
 #[doc(inline)]
 /// Tab management and browsing context API.

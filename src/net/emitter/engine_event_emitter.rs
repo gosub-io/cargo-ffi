@@ -1,11 +1,13 @@
 use tokio::sync::broadcast;
-use crate::engine::events::{CancelReason, ResourceEvent, PRIO_DEFAULT};
+use crate::engine::events::{CancelReason, ResourceEvent};
 use crate::engine::types::{NavigationId, RequestId};
 use crate::events::EngineEvent;
 use crate::tab::TabId;
 use crate::net::events::{NetEvent, NetObserver};
 use crate::net::types::{Initiator, ResourceKind};
 
+/// Converts NetEvents into EngineEvents and send them over to the event_tx channel
+#[allow(unused)]
 pub struct EngineEventEmitter {
     pub tab_id: TabId,
     pub nav_id: NavigationId,
@@ -16,6 +18,7 @@ pub struct EngineEventEmitter {
 }
 
 impl EngineEventEmitter {
+    #[allow(unused)]
     fn emit(&self, ev: ResourceEvent) {
         let _ = self.event_tx.send(EngineEvent::Resource {
             tab_id: self.tab_id,
@@ -34,7 +37,6 @@ impl NetObserver for EngineEventEmitter {
                     url: url.to_string(),
                     kind: self.kind,
                     initiator: self.initiator,
-                    priority: PRIO_DEFAULT,
                 });
             }
             NetEvent::Redirected { from, to, status } => {
@@ -46,27 +48,41 @@ impl NetObserver for EngineEventEmitter {
                     status,
                 });
             }
-            NetEvent::ResponseHeaders { .. } => {
-                // self.emit(ResourceEvent::Progress {
-                //     nav_id,
-                //     req_id,
-                //     received_bytes: 0,
-                // });
+            NetEvent::ResponseHeaders { url, status, headers } => {
+                self.emit(ResourceEvent::Headers {
+                    nav_id: self.nav_id,
+                    req_id: self.req_id,
+                    url: url.to_string(),
+                    status,
+                    content_length: headers
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok()),
+                    content_type: headers
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string()),
+                    headers: headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                        .collect(),
+                });
             }
-            NetEvent::Progress { received_bytes } => {
+            NetEvent::Progress { received_bytes, expected_length, elapsed } => {
                 self.emit(ResourceEvent::Progress {
                     nav_id: self.nav_id,
                     req_id: self.req_id,
                     received_bytes,
+                    expected_length,
+                    elapsed,
                 });
             }
-            NetEvent::Finished { url, bytes, elapsed, content_type } => {
+            NetEvent::Finished { url, received_bytes, elapsed } => {
                 self.emit(ResourceEvent::Finished {
                     nav_id: self.nav_id,
                     req_id: self.req_id,
-                    url: url.to_string(),
-                    bytes,
-                    content_type,
+                    url,
+                    received_bytes,
                     elapsed: Some(elapsed),
                 });
             }
@@ -75,7 +91,7 @@ impl NetObserver for EngineEventEmitter {
                     nav_id: self.nav_id,
                     req_id: self.req_id,
                     url: url.to_string(),
-                    error,
+                    error: error.into(),
                 });
             }
             NetEvent::Cancelled { url, reason } => {

@@ -1,13 +1,26 @@
 //! Network utilities for making HTTP requests.
 //!
-mod fetch;
 mod response;
-mod loader;
+pub mod loader;
 pub mod types;
-mod events;
+pub mod events;
 mod emitter;
+mod utils;
+mod fetcher;
+mod io_runtime;
+mod fetch;
+mod shared_body;
+pub mod mime;
 
-pub use loader::load_main_document;
-pub use loader::DocumentLoadResult;
-pub use fetch::fetch;
+pub use loader::ResourceLoadResult;
+pub use loader::NavigationError;
+pub use loader::Resource;
+
+pub use shared_body::SharedBody;
+
 pub use response::Response;
+
+pub use io_runtime::IoHandle;
+pub use io_runtime::spawn_io_thread;
+
+pub use fetcher::FetcherConfig;

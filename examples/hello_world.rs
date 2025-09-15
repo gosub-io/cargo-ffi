@@ -1,20 +1,15 @@
-use gosub_engine::{
-    cookies::DefaultCookieJar,
-    events::EngineEvent,
-    render::Viewport,
-    storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService},
-    zone::ZoneConfig,
-    zone::ZoneServices,
-    EngineConfig, EngineError, GosubEngine,
-};
-
 use gosub_engine::events::{LoadEvent, MouseButton, NavigationEvent, ResourceEvent, TabCommand};
-use gosub_engine::storage::PartitionKey;
-use gosub_engine::tab::{TabCacheMode, TabCookieJar, TabDefaults, TabOverrides, TabStorageScope};
+use gosub_engine::tab::TabDefaults;
+use gosub_engine::{cookies::DefaultCookieJar, events::EngineEvent, render::Viewport, storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService}, zone::ZoneConfig, zone::ZoneServices, EngineConfig, EngineError, GosubEngine, NavigationId, Action};
 use std::sync::Arc;
+use std::time::Duration;
+use http::header;
+use tokio::sync::mpsc;
+use gosub_engine::net::types::FetchResultMeta;
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
+    // Allow debugging with tokio-console
     console_subscriber::init();
 
     // Configure the engine through the engine config builder. This will set up the main runtime
@@ -85,7 +80,7 @@ async fn main() -> Result<(), EngineError> {
 
     // Navigate somewhere
     tab.send(TabCommand::Navigate {
-        url: "https://gosub.io".into(),
+        url: "https://news.ycombinator.com".into(),
     })
     .await?;
 
@@ -110,59 +105,36 @@ async fn main() -> Result<(), EngineError> {
     zone.set_description("This is the new description");
     zone.set_color([255, 128, 64, 255]);
 
-    // Open a private tab inside the zone. Note that we override some of the tab options to
-    // make it private (ephemeral storage, cookie jar, cache, etc). We also set an initial URL that
-    // is automatically loaded when the tab is created.
-    let def_values = TabDefaults {
-        url: None,
-        title: Some("New Private Tab".into()),
-        viewport: Some(Viewport::new(0, 0, 800, 600)),
-    };
-
-    let _private_tab_handle = zone
-        .create_tab(
-            def_values,
-            Some(TabOverrides {
-                partition_key: Some(PartitionKey::random()),
-                cookie_jar: TabCookieJar::Ephemeral,
-                storage_scope: TabStorageScope::Ephemeral,
-                cache_mode: TabCacheMode::Ephemeral,
-                persist_history: Some(false),
-                persist_downloads: Some(false),
-                ..Default::default()
-            }),
-        )
-        .await
-        .expect("cannot create tab");
-
-    // let autoexec_handle = tokio::spawn(async move {
-    //     _ = private_tab_handle.send(TabCommand::ResumeDrawing { fps: 5 }).await;
-    //     sleep(Duration::from_secs(5)).await;
-    //     _ = private_tab_handle.send(TabCommand::SuspendDrawing).await;
-    //     sleep(Duration::from_secs(5)).await;
-    //     _ = private_tab_handle.send(TabCommand::ResumeDrawing { fps: 60 }).await;
-    //     sleep(Duration::from_secs(1)).await;
-    //     _ = private_tab_handle.send(TabCommand::SuspendDrawing).await;
-    // });
-
     // This is the application's main loop, where we receive events from the engine and
     // act on them. In a real application, you would probably want to run this in
     // a separate task/thread, and not block the main thread.
 
     let mut seen_intervals = 0usize;
     let mut seen_frames = 0usize;
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let tab_clone = tab.clone();
 
     loop {
         tokio::select! {
             Ok(ev) = event_rx.recv() => {
                 // println!("Received event: {:?}", ev);
 
+                // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
+                if let EngineEvent::NavigationResponse { tab_id, nav_id, meta } = ev {
+                    println!("[event][meta] ResponseMeta found: {tab_id} {nav_id} {meta:?}");
+                    // Normally, we should check if the tab_id we get actually matches one of our tabs.
+                    if tab_clone.tab_id == tab_id {
+                        on_response_meta(nav_id, meta, tab_clone.cmd_tx.clone()).await;
+                    }
+                    continue;
+                }
+
                 // Just count the frames we see for now
                 if matches!(ev, EngineEvent::Redraw { .. }) {
                     seen_frames += 1;
                     println!("Total frames seen so far: {seen_frames}");
                 }
+
                 handle_event(ev);
             }
             _ = tokio::signal::ctrl_c() => {
@@ -173,16 +145,13 @@ async fn main() -> Result<(), EngineError> {
                 println!("Ticking the UA interval");
 
                 seen_intervals += 1;
-                if seen_intervals >= 10 {
+                if seen_intervals >= 1000 {
                     println!("Seen {seen_intervals} intervals, exiting main loop");
                     break;
                 }
             }
         }
     }
-
-    // Wait until our commands are done
-    // autoexec_handle.await;
 
     println!("Shutting down engine...");
     engine.shutdown().await?;
@@ -198,75 +167,175 @@ async fn main() -> Result<(), EngineError> {
     Ok(())
 }
 
+async fn on_response_meta(nav_id: NavigationId, meta: FetchResultMeta, cmd_tx: mpsc::Sender<TabCommand>) {
+    let choice = if let Some(disp) = meta.headers.get(http::header::CONTENT_DISPOSITION) {
+        let s = disp.to_str().unwrap_or_default().to_ascii_lowercase();
+        if s.contains("attachment") {
+            Action::Download {
+                dest: std::path::PathBuf::from("/tmp/downloaded.bin"),
+            }
+        } else {
+            Action::Render
+        }
+    } else if meta.headers.get(header::CONTENT_TYPE).unwrap() == "text/html" {
+        Action::Render
+    } else {
+        Action::Download {
+            dest: std::path::PathBuf::from("/tmp/downloaded.bin"),
+        }
+    };
+
+    // Send back to the engine what we like to do with this navigation
+    let _ = cmd_tx
+        .send(TabCommand::NavigateDecision {
+            nav_id,
+            choice,
+        })
+        .await;
+}
+
 fn handle_event(ev: EngineEvent) {
     match ev {
         EngineEvent::TabCreated { tab_id, .. } => {
             // let tab = self.tabs.get(&tab_id).expect("Unknown tab");
             println!("[event] TabCreated: {tab_id:?}");
         }
-        EngineEvent::Load { tab_id, event} => {
-            match event {
-                LoadEvent::Started { .. } => {
-                    println!("[event][load] Started: {tab_id}");
-                }
-                LoadEvent::Finished { .. } => {
-                    println!("[event][load] Finished: {tab_id}");
-                }
-                LoadEvent::Failed { .. } => {
-                    println!("[event][load] Failed: {tab_id}");
-                }
-                LoadEvent::Cancelled { .. } => {
-                    println!("[event][load] Cancelled: {tab_id}");
-                }
+        EngineEvent::Load { tab_id, event } => match event {
+            LoadEvent::Started { .. } => {
+                println!("[event][load] Started: {tab_id}");
             }
-        }
-        EngineEvent::Navigation { tab_id, event} => {
-            match event {
-                NavigationEvent::Started { nav_id, url } => {
-                    println!("[event] NavigationStarted:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
-                }
-                NavigationEvent::Committed { nav_id, url } => {
-                    println!("[event] NavigationCommitted:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
-                }
-                NavigationEvent::Finished { nav_id, url } => {
-                    println!("[event] NavigationFinished:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
-                }
-                NavigationEvent::Failed { nav_id, url, error } => {
-                    let nav_id = match nav_id {
-                        Some(nav_id) => nav_id.to_string(),
-                        None => "".into(),
-                    };
+            LoadEvent::Finished { .. } => {
+                println!("[event][load] Finished: {tab_id}");
+            }
+            LoadEvent::Failed { .. } => {
+                println!("[event][load] Failed: {tab_id}");
+            }
+            LoadEvent::Cancelled { .. } => {
+                println!("[event][load] Cancelled: {tab_id}");
+            }
+            LoadEvent::Progress {
+                finished,
+                bytes_received,
+                ttfb,
+                elapsed,
+                ..
+            } => {
+                println!("[event][load] Progress: {tab_id}: {bytes_received} bytes TTFB: {ttfb} Fin: {finished} Elapsed: {}us", elapsed.as_micros());
+            }
+        },
+        EngineEvent::Navigation { tab_id, event } => match event {
+            NavigationEvent::Started { nav_id, url } => {
+                println!("[event] NavigationStarted:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
+            }
+            NavigationEvent::Committed { nav_id, url } => {
+                println!("[event] NavigationCommitted:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
+            }
+            NavigationEvent::Finished { nav_id, url } => {
+                println!("[event] NavigationFinished:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}");
+            }
+            NavigationEvent::Failed { nav_id, url, error } => {
+                let nav_id = match nav_id {
+                    Some(nav_id) => nav_id.to_string(),
+                    None => "".into(),
+                };
 
-                    println!("[event] NavigationFailed:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Error: {error}");
-                }
-                NavigationEvent::Cancelled { nav_id, url, reason } => {
-                    println!("[event] NavigationCancelled:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Reason: {reason:?}");
+                println!("[event] NavigationFailed:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Error: {error}");
+            }
+            NavigationEvent::Cancelled { nav_id, url, reason } => {
+                println!("[event] NavigationCancelled:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Reason: {reason:?}");
+            }
+
+            NavigationEvent::Progress { nav_id, received_bytes, expected_length, elapsed } => {
+                println!("[event] NavigationProgress:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Received Bytes: {received_bytes}\n     Expected Length: {expected_length:?}\n     Elapsed: {elapsed:?}");
+            }
+            NavigationEvent::FailedUrl { nav_id, url, error } => {
+                println!("[event] NavigationFailedUrl:\n     TabId: {tab_id}\n     NavId: {nav_id:?}\n     Url: {url}\n     Error: {error:?}");
+            }
+        },
+        EngineEvent::Resource { tab_id, event } => match event {
+            ResourceEvent::Queued {
+                nav_id,
+                url,
+                kind,
+                initiator,
+                priority,
+            } => {
+                println!("[event] ResourceQueued:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}\n     Priority: {priority}");
+            }
+            ResourceEvent::Started {
+                nav_id,
+                req_id,
+                url,
+                kind,
+                initiator,
+            } => {
+                println!("[event] ResourceStarted:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}");
+            }
+            ResourceEvent::Redirected {
+                nav_id,
+                req_id,
+                from,
+                to,
+                status,
+            } => {
+                println!("[event] ResourceRedirected:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     From: {from}\n     To: {to}\n     Status: {status}");
+            }
+            ResourceEvent::Progress {
+                nav_id,
+                req_id,
+                received_bytes,
+                expected_length,
+                elapsed,
+            } => {
+                let el = expected_length.unwrap_or(0);
+                println!("[event] ResourceProgress: \n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Received Bytes: {received_bytes}\n     Expected Length: {el}\n     Elapsed: {elapsed:?}");
+            }
+            ResourceEvent::Finished {
+                nav_id,
+                req_id,
+                url,
+                received_bytes,
+                elapsed
+            } => {
+                // let content_type = content_type.unwrap_or_default();
+                println!("[event] ResourceFinished:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Elapsed: {elapsed:?}\n     Received: {received_bytes}");
+            }
+            ResourceEvent::Failed {
+                nav_id,
+                req_id,
+                url,
+                error,
+            } => {
+                println!("[event] ResourceFailed:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Error: {error}");
+            }
+            ResourceEvent::Cancelled {
+                nav_id,
+                req_id,
+                url,
+                reason,
+            } => {
+                println!("[event] ResourceCancelled:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Reason: {reason:?}");
+            }
+            ResourceEvent::Headers {
+                nav_id,
+                req_id,
+                url,
+                status,
+                content_length,
+                content_type,
+                headers,
+            } => {
+                let content_type = content_type.unwrap_or_default();
+                let content_length = match content_length {
+                    Some(len) => len.to_string(),
+                    None => "unknown".into(),
+                };
+                println!("[event] ResourceHeaders:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Status: {status}\n     Content-Length: {content_length}\n     Content-Type: {content_type}\n     Headers:\n");
+                for (k, v) in headers {
+                    println!("         {k}: {v}");
                 }
             }
-        }
-        EngineEvent::Resource { tab_id, event } => {
-            match event {
-                ResourceEvent::Started { nav_id, req_id, url, kind, initiator, priority } => {
-                    println!("[event] ResourceStarted:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}\n     Priority: {priority}");
-                }
-                ResourceEvent::Redirected { nav_id, req_id, from, to, status } => {
-                    println!("[event] ResourceRedirected:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     From: {from}\n     To: {to}\n     Status: {status}");
-                }
-                ResourceEvent::Progress { nav_id, req_id, received_bytes } => {
-                    println!("[event] ResourceProgress: \n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Received Bytes: {received_bytes}");
-                }
-                ResourceEvent::Finished { nav_id, req_id, url, bytes, content_type, elapsed } => {
-                    let content_type = content_type.unwrap_or_default();
-                    println!("[event] ResourceFinished:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Bytes: {bytes}\n     Content-Type: {content_type}\n     Elapsed: {elapsed:?}");
-                }
-                ResourceEvent::Failed { nav_id, req_id, url, error } => {
-                    println!("[event] ResourceFailed:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Error: {error}");
-                }
-                ResourceEvent::Cancelled { nav_id, req_id, url, reason } => {
-                    println!("[event] ResourceCancelled:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Reason: {reason:?}");
-                }
-            }
-        }
+        },
         EngineEvent::Redraw { tab_id, .. } => {
             // With a real backend, you might get a handle/texture to present here.
             println!("[event] FrameReady for tab={tab_id:?}");
