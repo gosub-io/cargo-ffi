@@ -91,6 +91,7 @@ tokio-stream = { version = "0.1.17", features = ["sync"] }
 futures-core = "0.3.31"
 mime = "0.3.17"
 chrono = "0.4.42"
+regex = "1.11.1"
 
 [features]
 default = ["sqlite_cookie_store", "parley_layout"]

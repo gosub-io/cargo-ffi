@@ -120,7 +120,7 @@ async fn main() -> Result<(), EngineError> {
                 // println!("Received event: {:?}", ev);
 
                 // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
-                if let EngineEvent::NavigationResponse { tab_id, nav_id, meta } = ev {
+                if let EngineEvent::DecisionRequest { tab_id, nav_id, meta } = ev {
                     println!("[event][meta] ResponseMeta found: {tab_id} {nav_id} {meta:?}");
                     // Normally, we should check if the tab_id we get actually matches one of our tabs.
                     if tab_clone.tab_id == tab_id {
@@ -168,7 +168,7 @@ async fn main() -> Result<(), EngineError> {
 }
 
 async fn on_response_meta(nav_id: NavigationId, meta: FetchResultMeta, cmd_tx: mpsc::Sender<TabCommand>) {
-    let choice = if let Some(disp) = meta.headers.get(http::header::CONTENT_DISPOSITION) {
+    let action = if let Some(disp) = meta.headers.get(http::header::CONTENT_DISPOSITION) {
         let s = disp.to_str().unwrap_or_default().to_ascii_lowercase();
         if s.contains("attachment") {
             Action::Download {
@@ -187,9 +187,9 @@ async fn on_response_meta(nav_id: NavigationId, meta: FetchResultMeta, cmd_tx: m
 
     // Send back to the engine what we like to do with this navigation
     let _ = cmd_tx
-        .send(TabCommand::NavigateDecision {
+        .send(TabCommand::Decision {
             nav_id,
-            choice,
+            action,
         })
         .await;
 }
