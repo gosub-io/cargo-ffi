@@ -1,6 +1,6 @@
 use crate::cookies::CookieStoreHandle;
 use crate::engine::cookies::CookieJarHandle;
-use crate::engine::engine::EngineContext;
+use crate::engine::engine::{EngineContext, ModuleConfig};
 use crate::engine::events::EngineEvent;
 use crate::engine::storage::{StorageService, Subscription};
 use crate::engine::tab::TabId;
@@ -104,9 +104,9 @@ pub struct ZoneSink {
 
 /// This is the zone structure, which contains tabs and shared services. It is only known to the engine
 /// and can be controlled by the user via the engine API.
-pub struct Zone {
+pub struct Zone<C: ModuleConfig> {
     // Shared context from the engine
-    pub engine_context: Arc<EngineContext>,
+    pub engine_context: Arc<EngineContext<C>>,
     // Shared context that is passed down to tabs
     pub context: Arc<ZoneContext>,
     // Shared state that can be read by anyone with a ZoneSink
@@ -128,7 +128,7 @@ pub struct Zone {
     pub color: [u8; 4],
 }
 
-impl Debug for Zone {
+impl<C: ModuleConfig> Debug for Zone<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Zone")
             .field("id", &self.id)
@@ -162,7 +162,7 @@ pub struct SharedFlags {
     pub share_cookiejar: bool,
 }
 
-impl Zone {
+impl<C: ModuleConfig> Zone<C> {
     /// Creates a new zone with a specific zone ID
     pub fn new_with_id(
         // Unique ID for the zone
@@ -172,7 +172,7 @@ impl Zone {
         // Services to provide to tabs within this zone
         services: ZoneServices,
         // Event channel to send events back to the UI
-        engine_context: Arc<EngineContext>,
+        engine_context: Arc<EngineContext<C>>,
     ) -> Self {
         // We generate the color by using the zone id as a seed
         let mut rng = StdRng::seed_from_u64(zone_id.0.as_u64_pair().0);
@@ -221,7 +221,7 @@ impl Zone {
     }
 
     /// Creates a new zone with a random ID and the provided configuration
-    pub fn new(config: ZoneConfig, services: ZoneServices, engine_context: Arc<EngineContext>) -> Self {
+    pub fn new(config: ZoneConfig, services: ZoneServices, engine_context: Arc<EngineContext<C>>) -> Self {
         Self::new_with_id(ZoneId::new(), config, services, engine_context)
     }
 

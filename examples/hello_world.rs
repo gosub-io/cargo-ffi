@@ -1,11 +1,19 @@
 use gosub_engine::events::{LoadEvent, MouseButton, NavigationEvent, ResourceEvent, TabCommand};
 use gosub_engine::tab::TabDefaults;
-use gosub_engine::{cookies::DefaultCookieJar, events::EngineEvent, render::Viewport, storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService}, zone::ZoneConfig, zone::ZoneServices, EngineConfig, EngineError, GosubEngine, NavigationId, Action};
+use gosub_engine::{cookies::DefaultCookieJar, events::EngineEvent, render::Viewport, storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService}, zone::ZoneConfig, zone::ZoneServices, EngineConfig, EngineError, GosubEngine, NavigationId, Action, ModuleConfig};
 use std::sync::Arc;
 use std::time::Duration;
 use http::header;
 use tokio::sync::mpsc;
 use gosub_engine::net::types::FetchResultMeta;
+use gosub_engine::render::backends::null::NullBackend;
+
+struct EngineModuleConfig;
+
+impl ModuleConfig for EngineModuleConfig {
+    type RenderBackend = NullBackend;
+}
+
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
@@ -25,7 +33,7 @@ async fn main() -> Result<(), EngineError> {
     let backend = gosub_engine::render::backends::null::NullBackend::new().expect("null backend");
 
     // Instantiate and start the engine
-    let mut engine = GosubEngine::new(Some(engine_cfg), Box::new(backend));
+    let mut engine = GosubEngine::<EngineModuleConfig>::new(Some(engine_cfg), backend);
     let engine_join_handle = engine.start().expect("cannot start engine");
 
     // Get our event channel to receive events from the engine. Note that you will only receive events
@@ -120,14 +128,14 @@ async fn main() -> Result<(), EngineError> {
                 // println!("Received event: {:?}", ev);
 
                 // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
-                if let EngineEvent::DecisionRequest { tab_id, nav_id, meta } = ev {
-                    println!("[event][meta] ResponseMeta found: {tab_id} {nav_id} {meta:?}");
-                    // Normally, we should check if the tab_id we get actually matches one of our tabs.
-                    if tab_clone.tab_id == tab_id {
-                        on_response_meta(nav_id, meta, tab_clone.cmd_tx.clone()).await;
-                    }
-                    continue;
-                }
+                // if let EngineEvent::DecisionRequest { tab_id, nav_id, meta } = ev {
+                //     println!("[event][meta] ResponseMeta found: {tab_id} {nav_id} {meta:?}");
+                //     // Normally, we should check if the tab_id we get actually matches one of our tabs.
+                //     if tab_clone.tab_id == tab_id {
+                //         on_response_meta(nav_id, meta, tab_clone.cmd_tx.clone()).await;
+                //     }
+                //     continue;
+                // }
 
                 // Just count the frames we see for now
                 if matches!(ev, EngineEvent::Redraw { .. }) {

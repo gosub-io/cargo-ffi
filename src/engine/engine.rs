@@ -35,9 +35,14 @@ use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
 use crate::net::types::FetchRequest;
 use crate::util::spawn_named;
 
-pub struct GosubEngine {
+pub trait ModuleConfig {
+    type RenderBackend: RenderBackend + Send + Sync;
+}
+
+
+pub struct GosubEngine<C: ModuleConfig> {
     /// Context is what can be shared downstream
-    context: Arc<EngineContext>,
+    context: Arc<EngineContext<C>>,
     /// Zones managed by this engine, indexed by [`ZoneId`].
     zones: HashMap<ZoneId, Arc<ZoneSink>>,
     /// Command sender used to send commands to the engine run loop.
@@ -53,9 +58,9 @@ pub struct GosubEngine {
 
 // Engine context that is shared downwards to zones.
 #[derive(Clone)]
-pub struct EngineContext {
+pub struct EngineContext<C: ModuleConfig> {
     /// Active render backend for the engine.
-    pub backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
+    pub backend: Arc<RwLock<C::RenderBackend>>,
     /// Event sender
     pub event_tx: broadcast::Sender<EngineEvent>,
     /// Global engine configuration
@@ -64,7 +69,7 @@ pub struct EngineContext {
     pub io_tx: Arc<RwLock<Option<mpsc::UnboundedSender<FetchRequest>>>>,
 }
 
-impl GosubEngine {
+impl<C: ModuleConfig> GosubEngine<C> {
     /// Create a new engine.
     ///
     /// If `config` is `None`, [`EngineConfig::default`] is used.
@@ -74,7 +79,7 @@ impl GosubEngine {
     /// let backend = ge::render::backends::null::NullBackend::new().unwrap();
     /// let engine = ge::GosubEngine::new(None, Box::new(backend));
     /// ```
-    pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend + Send + Sync>) -> Self {
+    pub fn new(config: Option<EngineConfig>, backend: C::RenderBackend) -> Self {
         let resolved_config = config.unwrap_or_else(EngineConfig::default);
 
         // Command channel on which to send and receive engine commands from the UA.
@@ -130,7 +135,7 @@ impl GosubEngine {
     }
 
     /// Replace the active render backend.
-    pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
+    pub fn set_backend_renderer(&mut self, new_backend: C::RenderBackend) {
         {
             let binding = self.context.backend.read().unwrap();
             let old_name = binding.name();
@@ -259,7 +264,7 @@ impl GosubEngine {
         config: ZoneConfig,
         services: ZoneServices,
         zone_id: Option<ZoneId>,
-    ) -> Result<Zone, EngineError> {
+    ) -> Result<Zone<C>, EngineError> {
         let zone = match zone_id {
             Some(zone_id) => Zone::new_with_id(zone_id, config, services, self.context.clone()),
             None => Zone::new(config, services, self.context.clone()),

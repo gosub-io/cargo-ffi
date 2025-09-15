@@ -17,7 +17,7 @@ pub mod types;
 mod downloader;
 
 pub use context::BrowsingContext;
-pub use engine::GosubEngine;
+pub use engine::{GosubEngine, ModuleConfig};
 pub use errors::EngineError;
 
 /// Default capacity for MPSC channels
