@@ -149,7 +149,7 @@ pub enum ResourceKind {
 
 /// A fetch key data is a key that is used to find out if two requests want to fetch the same resource.
 /// If this is true, the requests are bundled so only once the resource will be fetched.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FetchKeyData {
     pub url: Url,
     pub method: Method,

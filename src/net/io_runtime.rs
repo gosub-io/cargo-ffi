@@ -4,12 +4,12 @@ use crate::util::spawn_named;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
-use crate::events::EngineEvent;
+use crate::events::{EngineEvent, IoCommand};
 
 /// IoHandle is the handle that controls the IO thread.
 pub struct IoHandle {
     // Channel to submit fetch requests
-    tx_submit: mpsc::UnboundedSender<FetchRequest>,
+    tx_submit: mpsc::UnboundedSender<IoCommand>,
     // Send "true" when we want to shut down the IO thread
     shutdown_tx: watch::Sender<bool>,
     // Join handle for shutdown sync
@@ -21,7 +21,7 @@ impl IoHandle {
     // send commands through a copy of the tx_submit that we send in the EngineContext to zones and
     // later tabs.
     pub fn submit(&self, req: FetchRequest) -> Result<(), ()> {
-        self.tx_submit.send(req).map_err(|_| ())
+        self.tx_submit.send(IoCommand::Fetch(req)).map_err(|_| ())
     }
 
     /// Shutdown the IO thread
@@ -46,7 +46,7 @@ impl IoHandle {
         }
     }
 
-    pub fn subscribe(&self) -> mpsc::UnboundedSender<FetchRequest> {
+    pub fn subscribe(&self) -> mpsc::UnboundedSender<IoCommand> {
         self.tx_submit.clone()
     }
 }
@@ -55,17 +55,17 @@ impl IoHandle {
 /// run multiple fetchers on different OS threads for instance, but most likely the fetching itself
 /// isn't the biggest bottleneck.
 pub fn spawn_io_thread(cfg: FetcherConfig, event_tx: broadcast::Sender<EngineEvent>) -> IoHandle {
-    let (tx_submit, mut rx_submit) = mpsc::unbounded_channel::<FetchRequest>();
+    let (tx_submit, mut rx_submit) = mpsc::unbounded_channel::<IoCommand>();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
     let join_handle = spawn_named("I/O Thread", async move {
         let fetcher = Arc::new(Fetcher::new(cfg, event_tx.clone()));
-        let sched_f = fetcher.clone();
-        let sched_stop_rx = shutdown_rx.clone();
+        let cloned_fetcher = fetcher.clone();
+        let cloned_shutdown_rx = shutdown_rx.clone();
 
         // Drive the scheduler
         let join_handle = spawn_named("I/O Fetcher Scheduler", async move {
-            sched_f.run(sched_stop_rx).await;
+            cloned_fetcher.run(cloned_shutdown_rx).await;
         });
 
         // Pump submissions coming from other threads into the fetcher's queues
@@ -73,7 +73,8 @@ pub fn spawn_io_thread(cfg: FetcherConfig, event_tx: broadcast::Sender<EngineEve
             tokio::select! {
                 maybe_req = rx_submit.recv() => {
                     match maybe_req {
-                        Some(req) => fetcher.submit(req).await,
+                        Some(IoCommand::Fetch(req)) => fetcher.submit(req).await,
+                        Some(IoCommand::Decision { token,action }) => fetcher.fullfill(token, action).await,
                         None => {
                             // All producers have dropped. Signal shutdown
                             break
@@ -121,8 +122,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn driver_starts_and_shuts_down_cleanly() {
+        let (tx, _rx) = broadcast::channel(16);
+
         let cfg = test_cfg();
-        let handle = super::spawn_io_thread(cfg);
+        let handle = spawn_io_thread(cfg, tx.clone());
 
         // Give the driver a moment to boot its internal scheduler
         sleep(Duration::from_millis(10)).await;
@@ -135,8 +138,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn multiple_subscribers_do_not_block_shutdown() {
+        let (tx, _rx) = broadcast::channel(16);
+
         let cfg = test_cfg();
-        let handle = super::spawn_io_thread(cfg);
+        let handle = spawn_io_thread(cfg, tx.clone());
 
         // create a few clones of the submit handle
         let s1 = handle.subscribe();
@@ -156,8 +161,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn shutdown_signal_stops_driver_even_without_submissions() {
+        let (tx, _rx) = broadcast::channel(16);
+
         let cfg = test_cfg();
-        let handle = super::spawn_io_thread(cfg);
+        let handle = spawn_io_thread(cfg, tx.clone());
 
         // no submissions; just shut down
         timeout(Duration::from_secs(2), handle.shutdown())
@@ -172,8 +179,10 @@ mod tests {
     // and (b) issuing shutdown. This ensures both branches are exercised over time.
     #[tokio::test(flavor = "current_thread")]
     async fn dropping_all_producers_plus_shutdown_is_clean() {
+        let (tx, _rx) = broadcast::channel(16);
+
         let cfg = test_cfg();
-        let handle = super::spawn_io_thread(cfg);
+        let handle = spawn_io_thread(cfg, tx.clone());
 
         // extra producer
         let s = handle.subscribe();

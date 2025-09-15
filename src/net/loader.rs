@@ -72,29 +72,3 @@ pub enum NavigationError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
-//
-// /// Load the main document for a top-level navigation.
-// pub async fn load_main_document(
-//     tab_id: crate::tab::TabId,
-//     nav_id: NavigationId,
-//     url: Url,
-//     cancel: CancellationToken,
-//     ignore_cache: bool, // reserved
-//     event_tx: broadcast::Sender<EngineEvent>,
-//     kind: ResourceKind,
-//     initiator: Initiator,
-// ) -> ResourceLoadResult {
-//     // Early cancellation check
-//     if cancel.is_cancelled() {
-//         return Err(NavigationError::Cancelled("navigation cancelled before start".into()));
-//     }
-//
-//     let req_id = RequestId::new();
-//     let emitter = EngineEventEmitter { tab_id, nav_id, req_id, event_tx, kind, initiator };
-//
-//     if !ignore_cache {
-//         // We need to make sure we check the cache first before requesting data
-//     }
-//
-//     fetch_resource(nav_id, url, cancel, Some(&emitter)).await
-// }

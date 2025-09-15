@@ -133,7 +133,7 @@ pub use engine::storage;
 pub use crate::engine::config::EngineConfig;
 
 pub mod events {
-    pub use crate::engine::events::{EngineCommand, EngineEvent, MouseButton, TabCommand};
+    pub use crate::engine::events::{EngineCommand, EngineEvent, MouseButton, TabCommand, IoCommand};
     pub use crate::engine::events::{LoadEvent, ResourceEvent, NavigationEvent };
 }
 

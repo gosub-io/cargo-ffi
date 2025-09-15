@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
-use crate::net::types::FetchRequest;
+use crate::events::IoCommand;
 use crate::util::spawn_named;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
@@ -93,7 +93,7 @@ pub struct ZoneContext {
     /// Event channel to send events back to the UI
     pub(crate) event_tx: broadcast::Sender<EngineEvent>,
     /// Channel to communicate to the network I/O thread
-    pub(crate) io_tx: mpsc::UnboundedSender<FetchRequest>,
+    pub(crate) io_tx: mpsc::UnboundedSender<IoCommand>,
 }
 
 // Things that are shared upwards to the engine

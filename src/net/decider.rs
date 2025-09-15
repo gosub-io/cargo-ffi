@@ -1,16 +1,29 @@
+//! `DecisionHub` lets a producer register a **DecisionToken** and wait on a
+//! `oneshot::Receiver<Action>`, while some other task (often on another thread)
+//! later **fulfills** that token with the chosen `Action`.
+//!
+//! - IO/fetcher side calls [`DecisionHub::register`], gets `(token, rx)` and
+//!   emits a `NavigationResponse` to the UA containing `token`.
+//! - UA/tab decides action, then calls [`DecisionHub::fulfill`] with the same `token`.
+//! - The IO/fetcher awaits `rx.await` and proceeds accordingly.
+
 use std::sync::atomic::AtomicU64;
 use tokio::sync::oneshot;
 use crate::Action;
 
+/// Correlation handle for a pending decision.
+/// Opaque outside the hub; equality/hashable so it can be used as a key.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub struct DecisionToken(u64);
 
+/// Rendezvous hub mapping `DecisionToken` to `oneshot::Sender<Action>`.
 pub struct DecisionHub {
     waiters: dashmap::DashMap<DecisionToken, oneshot::Sender<Action>>,
     counter: AtomicU64,
 }
 
 impl DecisionHub {
+    // Create a new DecisionHub
     pub fn new() -> Self {
         Self {
             waiters: dashmap::DashMap::new(),
@@ -18,10 +31,14 @@ impl DecisionHub {
         }
     }
 
-    pub fn new_token(&self) -> DecisionToken {
-        DecisionToken(self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
-    }
-
+    /// Register a new waiter and obtain its `(DecisionToken, oneshot::Receiver<Action>)`.
+    ///
+    /// Call this on the side that needs to **await** the user-agent/UA decision
+    /// (typically the IO/fetcher task right after it produced `ResponseTop`).
+    ///
+    /// The returned `DecisionToken` should be propagated to the UA so it can call
+    /// [`fulfill`](Self::fulfill) with the final `Action`.
+    #[inline]
     pub fn register(&self) -> (DecisionToken, oneshot::Receiver<Action>) {
         let token = DecisionToken(self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let (tx, rx) = oneshot::channel();
@@ -29,11 +46,138 @@ impl DecisionHub {
         (token, rx)
     }
 
-    pub fn fulfill(&self, token: DecisionToken, action: Action) -> Result<(), Action> {
+    /// Deliver the decision for `token`, waking the waiter if it still exists.
+    ///
+    /// This is **idempotent**: if there is no current waiter (unknown token,
+    /// already fulfilled, or receiver dropped), this is a no-op.
+    #[inline]
+    pub fn fulfill(&self, token: DecisionToken, action: Action) {
         if let Some((_, tx)) = self.waiters.remove(&token) {
-            tx.send(action).map_err(|a| a)
-        } else {
-            Err(action)
+            let _ = tx.send(action).map_err(|a| a);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use tokio::time::{timeout, Duration};
+
+    // Pick a variant that certainly exists in your codebase.
+    // From our prior discussions you have variants like Render/Download/Cancel/etc.
+    // If your enum differs, just switch these to a variant you have.
+    fn sample_action() -> Action {
+        // safest bet across your project is likely `Action::Cancel`
+        // adjust if needed:
+        #[allow(unreachable_code, clippy::diverging_sub_expression)]
+        {
+            // Replace with your actual constructor/variant if different.
+            #[allow(dead_code)]
+            enum _Check {}
+            return Action::Cancel;
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn register_returns_unique_tokens() {
+        let hub = DecisionHub::new();
+        let mut set = HashSet::new();
+        for _ in 0..10_000 {
+            let (t, _rx) = hub.register();
+            assert!(set.insert(t), "duplicate token: {:?}", t);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fulfill_delivers_action() {
+        let hub = DecisionHub::new();
+        let (token, rx) = hub.register();
+
+        // fulfill from "another thread"
+        hub.fulfill(token, sample_action());
+
+        let decided = timeout(Duration::from_millis(100), rx)
+            .await
+            .expect("timed out")
+            .expect("sender dropped");
+        assert_eq!(format!("{:?}", decided), format!("{:?}", sample_action()));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fulfill_unknown_token_is_noop() {
+        let hub = DecisionHub::new();
+        // Unknown token (never registered)
+        hub.fulfill(DecisionToken(42), sample_action());
+        // Nothing to assert other than "no panic" and "no entry got created".
+        assert!(hub.waiters.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fulfill_is_at_most_once() {
+        let hub = DecisionHub::new();
+        let (token, rx) = hub.register();
+
+        hub.fulfill(token, sample_action());
+        hub.fulfill(token, sample_action()); // second call is ignored
+
+        let decided = timeout(Duration::from_millis(100), rx)
+            .await
+            .expect("timed out")
+            .expect("sender dropped");
+        assert_eq!(format!("{:?}", decided), format!("{:?}", sample_action()));
+
+        // Hub should have removed the waiter on first fulfill.
+        assert!(hub.waiters.get(&token).is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_receiver_before_fulfill_is_ok() {
+        let hub = DecisionHub::new();
+        let (token, rx) = hub.register();
+        drop(rx); // receiver gone
+
+        // This will attempt to send and get Err(action) internally; we ignore it.
+        hub.fulfill(token, sample_action());
+
+        // Entry must be removed even if receiver was dropped.
+        assert!(hub.waiters.get(&token).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_register_and_fulfill() {
+        use std::sync::Arc;
+
+        let hub = Arc::new(DecisionHub::new());
+
+        let n = 1_000usize;
+        let mut wait_handles = Vec::with_capacity(n);
+
+        for _ in 0..n {
+            let (token, rx) = hub.register();
+
+            // Spawn waiter (no need for hub here)
+            let waiter = tokio::spawn(async move {
+                let res = tokio::time::timeout(std::time::Duration::from_secs(2), rx).await;
+                res.expect("waiter timed out").expect("sender dropped")
+            });
+
+            // Fulfill from a different task — move an Arc clone in
+            let hub2 = Arc::clone(&hub);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_micros(10)).await;
+                hub2.fulfill(token, sample_action());
+            });
+
+            wait_handles.push(waiter);
+        }
+
+        for h in wait_handles {
+            let decided = h.await.expect("waiter task panicked");
+            assert_eq!(format!("{:?}", decided), format!("{:?}", sample_action()));
+        }
+
+        assert!(hub.waiters.is_empty());
     }
 }

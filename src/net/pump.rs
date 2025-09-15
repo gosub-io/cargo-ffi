@@ -12,7 +12,6 @@ use crate::net::fs_utils::temp_path_for;
 use crate::net::SharedBody;
 use crate::net::types::NetError;
 
-
 /// Pump Configuration
 pub struct PumpCfg {
     /// Idle timeout
@@ -31,7 +30,7 @@ pub struct PumpTargets {
     pub peek: Vec<u8>
 }
 
-/// Spawns a single pump task that will optionally write to sharedbody and file.
+/// Spawns a single pump task that will either write to sharedbody and/or a file.
 /// Will honor idle and total timeouts + cancellations
 pub fn spawn_pump<R>(
     // Reader we pump from
@@ -198,8 +197,6 @@ where
                 }
             }
         }
-
-        // @TODO: if not ok, we probably want to remove the temp file?
 
         Ok(None)
     })

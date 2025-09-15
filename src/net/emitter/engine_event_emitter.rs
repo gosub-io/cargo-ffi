@@ -49,7 +49,6 @@ impl EngineEventEmitter {
 
 impl NetObserver for EngineEventEmitter {
     fn on_event(&self, ev: NetEvent) {
-        dbg!(&ev);
         match ev {
             NetEvent::Started { url } => {
                 self.emit(ResourceEvent::Started {
@@ -130,11 +129,12 @@ impl NetObserver for EngineEventEmitter {
             NetEvent::Warning { .. } => {
                 // Do nothing
             }
-            NetEvent::DecisionRequired { url, status, headers, content_length, peek, .. } => {
+            NetEvent::DecisionRequired { url, status, headers, content_length, peek, token } => {
                 let has_body = peek.len() > 0;
 
                 self.emit_navigation_event(NavigationEvent::DecisionRequired {
                     nav_id: self.nav_id,
+                    decision_token: token,
                     meta: FetchResultMeta {
                         final_url: url.clone(),
                         status,

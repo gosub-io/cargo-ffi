@@ -11,9 +11,11 @@ pub trait NetObserver: Send + Sync {
 /// Events that are send by the net::fetch() functions
 #[derive(Debug)]
 pub enum NetEvent {
+    /// Io error happened
     Io {
         message: String
     },
+    /// Warning happened
     Warning {
         url: Url,
         message: String

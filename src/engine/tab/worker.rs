@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use crate::engine::events::{CancelReason, EngineEvent, LoadEvent, NavigationEvent};
 use crate::engine::BrowsingContext;
-use crate::events::TabCommand;
+use crate::events::{IoCommand, TabCommand};
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::{DevicePixelRatio, Viewport};
 use crate::storage::types::compute_partition_key;
@@ -341,8 +341,25 @@ impl TabWorker {
                 self.runtime.drawing_enabled = false;
                 ControlFlow::Continue
             }
+            TabCommand::CancelNavigation => {
+                if let Some(load) = self.runtime.load.take() {
+                    log::warn!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
+                    load.cancel.cancel();
+                }
+                ControlFlow::Continue
+            }
+            TabCommand::SubmitDecision { decision_token, action, .. } => {
+                // Proxy the submit decision to the I/O thread
+                let _ = self.zone_context.io_tx.send(IoCommand::Decision {
+                    token: decision_token,
+                    action
+                });
+
+                // Decisions are handled in the fetcher/io thread, so we can ignore this here
+                ControlFlow::Continue
+            }
             _ => {
-                // Keep your other commands here
+                log::warn!("{}", format!("Tab {:?} received unhandled command: {:?}", self.tab_id, cmd));
                 ControlFlow::Continue
             }
         }
@@ -454,7 +471,7 @@ impl TabWorker {
                 cancel: cancel_child.clone(),
             };
 
-            if io_tx.send(req).is_err() {
+            if io_tx.send(IoCommand::Fetch(req)).is_err() {
                 // Couldn't send the request to the I/O thread
                 let _ = tx_done.send((
                     nav_id,

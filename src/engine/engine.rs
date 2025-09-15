@@ -31,8 +31,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+use crate::events::IoCommand;
 use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
-use crate::net::types::FetchRequest;
 use crate::util::spawn_named;
 
 pub struct GosubEngine {
@@ -61,7 +61,7 @@ pub struct EngineContext {
     /// Global engine configuration
     pub config: Arc<EngineConfig>,
     /// I/O thread handle
-    pub io_tx: Arc<RwLock<Option<mpsc::UnboundedSender<FetchRequest>>>>,
+    pub io_tx: Arc<RwLock<Option<mpsc::UnboundedSender<IoCommand>>>>,
 }
 
 impl GosubEngine {

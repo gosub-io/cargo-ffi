@@ -27,7 +27,8 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use url::Url;
 use crate::engine::types::{NavigationId, RequestId, Action};
-use crate::net::types::{FetchResultMeta, Initiator, Priority, ResourceKind};
+use crate::net::DecisionToken;
+use crate::net::types::{FetchRequest, FetchResultMeta, Initiator, Priority, ResourceKind};
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +85,13 @@ impl Display for Modifiers {
     }
 }
 
+// Commands sent to the IO / network layer
+#[derive(Debug)]
+pub enum IoCommand {
+    Fetch(FetchRequest),
+    Decision { token: DecisionToken, action: Action },
+}
+
 /// Commands that can be sent to a specific tab
 #[derive(Clone, Debug, PartialEq)]
 pub enum TabCommand {
@@ -96,7 +104,7 @@ pub enum TabCommand {
     /// Cancel the current navigation
     CancelNavigation,
     /// Make a decision what to do with the navigated resource
-    SubmitDecision { nav_id: NavigationId, action: Action },
+    SubmitDecision { nav_id: NavigationId, decision_token: DecisionToken, action: Action },
     /// Close tab
     CloseTab,
 
@@ -169,7 +177,6 @@ pub enum TabCommand {
     EnableLogging { level: LogLevel },
     /// Dump dom tree
     DumpDomTree,
-
 }
 
 #[derive(Debug)]
@@ -198,7 +205,7 @@ pub enum NavigationEvent {
     Progress  { nav_id: NavigationId, received_bytes: u64, expected_length: Option<u64>, elapsed: Duration },
     FailedUrl { nav_id: Option<NavigationId>, url: String, error: Arc<anyhow::Error> },
     Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
-    DecisionRequired { nav_id: NavigationId, meta: FetchResultMeta },
+    DecisionRequired { nav_id: NavigationId, meta: FetchResultMeta, decision_token: DecisionToken },
 }
 
 /// Start of loading the main document for this navigation
@@ -209,6 +216,7 @@ pub enum LoadEvent {
     Failed    { nav_id: Option<NavigationId>, url: Url, error: Arc<anyhow::Error> },
     Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
     Progress  { nav_id: NavigationId, url: Url, finished: bool, bytes_received: u64, ttfb: bool, elapsed: Duration },
+    MainDocumentParsed { nav_id: NavigationId, title: Option<String> },
 }
 
 /// Events triggered by load resources for a main document. Note that resources can trigger other

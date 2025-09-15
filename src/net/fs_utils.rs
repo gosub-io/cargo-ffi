@@ -78,7 +78,6 @@ fn sanitize_filename(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_temp_path_creation() -> io::Result<()> {

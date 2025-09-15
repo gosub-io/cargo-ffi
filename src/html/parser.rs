@@ -2,7 +2,7 @@ use std::io;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -217,4 +217,110 @@ fn resolve(base: &Url, candidate: &str) -> Result<Url, url::ParseError> {
         return Err(url::ParseError::EmptyHost);
     }
     base.join(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::stream;
+    use tokio_util::io::StreamReader;
+
+    fn reader_from_str(s: &str) -> impl AsyncRead + Unpin + Send + 'static {
+        // One-chunk stream -> AsyncRead
+        let it = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(s.to_owned()))]);
+        StreamReader::new(it)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn parses_title_and_discovers_resources() {
+        let html = r#"
+            <html>
+              <head>
+                <title> Hello World </title>
+                <link rel="stylesheet" href="/style.css">
+              </head>
+              <body>
+                <script src="app.js"></script>
+                <img src="images/logo.png">
+              </body>
+            </html>
+        "#;
+
+        let base = Url::parse("https://example.com/path/index.html").unwrap();
+        let cancel = CancellationToken::new();
+        let mut hints = Vec::new();
+
+        let doc = parse_main_document_stream(
+            base.clone(),
+            reader_from_str(html),
+            cancel,
+            DummyHtml5Config::default(),
+            |h| hints.push(h),
+        )
+            .await
+            .unwrap();
+
+        assert_eq!(doc.title.as_deref(), Some("Hello World"));
+        assert!(doc.raw_html.contains("Hello World"));
+
+        // Ensure we discovered 3 resources with resolved URLs
+        assert_eq!(hints.len(), 3);
+        assert!(hints.iter().any(|h| h.kind == ResourceKind::Stylesheet && h.url.as_str() == "https://example.com/style.css"));
+        assert!(hints.iter().any(|h| h.kind == ResourceKind::Script     && h.url.as_str() == "https://example.com/path/app.js"));
+        assert!(hints.iter().any(|h| h.kind == ResourceKind::Image      && h.url.as_str() == "https://example.com/path/images/logo.png"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn honors_cancellation() {
+        let base = Url::parse("https://e.test/").unwrap();
+
+        // Make a stream that hangs so we can cancel before read completes.
+        use futures::stream::pending;
+        let pending_stream = pending::<Result<Bytes, std::io::Error>>();
+        let reader = StreamReader::new(pending_stream);
+
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // cancel immediately
+
+        let res = parse_main_document_stream(
+            base,
+            reader,
+            cancel,
+            DummyHtml5Config::default(),
+            |_h| {},
+        )
+            .await;
+
+        match res {
+            Err(DocumentError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {:?}", other),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn truncates_at_max_bytes() {
+        let base = Url::parse("https://e.test/").unwrap();
+        let big = "A".repeat(150_000); // 150 KiB
+        let cfg = DummyHtml5Config { max_bytes: 64 * 1024 }; // 64 KiB
+
+        let doc = parse_main_document_stream(
+            base,
+            reader_from_str(&big),
+            CancellationToken::new(),
+            cfg.clone(),
+            |_h| {},
+        )
+            .await
+            .unwrap();
+
+        assert_eq!(doc.raw_html.len(), cfg.max_bytes);
+    }
+
+    #[test]
+    fn discover_title_basic() {
+        assert_eq!(discover_title("<title>x</title>").as_deref(), Some("x"));
+        assert_eq!(discover_title("<TITLE>  spaced \n</TITLE>").as_deref(), Some("spaced"));
+        assert_eq!(discover_title("<head></head>").is_none(), true);
+    }
 }

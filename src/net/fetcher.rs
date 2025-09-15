@@ -13,11 +13,13 @@ use dashmap::{DashMap, Entry};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc, time::Duration};
-use tokio::sync::{broadcast, Notify, Semaphore};
+use tokio::sync::{broadcast, mpsc, Notify, Semaphore};
 use url::Url;
 use crate::Action;
-use crate::events::EngineEvent;
+use crate::events::{EngineEvent, IoCommand};
+use crate::html::DummyHtml5Config;
 use crate::net::decider::DecisionHub;
+use crate::net::DecisionToken;
 use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
 use crate::net::fs_utils::stage_temp_path_for;
 use crate::net::pump::{spawn_pump, PumpCfg, PumpTargets};
@@ -174,6 +176,9 @@ pub struct Fetcher {
 
     /// Event channel to emit engine events
     event_tx: broadcast::Sender<EngineEvent>,
+
+    /// Decision hub for handling user decisions on requests
+    decision_hub: Arc<DecisionHub>,
 }
 
 impl Fetcher {
@@ -202,6 +207,7 @@ impl Fetcher {
             inflight: Arc::new(DashMap::new()),
             wake: Notify::new(),
             event_tx,
+            decision_hub: Arc::new(DecisionHub::new()),
         }
     }
 
@@ -267,9 +273,6 @@ impl Fetcher {
     /// Runs the fetcher, processing requests from the priority queues
     pub async fn run(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         let mut lane_counter: u8 = 0;
-
-        // @TODO: Figure out if we still use this
-        let decision_hub = Arc::new(DecisionHub::new());
 
         loop {
             // Check for shutdown
@@ -340,7 +343,6 @@ impl Fetcher {
                 continue;
             }
 
-            // Cl
             let client = self.client.clone();
             let global = self.global_slots.clone();
             let per_origin = self.per_origin.clone();
@@ -349,7 +351,7 @@ impl Fetcher {
             let key_str2 = key_str.clone();
             let inflight_entry2 = inflight_entry.clone();
             let mut shutdown_child = shutdown.clone();
-            let dh_clone = decision_hub.clone();
+            let dh_clone = self.decision_hub.clone();
 
 
             let observer = Arc::new(EngineEventEmitter::new(
@@ -381,7 +383,15 @@ impl Fetcher {
 
                 // Perform the request
                 let result = if should_stream {
-                    perform_streaming(&client, observer.clone(), &req, &cfg, dh_clone.clone()).await
+                    perform_streaming(
+                        &client,
+                        observer.clone(),
+                        &req,
+                        &cfg,
+                        dh_clone.clone(),
+                        self.event_tx.clone(),
+                        // io
+                    ).await
                 } else {
                     perform_buffered(
                         &client,
@@ -404,6 +414,11 @@ impl Fetcher {
             });
         }
     }
+
+    pub async fn fullfill(&self, token: DecisionToken, action: Action) {
+        println!("Fulfilling decision token {:?} with {:?}", token, action);
+        self.decision_hub.fulfill(token, action);
+    }
 }
 
 // Choose per-origin limit based on scheme/alpn (rough heuristic here).
@@ -422,6 +437,8 @@ async fn perform_streaming(
     req: &FetchRequest,
     cfg: &FetcherConfig,
     decision_hub: Arc<DecisionHub>,
+    event_tx: broadcast::Sender<EngineEvent>,
+    io_tx: mpsc::Sender<IoCommand>,
 ) -> FetchResult {
     // Get the response top (headers + peek)
     match fetch_response_top(
@@ -457,19 +474,22 @@ async fn perform_streaming(
 
             match choice {
                 Action::Render => {
-                    let shared = SharedBody::new(SHARED_MAX_CAPACITY);
-                    let shared_arc = Arc::new(shared);
+                    let tab_id = req.tab_id;
+                    let nav_id = req.nav_id;
+                    let final_url = meta.final_url.clone();
+                    let cancel = req.cancel.clone();
+                    let reader = reader;
 
-                    let _ = spawn_pump(
+                    let _doc = render_main_html(
+                        tab_id,
+                        nav_id,
+                        final_url,
                         reader,
-                        PumpTargets { shared: Some(shared_arc.clone()), file_dest: None, peek: peek.to_vec() },
-                        PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d) },
-                        cancel_clone,
-                        observer_clone,
-                        url_clone,
-                    );
-
-                    FetchResult::Stream { meta, peek, shared: shared_arc }
+                        cancel,
+                        DummyHtml5Config::default(),
+                        |evt| { let _ = event_tx.send(evt); },
+                        |fetch_req| { let _ = io_tx.try_send(fetch_req); },
+                    ).await;
                 }
                 Action::Download { dest } => {
                     let handle = spawn_pump(

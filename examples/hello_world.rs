@@ -4,6 +4,7 @@ use gosub_engine::{cookies::DefaultCookieJar, events::EngineEvent, render::Viewp
 use std::sync::Arc;
 use std::time::Duration;
 use http::header;
+use gosub_engine::net::DecisionToken;
 use gosub_engine::net::types::FetchResultMeta;
 
 #[tokio::main]
@@ -156,7 +157,18 @@ async fn main() -> Result<(), EngineError> {
     Ok(())
 }
 
-async fn on_decision_required(tab_handle: TabHandle, nav_id: NavigationId, meta: FetchResultMeta) {
+async fn on_decision_required(
+    tab_handle: TabHandle,
+    nav_id: NavigationId,
+    meta: FetchResultMeta,
+    decision_token: DecisionToken
+) {
+    let ct: String = meta.headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
     let action = if let Some(disp) = meta.headers.get(http::header::CONTENT_DISPOSITION) {
         let s = disp.to_str().unwrap_or_default().to_ascii_lowercase();
         if s.contains("attachment") {
@@ -166,7 +178,7 @@ async fn on_decision_required(tab_handle: TabHandle, nav_id: NavigationId, meta:
         } else {
             Action::Render
         }
-    } else if meta.headers.get(header::CONTENT_TYPE).unwrap() == "text/html" {
+    } else if ct.starts_with("text/html") || ct.starts_with("text/") || ct == "application/json" {
         Action::Render
     } else {
         Action::Download {
@@ -178,6 +190,7 @@ async fn on_decision_required(tab_handle: TabHandle, nav_id: NavigationId, meta:
     let _ = tab_handle.cmd_tx
         .send(TabCommand::SubmitDecision {
             nav_id,
+            decision_token,
             action,
         })
         .await;
@@ -213,9 +226,9 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
             }
         },
         EngineEvent::Navigation { tab_id, event } => match event {
-            NavigationEvent::DecisionRequired { nav_id, meta } => {
+            NavigationEvent::DecisionRequired { nav_id, meta, decision_token } => {
                 // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
-                println!("[event] DecisionRequest found: {tab_id} {nav_id} {meta:?}");
+                println!("[event] DecisionRequest found: {tab_id} {nav_id} DecisionToken: {decision_token:?}");
 
                 if tab_id != tab_handle.tab_id {
                     println!("Warning: DecisionRequired event for unknown tab_id: {tab_id}");
@@ -223,7 +236,7 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
                 }
 
                 // Normally, we should check if the tab_id we get actually matches one of our tabs.
-                on_decision_required(tab_handle, nav_id, meta).await;
+                on_decision_required(tab_handle, nav_id, meta, decision_token).await;
             }
 
             NavigationEvent::Started { nav_id, url } => {
