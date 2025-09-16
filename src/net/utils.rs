@@ -76,15 +76,15 @@ impl Waiter {
                     let _ = tx.send(res.clone());
                 }
             }
-            FetchResult::DownloadStarted { .. } => {}
-            FetchResult::OpenExternal { .. } => {}
-            FetchResult::Cancelled => {}
-            FetchResult::Document { meta, doc } => {
-                let res = FetchResult::Document { meta: meta.clone(), doc: doc.clone() };
-                for (_, tx) in ls.drain(..) {
-                    let _ = tx.send(res.clone());
-                }
-            }
+            // FetchResult::DownloadStarted { .. } => {}
+            // FetchResult::OpenExternal { .. } => {}
+            // FetchResult::Cancelled => {}
+            // FetchResult::Document { meta, doc } => {
+            //     let res = FetchResult::Document { meta: meta.clone(), doc: doc.clone() };
+            //     for (_, tx) in ls.drain(..) {
+            //         let _ = tx.send(res.clone());
+            //     }
+            // }
         }
     }
 }

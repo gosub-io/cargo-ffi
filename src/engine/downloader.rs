@@ -28,7 +28,7 @@ pub fn start_download(
                 nav_id,
                 url: meta.final_url.clone(),
             },
-        }).await;
+        });
 
         let mut file = match tokio::fs::File::create(&dest).await {
             Ok(f) => f,
@@ -40,7 +40,7 @@ pub fn start_download(
                         url: meta.final_url.clone(),
                         error: Arc::new(anyhow!(e)),
                     },
-                }).await;
+                });
                 return;
             }
         };
@@ -89,7 +89,7 @@ pub fn start_download(
                     expected_length: meta.content_length,
                     elapsed: started.elapsed(),
                 },
-            }).await;
+            });
         }
 
         // Ensure data hits disk
@@ -101,6 +101,6 @@ pub fn start_download(
                 nav_id,
                 url: meta.final_url.clone(),
             },
-        }).await;
+        });
     })
 }

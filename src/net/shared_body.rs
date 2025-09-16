@@ -17,14 +17,17 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_core::stream::BoxStream;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::StreamReader;
+use tokio_util::sync::CancellationToken;
 use crate::net::types::NetError;
 
 #[derive(Clone)]
@@ -177,6 +180,141 @@ impl SharedBody {
 
         let combined = head.chain(rest_stream);
         Box::pin(StreamReader::new(combined))
+    }
+}
+
+pub struct ReaderOptions {
+    /// Capacity of the shared body
+    pub capacity: usize,
+    /// Read buffer size
+    pub buf_size: usize,
+    /// Cancellation token
+    pub cancel: Option<CancellationToken>,
+    /// Idle timeout for read operations
+    pub idle_timeout: Option<Duration>,
+    /// Total timeout for the entire read operation
+    pub total_timeout: Option<Duration>,
+    /// Maximum total size to read (if known)
+    pub max_size: Option<u64>,
+}
+
+impl Default for ReaderOptions {
+    fn default() -> Self {
+        Self {
+            capacity: 32,
+            buf_size: 16 * 1024,
+            cancel: None,
+            idle_timeout: None,
+            total_timeout: None,
+            max_size: None,
+        }
+    }
+}
+
+impl SharedBody {
+    pub fn from_reader<R>(mut reader: R, opts: ReaderOptions) -> Arc<Self>
+    where
+        R: AsyncRead + Send + 'static + Unpin,
+    {
+        let sb = Arc::new(SharedBody::new(opts.capacity));
+        let sb_clone = sb.clone();
+
+        // read in background
+        tokio::spawn(async move {
+            let ReaderOptions { capacity: _, buf_size, cancel, idle_timeout, total_timeout, max_size } = opts;
+
+            let deadline = total_timeout.map(|d| Instant::now() + d);
+            let cancel = cancel.unwrap_or_else(CancellationToken::new);
+            let mut buf = vec![0u8; buf_size];
+            let mut total_read: u64 = 0;  // Does NOT take into account the peek buf!
+
+            // Some helper functions
+            let check_total_deadline = |now: Instant| -> Result<(), NetError> {
+                if let Some(dl) = deadline {
+                    if now >= dl {
+                        return Err(NetError::Timeout("total read timeout".to_string()));
+                    }
+                }
+                Ok(())
+            };
+
+            // Make sure we haven't already exceeded the total deadline
+            if let Err(e) = check_total_deadline(Instant::now()) {
+                sb_clone.error(e);
+                return;
+            }
+
+            loop {
+                // User cancelled the read
+                if cancel.is_cancelled() {
+                    sb_clone.error(NetError::Cancelled("read cancelled".to_string()));
+                    return;
+                }
+
+                // Check how much we can read this iteration
+                let read_cap = if let Some(max) = max_size {
+                    let remaining = max.saturating_sub(total_read);
+                    if remaining == 0 {
+                        sb_clone.error(NetError::Io(Arc::new(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "max size reached before read",
+                        ))));
+                    }
+                    remaining.min(buf.len() as u64) as usize
+                } else {
+                    buf.len()
+                };
+
+                // Read with optional idle timeout
+                let read_res = if let Some(idle) = idle_timeout {
+                    timeout(idle, reader.read(&mut buf[..read_cap]))
+                        .await
+                        .map_err(|_| NetError::Timeout("read idle timeout".to_string()))
+                        .and_then(|r| r.map_err(|e| NetError::Io(Arc::new(e))))
+                } else {
+                    reader.read(&mut buf[..read_cap]).await.map_err(|e| NetError::Io(Arc::new(e)))
+                };
+
+                match read_res {
+                    Ok(0) => {
+                        // Eof
+                        sb_clone.finish();
+                        return;
+                    }
+                    Ok(n) => {
+                        // Read n bytes
+                        // last_progress = Instant::now();
+                        total_read = total_read.saturating_add(n as u64);
+
+                        // Push to shared body
+                        sb_clone.push(Bytes::copy_from_slice(&buf[..n]));
+
+                        // Did we hit the max size limit?
+                        if let Some(max) = max_size {
+                            if total_read > max {
+                                sb_clone.error(NetError::Io(Arc::new(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "max size exceeded during read",
+                                ))));
+                                return;
+                            }
+                        }
+
+                        // Did we hit the total deadline?
+                        if let Err(e) = check_total_deadline(Instant::now()) {
+                            sb_clone.error(e);
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        sb_clone.error(e);
+                        return;
+                    }
+                }
+            }
+        });
+
+        sb
     }
 }
 

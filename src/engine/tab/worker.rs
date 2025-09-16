@@ -1,6 +1,6 @@
 use std::io::Cursor;
 use crate::engine::events::{CancelReason, EngineEvent, LoadEvent, NavigationEvent};
-use crate::engine::BrowsingContext;
+use crate::engine::{BrowsingContext, UaPolicy};
 use crate::events::{IoCommand, TabCommand};
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::{DevicePixelRatio, Viewport};
@@ -18,12 +18,14 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::net::{NavigationError, Resource, ResourceLoadResult, SharedBody};
+use crate::net::{decide_handling, NavigationError, RequestDestination, Resource, ResourceLoadResult, SharedBody};
 use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta, Initiator, Priority, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
 use tokio::time::{sleep, Duration, Instant};
+use crate::Action;
 use crate::engine::types::{EventChannel, NavigationId, RequestId};
+use crate::net::events::NetEvent;
 use crate::net::loader::{Document, NavigationOutput, ResourceMeta};
 use crate::net::mime::MimeKind;
 
@@ -233,7 +235,7 @@ impl TabWorker {
 
                 // Set the document into the browsing context
                 if let Resource::Html(doc) = resp.resource {
-                    self.context.set_raw_html(doc.body().as_str())
+                    self.context.set_raw_html(doc.raw_html.as_str())
                 }
                 // self.context.set_raw_html(String::from_utf8_lossy(resp.body.as_slice()).as_ref());
 
@@ -447,10 +449,11 @@ impl TabWorker {
             path=%request_url.path(),
         );
 
+        // Spawn the actual fetcher into a seperate task
         tokio::spawn(async move {
             let _e = span.enter();
 
-            // Submit a streaming fetch for the main document
+            // Submit a streaming fetch request
             let (tx_fetch, rx_fetch) = oneshot::channel::<FetchResult>();
             let req = FetchRequest {
                 tab_id,
@@ -495,100 +498,274 @@ impl TabWorker {
                 }
             };
 
-            // Handle fetch result
-            match fetch_result {
-                FetchResult::Stream { meta, peek, shared } => {
-                    let reader = SharedBody::combined_reader(peek, shared);
-
-                    // Do some progress reporting. TTFB. We have a Progress EngineEvent for this
-
-                    let doc = parse_main_document_stream(
-                        tab_id,
-                        nav_id,
-                        meta.final_url.clone(),
-                        reader,
-                        cancel_child.clone(),
-                        ignore_cache,
-                        event_tx.clone()
-                    ).await;
-
-                    if doc.is_err() {
-                        let _ = tx_done.send((nav_id, Err(NavigationError::Other(doc.err().unwrap()))));
-                        return;
-                    }
-
-                    let doc = doc.unwrap();
-
-                    let resource_meta = ResourceMeta {
-                        mime: MimeKind::Html,
-                        final_url: meta.final_url.clone(),
-                        content_length: Some(doc.0.len() as u64),
-                        etag: None,
-                        charset: None,
-                        last_modified: None,
-                        headers: meta.headers.clone(),
-                    };
-
-                    let _ = tx_done.send((nav_id, Ok(NavigationOutput{
-                        meta: resource_meta,
-                        resource: Resource::Html(doc),
-                    })));
-                }
-                FetchResult::Buffered { meta, body } => {
-                    let doc = parse_main_document_bytes(
-                        tab_id,
-                        nav_id,
-                        meta.final_url.clone(),
-                        &body,
-                        ignore_cache,
-                        event_tx.clone()
-                    ).await;
-
-                    if doc.is_err() {
-                        let _ = tx_done.send((nav_id, Err(NavigationError::Other(doc.err().unwrap()))));
-                        return;
-                    }
-
-                    let doc = doc.unwrap();
-
-                    let resource_meta = ResourceMeta {
-                        mime: MimeKind::Html,
-                        final_url: meta.final_url.clone(),
-                        content_length: Some(doc.0.len() as u64),
-                        etag: None,
-                        charset: None,
-                        last_modified: None,
-                        headers: meta.headers.clone(),
-                    };
-
-                    let _ = tx_done.send((nav_id, Ok(NavigationOutput{
-                        meta: resource_meta,
-                        resource: Resource::Html(Document(String::from_utf8_lossy(body.as_ref()).to_string())),
-                    })));
-                }
+            // At this point we don't really care if the resource was streamed or buffered. We still need to
+            // decide on how we should handle the resource.
+            let (meta, peek, shared, body) = match fetch_result {
+                FetchResult::Stream { meta, peek, shared } => (meta, peek.clone(), Some(shared), None),
+                FetchResult::Buffered { meta, body } => (meta, body.slice(0..5 * 1024).to_vec(), None, Some(body)),
                 FetchResult::Error(err) => {
                     let _ = tx_done.send((nav_id, Err(NavigationError::NetworkError(format!("Fetch error: {}", err)))));
+                    return;
                 }
-                FetchResult::DownloadStarted { .. } => {}
-                FetchResult::OpenExternal { .. } => {}
-                FetchResult::Cancelled => {}
-                FetchResult::Document { meta, doc } => {
-                    let resource_meta = ResourceMeta {
-                        mime: MimeKind::Html,
-                        final_url: meta.final_url.clone(),
-                        content_length: Some(doc.0.len() as u64),
-                        etag: None,
-                        charset: None,
-                        last_modified: None,
-                        headers: meta.headers.clone(),
+            };
+
+            let policy = UaPolicy::default();
+            let outcome = decide_handling(&meta, RequestDestination::Navigate, &peek, &policy);
+
+            let forced = self.runtime.pending_action.take(); // e.g., set by Ctrl+U handler
+            let decision = match forced {
+                Some(Action::ViewSource) => HandlingDecision::Render(RenderTarget::TextViewer), // escape+highlight in viewer
+                _ => outcome.decision.clone(),
+            };
+
+            let nav_output = match decision {
+                HandlingDecision::Render(RenderTarget::HtmlParser) => {
+                    if let Some(reader) = shared {
+                        let doc = parse_main_document_stream(
+                            req.tab_id, req.nav_id, meta.final_url.clone(), reader, req.cancel.clone(),
+                            DummyHtml5Config::default(),
+                            |evt| { let _ = event_tx.send(evt); },
+                            |fetch_req| { let _ = io_tx.send(fetch_req); },
+                        ).await.unwrap_or(Document("".to_string()));
+                        NavigationResult::Document { meta, doc }
+                    } else {
+                        let bytes = body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek);
+                        let doc = parse_main_document_bytes(
+                            req.tab_id, req.nav_id, meta.final_url.clone(), bytes,
+                            ignore_cache, event_tx.clone()
+                        ).await.unwrap_or(Document("".to_string()));
+                        NavigationResult::Document { meta, doc }
+                    }
+                }
+                HandlingDecision::Render(RenderTarget::ImageDecoder) => NavigationResult::RenderedByViewer { meta /* + viewer handle */ }
+                HandlingDecision::Render(RenderTarget::PdfViewer) => NavigationResult::RenderedByViewer { meta /* + viewer handle */ }
+                HandlingDecision::Render(RenderTarget::MediaPipeline) => NavigationResult::RenderedByViewer { meta /* + viewer handle */ }
+                HandlingDecision::Render(RenderTarget::TextViewer) => NavigationResult::RenderedByViewer { meta /* + viewer handle */ }
+                HandlingDecision::Download { path } => {
+                    // If we have a path, go; otherwise ask the UA once for a destination.
+                    let dest = match path {
+                        Some(p) => p,
+                        None => {
+                            // If policy allows auto-download, choose default path here.
+                            if policy.allow_download_without_user_activation && self.downloads.default_dir.is_some() {
+                                self.downloads.suggest_path(&meta, &outcome)
+                            } else {
+                                // Ask UA: this is the ONLY time we need a DecisionRequest.
+                                let (token, decision_rx) = decision_hub.register();
+                                observer.on_event(NetEvent::DecisionRequired {
+                                    url: meta.final_url.clone(),
+                                    status: meta.status,
+                                    headers: meta.headers.clone(),
+                                    content_length: meta.content_length,
+                                    content_type: meta.headers.get("content-type").and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
+                                    peek: peek.clone(),
+                                    token,
+                                });
+                                match tokio::select! {
+                        res = decision_rx => res.unwrap_or(Action::Cancel),
+                        _ = req.cancel.cancelled() => Action::Cancel,
+                        _ = tokio::time::sleep(Duration::from_secs(30)) => Action::Cancel,
+                    } {
+                                    Action::Download { dest } => dest,
+                                    Action::Cancel | _ => {
+                                        observer.on_event(NetEvent::Cancelled { url: meta.final_url.clone(), reason: "UA Cancelled" });
+                                        return; // or NavigationResult::Cancelled
+                                    }
+                                }
+                            }
+                        }
                     };
 
-                    let _ = tx_done.send((nav_id, Ok(NavigationOutput{
-                        meta: resource_meta,
-                        resource: Resource::Html(doc),
-                    })));
+                    if let Some(reader) = shared {
+                        let handle = spawn_pump(
+                            reader,
+                            PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek.clone() },
+                            PumpCfg {
+                                idle: cfg.read_idle_timeout,
+                                total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d),
+                            },
+                            req.cancel.clone(),
+                            observer.clone(),
+                            meta.final_url.clone(),
+                        );
+                        NavigationResult::DownloadStarted { meta, dest, handle: Arc::new(handle) }
+                    } else {
+                        // Buffered: write bytes directly
+                        // fs::write(&dest, body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek))?;
+                        NavigationResult::DownloadFinished { meta, dest }
+                    }
+                }
+                HandlingDecision::Block(reason) => {
+                    // Fail the nav; browsers don't download subresource mismatches
+                    self.send_event(EngineEvent::Navigation {
+                        tab_id: req.tab_id,
+                        event: NavigationEvent::Failed {
+                            nav_id: Some(req.nav_id),
+                            url: meta.final_url.clone(),
+                            error: Arc::new(NavigationError::Blocked(format!("{:?}", reason))),
+                        },
+                    });
+                    return;
+                }
+                HandlingDecision::OpenExternal => {
+                    // If you support this: stage temp file, pump to disk, then hand off.
+                    // Otherwise, treat like Download + post-open.
+                    // (You can still ask UA to confirm/open.)
+                    NavigationResult::OpenExternalStarted { meta /* ... */ }
+                }
+                HandlingDecision::Cancel => {
+                    observer.on_event(NetEvent::Cancelled { url: meta.final_url.clone(), reason: "Cancelled by policy" });
+                    NavigationResult::Cancelled
                 }
             }
+
+            //
+            //     // We've got the data (either top of a stream, or complete buffered response). Next we can ask
+            // // the UA to decide what we need to do with it
+            // let (token, decision_rx) = decision_hub.register();
+            //
+            // observer.on_event(NetEvent::DecisionRequired {
+            //     url: meta.final_url.clone(),
+            //     status: meta.status,
+            //     headers: meta.headers.clone(),
+            //     content_length: meta.content_length,
+            //     content_type: meta.headers.get("content-type").and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
+            //     peek: peek.clone(),
+            //     token,
+            // });
+            //
+            // let action = tokio::select! {
+            //     res = decision_rx => res.unwrap_or(Action::Cancel),
+            //     _ = req.cancel.cancelled() => Action::Cancel,
+            //     _ = tokio::time::sleep(Duration::from_secs(30)) => Action::Cancel, // @todo: magic number
+            // };
+            //
+            // // Now we know how to proceed
+            //
+            // let cancel_clone = req.cancel.clone();
+            // let observer_clone = observer.clone();
+            // let url_clone = meta.final_url.clone();
+            //
+            // let nav_output = match action {
+            //     Action::Render => {
+            //         let tab_id = req.tab_id;
+            //         let nav_id = req.nav_id;
+            //         let final_url = meta.final_url.clone();
+            //         let cancel = req.cancel.clone();
+            //
+            //         let doc = if let Some(reader) = shared {
+            //             // Streaming body
+            //             parse_main_document_stream(
+            //                 tab_id,
+            //                 nav_id,
+            //                 final_url.clone(),
+            //                 reader,
+            //                 cancel.clone(),
+            //                 DummyHtml5Config::default(),
+            //                 |evt| { let _ = event_tx.send(evt); },
+            //                 |fetch_req| { let _ = io_tx.send(fetch_req); }
+            //             )
+            //         } else {
+            //             parse_main_document_bytes(
+            //                 tab_id,
+            //                 nav_id,
+            //                 final_url.clone(),
+            //                 body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek),
+            //                 ignore_cache,
+            //                 event_tx.clone()
+            //             )
+            //         };
+            //
+            //         NavigationResult::Document({ meta, doc: doc.await.unwrap_or(Document("".to_string())) })
+            //     }
+            //     Action::Download { dest } => {
+            //         if let Some(reader) = shared {
+            //             let handle = spawn_pump(
+            //                 reader,
+            //                 PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek_to_vec() },
+            //                 PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map | d | d + Instant::now() },
+            //                 cancel_clone,
+            //                 observer_clone,
+            //                 url_clone,
+            //             );
+            //             NavigationResult::DownloadStarted { meta, dest, handle: Arc::new(handle) }
+            //         } else {
+            //             // Downlaod can be saved directly from buffered data
+            //             NavigationResult::DownloadFinished { meta, dest }
+            //         }
+            //     }
+            //     Action::OpenExternal => {
+            //         let tmp_dest = match stage_temp_path_for(&meta.final_url) {
+            //             Ok(p) => p,
+            //             Err(e) => {
+            //                 return FetchResult::Error(NetError::Io(Arc::new(e)));
+            //             }
+            //         };
+            //
+            //         if let Some(reader) = shared {
+            //             let handle = spawn_pump(
+            //                 reader,
+            //                 PumpTargets { shared: None, file_dest: Some(tmp_dest.path().to_path_buf()), peek: peek_to_vec() },
+            //                 PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map | d | d + Instant::now() },
+            //                 cancel_clone,
+            //                 observer_clone,
+            //                 url_clone,
+            //             );
+            //
+            //             NavigationResult::DownloadStarted { meta, dest: tmp_dest.path().to_path_buf(), handle: Arc::new(handle) }
+            //         } else {
+            //             // Download can be saved direvtly from buffered data
+            //             NavigationResult::DownloadFinished { meta, dest }
+            //         }
+            //     }
+            //     Action::RenderAndMirror { dest } => {
+            //         let shared = Sharedbody::new(SHARED_MAX_CAPACITY);
+            //         let shared_arc = Arc::new(shared);
+            //
+            //         let _ = spawn_pump(
+            //             reader,
+            //             PumpTargets { shared: Some(shared_arc.clone()), file_dest: Some(dest), peek: peek_to_vec() },
+            //             PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map | d | d + Instant::now() },
+            //             cancel_clone,
+            //             observer_clone,
+            //             url_clone,
+            //         );
+            //
+            //         let tab_id = req.tab_id;
+            //         let nav_id = req.nav_id;
+            //         let final_url = meta.final_url.clone();
+            //         let cancel = req.cancel.clone();
+            //
+            //         let doc = if let Some(reader) = shared {
+            //             // Streaming body
+            //             parse_main_document_stream(
+            //                 tab_id,
+            //                 nav_id,
+            //                 final_url.clone(),
+            //                 reader,
+            //                 cancel.clone(),
+            //                 DummyHtml5Config::default(),
+            //                 |evt| { let _ = event_tx.send(evt); },
+            //                 |fetch_req| { let _ = io_tx.send(fetch_req); }
+            //             )
+            //         } else {
+            //             parse_main_document_bytes(
+            //                 tab_id,
+            //                 nav_id,
+            //                 final_url.clone(),
+            //                 body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek),
+            //                 ignore_cache,
+            //                 event_tx.clone()
+            //             )
+            //         };
+            //     }
+            //     Action::Cancel => {
+            //         observer.on_event(NetEvent::Cancelled { url: meta.final_url.clone(), reason: "UA Cancelled" })
+            //         NavigationOutput::Cancelled
+            //     }
+            // };
+
+            let _ = tx_done.send((nav_id, Ok(nav_output)));
         });
 
         self.runtime.load = Some(InflightLoad { nav_id, cancel: cancel.clone(), rx: rx_done });

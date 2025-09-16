@@ -1,15 +1,12 @@
 use bytes::Bytes;
 use std::fmt::{Debug, Display};
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use http::{header, HeaderMap, Method};
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::engine::types::RequestId;
-use crate::html::DummyDocument;
 use crate::NavigationId;
 use crate::net::shared_body::SharedBody;
 use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
@@ -250,17 +247,17 @@ pub struct FetchRequest {
 /// FetchResult defines the resource response. Either a stream or buffered response are possible
 #[derive(Clone)]
 pub enum FetchResult {
-    Document { meta: FetchResultMeta, doc: DummyDocument },
+    // Document { meta: FetchResultMeta, doc: DummyDocument },
     /// Streamed response body
     Stream { meta: FetchResultMeta, peek: Vec<u8>, shared: Arc<SharedBody> },
     /// Buffered response body
     Buffered { meta: FetchResultMeta, body: Bytes },
     /// File download started (for large files, or files that should be saved directly)
-    DownloadStarted { meta: FetchResultMeta, dest: PathBuf, handle: Arc<JoinHandle<Result<Option<PathBuf>, NetError>>> },
+    // DownloadStarted { meta: FetchResultMeta, dest: PathBuf, handle: Arc<JoinHandle<Result<Option<PathBuf>, NetError>>> },
     /// File download completed and ready to be opened externally
-    OpenExternal { meta: FetchResultMeta, staged_path: PathBuf },
+    // OpenExternal { meta: FetchResultMeta, staged_path: PathBuf },
     /// Request was cancelled
-    Cancelled,
+    // Cancelled,
     /// Network error
     Error(NetError),
 }
@@ -278,28 +275,28 @@ impl Debug for FetchResult {
                 .field("body_len", &body.len())
                 .finish(),
             FetchResult::Error(e) => f.debug_tuple("FetchResult::Error").field(e).finish(),
-            FetchResult::DownloadStarted { meta, dest, handle } => {
-                f.debug_struct("FetchResult::DownloadStarted")
-                    .field("meta", meta)
-                    .field("dest", dest)
-                    .field("handle", handle)
-                    .finish()
-            }
-            FetchResult::OpenExternal { meta, staged_path } => {
-                f.debug_struct("FetchResult::OpenExternal")
-                    .field("meta", meta)
-                    .field("staged_path", staged_path)
-                    .finish()
-            }
-            FetchResult::Cancelled => {
-                f.debug_struct("FetchResult::Cancelled").finish()
-            }
-            FetchResult::Document { meta, doc } => {
-                f.debug_struct("FetchResult::Document")
-                    .field("meta", meta)
-                    .field("doc_title", &doc.title)
-                    .finish()
-            }
+            // FetchResult::DownloadStarted { meta, dest, handle } => {
+            //     f.debug_struct("FetchResult::DownloadStarted")
+            //         .field("meta", meta)
+            //         .field("dest", dest)
+            //         .field("handle", handle)
+            //         .finish()
+            // }
+            // FetchResult::OpenExternal { meta, staged_path } => {
+            //     f.debug_struct("FetchResult::OpenExternal")
+            //         .field("meta", meta)
+            //         .field("staged_path", staged_path)
+            //         .finish()
+            // }
+            // FetchResult::Cancelled => {
+            //     f.debug_struct("FetchResult::Cancelled").finish()
+            // }
+            // FetchResult::Document { meta, doc } => {
+            //     f.debug_struct("FetchResult::Document")
+            //         .field("meta", meta)
+            //         .field("doc_title", &doc.title)
+            //         .finish()
+            // }
         }
     }
 }

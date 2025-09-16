@@ -2,27 +2,23 @@
 //! and scheduling HTTP requests. It includes mechanisms for prioritizing requests, coalescing
 //! identical requests, and handling streaming or buffered responses.
 
-use crate::net::events::{NetEvent, NetObserver};
+use crate::net::events::NetObserver;
 use crate::net::fetch::{fetch_response_complete, fetch_response_top, ResponseTop};
-use crate::net::shared_body::SharedBody;
+use crate::net::shared_body::{ReaderOptions, SharedBody};
 use crate::net::types::{FetchRequest, FetchResult, NetError, Priority};
 use crate::net::utils::{short_url, Waiter};
 use crate::util::spawn_named;
 use bytes::Bytes;
 use dashmap::{DashMap, Entry};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 use tokio::sync::{Notify, Semaphore};
 use url::Url;
 use crate::Action;
 use crate::engine::types::{EventChannel, IoChannel};
-use crate::html::DummyHtml5Config;
 use crate::net::decider::DecisionHub;
 use crate::net::DecisionToken;
 use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
-use crate::net::fs_utils::stage_temp_path_for;
-use crate::net::pump::{spawn_pump, PumpCfg, PumpTargets};
 
 /// How many shared consumers can listen for a resource
 const SHARED_MAX_CAPACITY: usize = 32;
@@ -358,9 +354,6 @@ impl Fetcher {
             let key_str2 = key_str.clone();
             let inflight_entry2 = inflight_entry.clone();
             let mut shutdown_child = shutdown.clone();
-            let dh_clone = self.decision_hub.clone();
-            let io_tx_clone = self.io_tx.clone();
-            let event_tx_clone = self.event_tx.clone();
 
             let observer = Arc::new(EngineEventEmitter::new(
                 req.tab_id,
@@ -396,23 +389,25 @@ impl Fetcher {
                         observer.clone(),
                         &req,
                         &cfg,
-                        dh_clone.clone(),
-                        event_tx_clone.clone(),
-                        io_tx_clone.clone(),
                     ).await
                 } else {
                     perform_buffered(
                         &client,
                         observer.clone(),
                         &req,
-                        cfg.read_idle_timeout,
-                        cfg.total_body_timeout,
+                        &cfg,
                     )
                     .await
                 };
 
+                // If we found an error, convert it to a FetchResult::Error
+                let fr = match &result {
+                    Ok(fetch_result) => fetch_result.clone(),
+                    Err(e) => FetchResult::Error(e.clone()),
+                };
+
                 // Fanout to all listeners
-                inflight_entry2.waiter.finish(result).await;
+                inflight_entry2.waiter.finish(fr).await;
 
                 // We can remove our inflight entry now
                 inflight.remove(&key_str2);
@@ -444,117 +439,30 @@ async fn perform_streaming(
     observer: Arc<dyn NetObserver + Send + Sync>,
     req: &FetchRequest,
     cfg: &FetcherConfig,
-    decision_hub: Arc<DecisionHub>,
-    event_tx: EventChannel,
-    io_tx: IoChannel,
-) -> FetchResult {
+) -> Result<FetchResult, NetError> {
     // Get the response top (headers + peek)
-    match fetch_response_top(
+    let ResponseTop { meta, peek, reader} = fetch_response_top(
         Arc::new(client.clone()),
         req.key_data.url.clone(),
         req.cancel.clone(),
         observer.clone(),
     )
-    .await
-    {
-        Ok(ResponseTop { meta, peek, reader }) => {
+    .await?;
 
-            let (token, decision_rx) = decision_hub.register();
+    let opts = ReaderOptions {
+        capacity: SHARED_MAX_CAPACITY,
+        buf_size: 16 * 1024,
+        cancel: Some(req.cancel.clone()),
+        idle_timeout: Some(cfg.read_idle_timeout),
+        total_timeout: cfg.total_body_timeout,
+        max_size: None,
+    };
 
-            observer.on_event(NetEvent::DecisionRequired {
-                url: meta.final_url.clone(),
-                status: meta.status,
-                headers: meta.headers.clone(),
-                content_length: meta.content_length,
-                peek: peek.clone(),
-                token,
-            });
-
-            let choice = tokio::select! {
-                res = decision_rx => res.unwrap_or(Action::Cancel),
-                _ = req.cancel.cancelled() => Action::Cancel,
-                _ = tokio::time::sleep(Duration::from_secs(5)) => Action::Cancel,
-            };
-
-            let cancel_clone = req.cancel.clone();
-            let observer_clone = observer.clone();
-            let url_clone = meta.final_url.clone();
-
-            match choice {
-                Action::Render => {
-                    let tab_id = req.tab_id;
-                    let nav_id = req.nav_id;
-                    let final_url = meta.final_url.clone();
-                    let cancel = req.cancel.clone();
-                    let reader = reader;
-
-                    let doc = render_main_html(
-                        tab_id,
-                        nav_id,
-                        final_url,
-                        reader,
-                        cancel,
-                        DummyHtml5Config::default(),
-                        |evt| { let _ = event_tx.send(evt); },
-                        |fetch_req| { let _ = io_tx.try_send(fetch_req); },
-                    ).await;
-
-                    FetchResult::Document { meta, doc }
-                }
-                Action::Download { dest } => {
-                    let handle = spawn_pump(
-                        reader,
-                        PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek.to_vec() },
-                        PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d) },
-                        cancel_clone,
-                        observer_clone,
-                        url_clone,
-                    );
-
-                    FetchResult::DownloadStarted { meta, dest, handle: Arc::new(handle) }
-                }
-                Action::OpenExternal => {
-                    let tmp_dest = match stage_temp_path_for(&meta.final_url) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return FetchResult::Error(NetError::Io(Arc::new(e)));
-                        }
-                    };
-
-                    let handle = spawn_pump(
-                        reader,
-                        PumpTargets { shared: None, file_dest: Some(tmp_dest.path().to_path_buf()), peek: peek.to_vec() },
-                        PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d) },
-                        cancel_clone,
-                        observer_clone,
-                        url_clone,
-                    );
-
-                    FetchResult::DownloadStarted { meta, dest: tmp_dest.path().to_path_buf(), handle: Arc::new(handle) }
-                }
-                Action::RenderAndMirror { dest } => {
-                    let shared = SharedBody::new(SHARED_MAX_CAPACITY);
-                    let shared_arc = Arc::new(shared);
-
-                    let _ = spawn_pump(
-                        reader,
-                        PumpTargets { shared: Some(shared_arc.clone()), file_dest: Some(dest), peek: peek.to_vec() },
-                        PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d) },
-                        cancel_clone,
-                        observer_clone,
-                        url_clone,
-                    );
-
-                    FetchResult::Stream { meta, peek, shared: shared_arc }
-                }
-                Action::Cancel => {
-                    observer.on_event(NetEvent::Cancelled { url: meta.final_url.clone(), reason: "UA cancelled" });
-                    FetchResult::Cancelled
-                }
-            }
-        }
-        Err(e) => FetchResult::Error(e),
-    }
+    Ok(FetchResult::Stream {
+        meta,
+        peek,
+        shared: SharedBody::from_reader(reader, opts),
+    })
 }
 
 
@@ -566,26 +474,22 @@ async fn perform_buffered(
     observer: Arc<dyn NetObserver + Send + Sync>,
     // Actual request
     req: &FetchRequest,
-    // Max timeout between reads
-    read_idle_timeout: Duration,
-    // Total timeout
-    total_timeout: Option<Duration>,
-) -> FetchResult {
-    match fetch_response_complete(
+    // Config
+    cfg: &FetcherConfig,
+) -> Result<FetchResult, NetError> {
+    let (meta, body) = fetch_response_complete(
         Arc::new(client.clone()),
         req.key_data.url.clone(),
         req.cancel.clone(),
         observer,
         req.max_bytes,
-        read_idle_timeout,
-        total_timeout,
+        cfg.read_idle_timeout,
+        cfg.total_body_timeout,
     )
-    .await
-    {
-        Ok((meta, body)) => FetchResult::Buffered {
-            meta,
-            body: Bytes::from(body),
-        },
-        Err(e) => FetchResult::Error(e),
-    }
+    .await?;
+
+    Ok(FetchResult::Buffered {
+        meta,
+        body: Bytes::from(body),
+    })
 }

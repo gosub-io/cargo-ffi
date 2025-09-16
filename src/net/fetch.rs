@@ -12,7 +12,6 @@ use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-
 /// Peek buffer size (first bytes of body). Used for detecting mime type
 const PEEK_MAX: usize = 5 * 1024;
 /// Maximum number of redirects allowed

@@ -2,7 +2,7 @@ use crate::net::fetcher::{Fetcher, FetcherConfig};
 use crate::net::types::FetchRequest;
 use crate::util::spawn_named;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use crate::engine::types::{EventChannel, IoChannel};
 use crate::events::IoCommand;
@@ -125,7 +125,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn driver_starts_and_shuts_down_cleanly() {
-        let (tx, _rx) = broadcast::channel(16);
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
         let cfg = test_cfg();
         let handle = spawn_io_thread(cfg, tx.clone());
@@ -141,7 +141,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn multiple_subscribers_do_not_block_shutdown() {
-        let (tx, _rx) = broadcast::channel(16);
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
         let cfg = test_cfg();
         let handle = spawn_io_thread(cfg, tx.clone());
@@ -164,7 +164,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn shutdown_signal_stops_driver_even_without_submissions() {
-        let (tx, _rx) = broadcast::channel(16);
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
         let cfg = test_cfg();
         let handle = spawn_io_thread(cfg, tx.clone());
@@ -182,7 +182,7 @@ mod tests {
     // and (b) issuing shutdown. This ensures both branches are exercised over time.
     #[tokio::test(flavor = "current_thread")]
     async fn dropping_all_producers_plus_shutdown_is_clean() {
-        let (tx, _rx) = broadcast::channel(16);
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
         let cfg = test_cfg();
         let handle = spawn_io_thread(cfg, tx.clone());
