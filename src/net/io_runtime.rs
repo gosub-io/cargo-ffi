@@ -4,12 +4,13 @@ use crate::util::spawn_named;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
-use crate::events::{EngineEvent, IoCommand};
+use crate::engine::types::{EventChannel, IoChannel};
+use crate::events::IoCommand;
 
 /// IoHandle is the handle that controls the IO thread.
 pub struct IoHandle {
     // Channel to submit fetch requests
-    tx_submit: mpsc::UnboundedSender<IoCommand>,
+    tx_submit: IoChannel,
     // Send "true" when we want to shut down the IO thread
     shutdown_tx: watch::Sender<bool>,
     // Join handle for shutdown sync
@@ -46,7 +47,7 @@ impl IoHandle {
         }
     }
 
-    pub fn subscribe(&self) -> mpsc::UnboundedSender<IoCommand> {
+    pub fn subscribe(&self) -> IoChannel {
         self.tx_submit.clone()
     }
 }
@@ -54,12 +55,14 @@ impl IoHandle {
 /// Spawns the IO thread and runs a single fetcher on top. If needed, we can expand this system to
 /// run multiple fetchers on different OS threads for instance, but most likely the fetching itself
 /// isn't the biggest bottleneck.
-pub fn spawn_io_thread(cfg: FetcherConfig, event_tx: broadcast::Sender<EngineEvent>) -> IoHandle {
+pub fn spawn_io_thread(cfg: FetcherConfig, event_tx: EventChannel) -> IoHandle {
     let (tx_submit, mut rx_submit) = mpsc::unbounded_channel::<IoCommand>();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
+    let io_tx = tx_submit.clone();
+
     let join_handle = spawn_named("I/O Thread", async move {
-        let fetcher = Arc::new(Fetcher::new(cfg, event_tx.clone()));
+        let fetcher = Arc::new(Fetcher::new(cfg, event_tx.clone(), io_tx.clone()));
         let cloned_fetcher = fetcher.clone();
         let cloned_shutdown_rx = shutdown_rx.clone();
 

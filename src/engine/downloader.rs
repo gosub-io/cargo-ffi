@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use anyhow::anyhow;
-use tokio::sync::mpsc;
-use crate::engine::types::NavigationId;
+use crate::engine::types::{EventChannel, NavigationId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
 use crate::events::{EngineEvent, NavigationEvent};
@@ -17,7 +16,7 @@ pub fn start_download(
     meta: FetchResultMeta,
     mut stream: BodyStream,
     dest: PathBuf,
-    event_tx: mpsc::Sender<EngineEvent>,
+    event_tx: EventChannel,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let started = Instant::now();

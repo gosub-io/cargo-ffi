@@ -2,7 +2,7 @@ pub fn start_document_pipeline(
     meta: ResponseMeta,
     stream: BodyStream,
     cancel: CancellationToken,
-    event_tx: mscp::Sender<EngineEvent>,
+    event_tx: EventChannel,
 ) {
     tokio::spawn(async move {
         // let res = parse_main_document_stream(

@@ -1,5 +1,11 @@
 use std::fmt::Display;
 use uuid::Uuid;
+use crate::events::{EngineEvent, IoCommand, TabCommand};
+
+// Defined channels for communication
+pub type EventChannel = tokio::sync::broadcast::Sender<EngineEvent>;
+pub type IoChannel = tokio::sync::mpsc::UnboundedSender<IoCommand>;
+pub type TabChannel = tokio::sync::mpsc::Sender<TabCommand>;
 
 /// Used to send back which action needs to be taken for a navigation request.
 /// After the engine reads the headers and the first xKb bytes, it will return

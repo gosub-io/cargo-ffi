@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::engine::types::RequestId;
+use crate::html::DummyDocument;
 use crate::NavigationId;
 use crate::net::shared_body::SharedBody;
 use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
@@ -249,6 +250,7 @@ pub struct FetchRequest {
 /// FetchResult defines the resource response. Either a stream or buffered response are possible
 #[derive(Clone)]
 pub enum FetchResult {
+    Document { meta: FetchResultMeta, doc: DummyDocument },
     /// Streamed response body
     Stream { meta: FetchResultMeta, peek: Vec<u8>, shared: Arc<SharedBody> },
     /// Buffered response body
@@ -291,6 +293,12 @@ impl Debug for FetchResult {
             }
             FetchResult::Cancelled => {
                 f.debug_struct("FetchResult::Cancelled").finish()
+            }
+            FetchResult::Document { meta, doc } => {
+                f.debug_struct("FetchResult::Document")
+                    .field("meta", meta)
+                    .field("doc_title", &doc.title)
+                    .finish()
             }
         }
     }

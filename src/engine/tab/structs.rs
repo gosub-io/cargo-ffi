@@ -1,7 +1,5 @@
-use crate::events::EngineEvent;
-use crate::events::TabCommand;
 use crate::tab::TabId;
-use tokio::sync::{broadcast, mpsc};
+use crate::engine::types::{EventChannel, TabChannel};
 use crate::tab::services::EffectiveTabServices;
 
 /// Arguments required to spawn a new tab task.
@@ -10,9 +8,9 @@ pub struct TabSpawnArgs {
     /// Tab Id
     pub tab_id: TabId,
     /// Receive channel for commands for the tab
-    pub cmd_rx: mpsc::Receiver<TabCommand>,
+    pub cmd_rx: TabChannel,
     /// Send channel for events from the tab to the UA
-    pub event_tx: broadcast::Sender<EngineEvent>,
+    pub event_tx: EventChannel,
     /// Services available to the tab
     pub services: EffectiveTabServices,
 }

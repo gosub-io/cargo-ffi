@@ -3,7 +3,7 @@ use crate::render::Viewport;
 use crate::tab::TabId;
 use crate::EngineError;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use crate::engine::types::TabChannel;
 use crate::tab::sink::TabSink;
 
 /// A handle to a running [`Tab`](crate::tab).
@@ -21,7 +21,7 @@ pub struct TabHandle {
     /// The unique identifier of the tab.
     pub tab_id: TabId,
     /// Channel for sending commands to the tab task.
-    pub cmd_tx: mpsc::Sender<TabCommand>,
+    pub cmd_tx: TabChannel,
     /// Shared sink for tab-specific outputs (e.g. rendering, events).
     pub sink: Arc<TabSink>,
 }

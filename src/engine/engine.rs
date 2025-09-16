@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
-use crate::events::IoCommand;
+use crate::engine::types::{EventChannel, IoChannel};
 use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
 use crate::util::spawn_named;
 
@@ -57,11 +57,11 @@ pub struct EngineContext {
     /// Active render backend for the engine.
     pub backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
     /// Event sender
-    pub event_tx: broadcast::Sender<EngineEvent>,
+    pub event_tx: EventChannel,
     /// Global engine configuration
     pub config: Arc<EngineConfig>,
     /// I/O thread handle
-    pub io_tx: Arc<RwLock<Option<mpsc::UnboundedSender<IoCommand>>>>,
+    pub io_tx: Arc<RwLock<Option<IoChannel>>>,
 }
 
 impl GosubEngine {

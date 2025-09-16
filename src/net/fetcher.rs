@@ -13,10 +13,10 @@ use dashmap::{DashMap, Entry};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc, time::Duration};
-use tokio::sync::{broadcast, mpsc, Notify, Semaphore};
+use tokio::sync::{Notify, Semaphore};
 use url::Url;
 use crate::Action;
-use crate::events::{EngineEvent, IoCommand};
+use crate::engine::types::{EventChannel, IoChannel};
 use crate::html::DummyHtml5Config;
 use crate::net::decider::DecisionHub;
 use crate::net::DecisionToken;
@@ -175,7 +175,9 @@ pub struct Fetcher {
     wake: Notify,
 
     /// Event channel to emit engine events
-    event_tx: broadcast::Sender<EngineEvent>,
+    event_tx: EventChannel,
+    /// Io channel to send IO commands (fetching subresources, etc.)
+    io_tx: IoChannel,
 
     /// Decision hub for handling user decisions on requests
     decision_hub: Arc<DecisionHub>,
@@ -183,7 +185,11 @@ pub struct Fetcher {
 
 impl Fetcher {
     /// Creates a new `Fetcher` instance with the given configuration
-    pub fn new(config: FetcherConfig, event_tx: broadcast::Sender<EngineEvent>) -> Self {
+    pub fn new(
+        config: FetcherConfig,
+        event_tx: EventChannel,
+        io_tx: IoChannel,
+    ) -> Self {
 
         // Start default client
         let client = reqwest::Client::builder()
@@ -207,6 +213,7 @@ impl Fetcher {
             inflight: Arc::new(DashMap::new()),
             wake: Notify::new(),
             event_tx,
+            io_tx,
             decision_hub: Arc::new(DecisionHub::new()),
         }
     }
@@ -352,7 +359,8 @@ impl Fetcher {
             let inflight_entry2 = inflight_entry.clone();
             let mut shutdown_child = shutdown.clone();
             let dh_clone = self.decision_hub.clone();
-
+            let io_tx_clone = self.io_tx.clone();
+            let event_tx_clone = self.event_tx.clone();
 
             let observer = Arc::new(EngineEventEmitter::new(
                 req.tab_id,
@@ -389,8 +397,8 @@ impl Fetcher {
                         &req,
                         &cfg,
                         dh_clone.clone(),
-                        self.event_tx.clone(),
-                        // io
+                        event_tx_clone.clone(),
+                        io_tx_clone.clone(),
                     ).await
                 } else {
                     perform_buffered(
@@ -437,8 +445,8 @@ async fn perform_streaming(
     req: &FetchRequest,
     cfg: &FetcherConfig,
     decision_hub: Arc<DecisionHub>,
-    event_tx: broadcast::Sender<EngineEvent>,
-    io_tx: mpsc::Sender<IoCommand>,
+    event_tx: EventChannel,
+    io_tx: IoChannel,
 ) -> FetchResult {
     // Get the response top (headers + peek)
     match fetch_response_top(
@@ -480,7 +488,7 @@ async fn perform_streaming(
                     let cancel = req.cancel.clone();
                     let reader = reader;
 
-                    let _doc = render_main_html(
+                    let doc = render_main_html(
                         tab_id,
                         nav_id,
                         final_url,
@@ -490,6 +498,8 @@ async fn perform_streaming(
                         |evt| { let _ = event_tx.send(evt); },
                         |fetch_req| { let _ = io_tx.try_send(fetch_req); },
                     ).await;
+
+                    FetchResult::Document { meta, doc }
                 }
                 Action::Download { dest } => {
                     let handle = spawn_pump(

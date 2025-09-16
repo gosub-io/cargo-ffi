@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use http::Method;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::select;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -23,7 +23,7 @@ use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
 use tokio::time::{sleep, Duration, Instant};
-use crate::engine::types::{NavigationId, RequestId};
+use crate::engine::types::{EventChannel, NavigationId, RequestId};
 use crate::net::loader::{Document, NavigationOutput, ResourceMeta};
 use crate::net::mime::MimeKind;
 
@@ -233,7 +233,7 @@ impl TabWorker {
 
                 // Set the document into the browsing context
                 if let Resource::Html(doc) = resp.resource {
-                    self.context.set_raw_html(doc.0.as_str())
+                    self.context.set_raw_html(doc.body().as_str())
                 }
                 // self.context.set_raw_html(String::from_utf8_lossy(resp.body.as_slice()).as_ref());
 
@@ -572,6 +572,22 @@ impl TabWorker {
                 FetchResult::DownloadStarted { .. } => {}
                 FetchResult::OpenExternal { .. } => {}
                 FetchResult::Cancelled => {}
+                FetchResult::Document { meta, doc } => {
+                    let resource_meta = ResourceMeta {
+                        mime: MimeKind::Html,
+                        final_url: meta.final_url.clone(),
+                        content_length: Some(doc.0.len() as u64),
+                        etag: None,
+                        charset: None,
+                        last_modified: None,
+                        headers: meta.headers.clone(),
+                    };
+
+                    let _ = tx_done.send((nav_id, Ok(NavigationOutput{
+                        meta: resource_meta,
+                        resource: Resource::Html(doc),
+                    })));
+                }
             }
         });
 
@@ -736,7 +752,7 @@ async fn parse_main_document_stream<R>(
     mut reader: R,
     cancel_token: CancellationToken,
     _ignore_cache: bool,
-    event_tx: broadcast::Sender<EngineEvent>,
+    event_tx: EventChannel,
 ) -> anyhow::Result<Document>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -841,7 +857,7 @@ where
 //     shared: Arc<SharedBody>,
 //     cancel: CancellationToken,
 //     ignore_cache: bool,
-//     event_tx: broadcast::Sender<EngineEvent>,
+//     event_tx: EventChannel,
 // ) -> ResourceLoadResult {
 //     let stream = shared.subscribe_stream()
 //         .map_err(|e: NetError| e.to_io());
@@ -908,7 +924,7 @@ async fn parse_main_document_bytes(
     final_url: Url,
     bytes: &[u8],
     _ignore_cache: bool,
-    event_tx: broadcast::Sender<EngineEvent>,
+    event_tx: EventChannel,
 ) -> anyhow::Result<Document> {
     let reader = Cursor::new(bytes.to_vec());       // @TODO: can we remove the to_vec() copy)
     let cancel = CancellationToken::new();

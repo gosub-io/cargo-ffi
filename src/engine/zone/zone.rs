@@ -16,9 +16,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
-use crate::events::IoCommand;
+use crate::engine::types::{EventChannel, IoChannel};
 use crate::util::spawn_named;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
@@ -91,9 +90,9 @@ pub struct ZoneContext {
     /// Flags controlling which data is shared with other zones.
     pub(crate) shared_flags: SharedFlags,
     /// Event channel to send events back to the UI
-    pub(crate) event_tx: broadcast::Sender<EngineEvent>,
+    pub(crate) event_tx: EventChannel,
     /// Channel to communicate to the network I/O thread
-    pub(crate) io_tx: mpsc::UnboundedSender<IoCommand>,
+    pub(crate) io_tx: IoChannel,
 }
 
 // Things that are shared upwards to the engine

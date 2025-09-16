@@ -1,7 +1,6 @@
 use http::StatusCode;
-use tokio::sync::broadcast;
 use crate::engine::events::{CancelReason, ResourceEvent};
-use crate::engine::types::{NavigationId, RequestId};
+use crate::engine::types::{EventChannel, NavigationId, RequestId};
 use crate::events::{EngineEvent, NavigationEvent};
 use crate::tab::TabId;
 use crate::net::events::{NetEvent, NetObserver};
@@ -12,7 +11,7 @@ pub struct EngineEventEmitter {
     tab_id: TabId,
     nav_id: NavigationId,
     req_id: RequestId,
-    event_tx: broadcast::Sender<EngineEvent>,
+    event_tx: EventChannel,
     kind: ResourceKind,
     initiator: Initiator,
 }
@@ -23,7 +22,7 @@ impl EngineEventEmitter {
         tab_id: TabId,
         nav_id: NavigationId,
         req_id: RequestId,
-        event_tx: broadcast::Sender<EngineEvent>,
+        event_tx: EventChannel,
         kind: ResourceKind,
         initiator: Initiator,
     ) -> Self {

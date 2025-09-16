@@ -5,6 +5,7 @@ use http::HeaderMap;
 use url::Url;
 use crate::net::mime::MimeKind;
 use serde_json::Value as JsonValue;
+use crate::html::DummyDocument;
 
 /// A parsed document, represented as a string for now
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +15,7 @@ pub struct Document(pub String);
 #[derive(Debug)]
 pub enum Resource {
     /// HTML document
-    Html(Document),
+    Html(DummyDocument),
     /// JSON document
     Json(JsonValue),
     /// (raw) image
