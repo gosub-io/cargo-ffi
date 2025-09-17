@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use std::fmt::{Debug, Display};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use http::{header, HeaderMap, Method};
@@ -7,6 +8,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::engine::types::RequestId;
+use crate::html::DummyDocument;
 use crate::NavigationId;
 use crate::net::shared_body::SharedBody;
 use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
@@ -101,6 +103,8 @@ pub struct FetchResultMeta {
     pub headers: HeaderMap,
     /// Length of the content (if known from headers)
     pub content_length: Option<u64>,
+    /// Content-Type header (if any)
+    pub content_type: Option<String>,
     /// First bytes of the response body, for MIME sniffing etc
     pub peek: Vec<u8>,
     /// True if the response has a body (e.g. HEAD requests do not)
@@ -383,6 +387,7 @@ mod tests {
             status_text: "OK".into(),
             headers: HeaderMap::new(),
             content_length: None,
+            content_type: None,
             peek: Vec::new(),
             has_body: true,
         }
@@ -496,4 +501,46 @@ mod tests {
             shared,
         };
     }
+}
+
+
+
+/// The outcome of a main-frame navigation.
+#[derive(Debug)]
+pub enum NavigationResult {
+    /// Main document (e.g. HTML) was parsed successfully.
+    Document {
+        meta: FetchResultMeta,
+        doc: DummyDocument,
+    },
+
+    /// A download was started (streaming to file).
+    DownloadStarted {
+        meta: FetchResultMeta,
+        dest: PathBuf,
+        // handle: Arc<PumpHandle>,     // result from spawn_pump
+    },
+
+    /// A download was already completed (buffered body written directly).
+    DownloadFinished {
+        meta: FetchResultMeta,
+        dest: PathBuf,
+    },
+
+    /// Opened externally via a temp file (in-progress).
+    OpenExternalStarted {
+        meta: FetchResultMeta,
+        dest: PathBuf,
+        // handle: Arc<PumpHandle>,  // result from spawn_pump
+    },
+
+    /// Navigation was cancelled (by user, UA, or engine).
+    Cancelled,
+
+    /// Navigation failed for some reason (I/O, parse, etc.).
+    Failed {
+        meta: Option<FetchResultMeta>,
+        error: Arc<anyhow::Error>,
+    },
+    RenderedByViewer { meta: FetchResultMeta },
 }

@@ -25,3 +25,5 @@ pub use policy::UaPolicy;
 
 /// Default capacity for MPSC channels
 const DEFAULT_CHANNEL_CAPACITY: usize = 512;
+
+pub mod pipeline;

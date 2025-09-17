@@ -67,6 +67,7 @@ pub enum NetEvent {
         status: u16,
         headers: HeaderMap,
         content_length: Option<u64>,
+        content_type: Option<String>,
         peek: Vec<u8>,
         token: DecisionToken
     },

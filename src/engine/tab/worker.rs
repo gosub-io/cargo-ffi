@@ -18,42 +18,42 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::net::{decide_handling, NavigationError, RequestDestination, Resource, ResourceLoadResult, SharedBody};
-use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta, Initiator, Priority, ResourceKind};
+use crate::net::{decide_handling, HandlingDecision, NavigationError, RenderTarget, RequestDestination, Resource, ResourceLoadResult};
+use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta, Initiator, NavigationResult, Priority, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
 use tokio::time::{sleep, Duration, Instant};
 use crate::Action;
 use crate::engine::types::{EventChannel, NavigationId, RequestId};
+use crate::html::DummyHtml5Config;
 use crate::net::events::NetEvent;
-use crate::net::loader::{Document, NavigationOutput, ResourceMeta};
-use crate::net::mime::MimeKind;
+use crate::net::loader::Document;
 
-#[allow(unused)]
-enum InFlightState {
-    WaitingMeta {
-        cancel: CancellationToken,
-    },
-    WaitingDecision {
-        meta: FetchResultMeta,
-        // lease: BodyLease,
-        cancel: CancellationToken,
-    },
-    ConsumingByUA {
-        cancel: CancellationToken,
-    },
-    ConsumingByEngine {
-        cancel: CancellationToken,
-    },
-    Done,
-}
-
-impl InFlightState {
-    #[allow(unused)]
-    fn is_done(&self) -> bool {
-        matches!(self, InFlightState::Done)
-    }
-}
+// #[allow(unused)]
+// enum InFlightState {
+//     WaitingMeta {
+//         cancel: CancellationToken,
+//     },
+//     WaitingDecision {
+//         meta: FetchResultMeta,
+//         // lease: BodyLease,
+//         cancel: CancellationToken,
+//     },
+//     ConsumingByUA {
+//         cancel: CancellationToken,
+//     },
+//     ConsumingByEngine {
+//         cancel: CancellationToken,
+//     },
+//     Done,
+// }
+//
+// impl InFlightState {
+//     #[allow(unused)]
+//     fn is_done(&self) -> bool {
+//         matches!(self, InFlightState::Done)
+//     }
+// }
 
 pub struct TabWorker {
     /// ID of the tab
@@ -498,26 +498,34 @@ impl TabWorker {
                 }
             };
 
-            // At this point we don't really care if the resource was streamed or buffered. We still need to
-            // decide on how we should handle the resource.
-            let (meta, peek, shared, body) = match fetch_result {
-                FetchResult::Stream { meta, peek, shared } => (meta, peek.clone(), Some(shared), None),
-                FetchResult::Buffered { meta, body } => (meta, body.slice(0..5 * 1024).to_vec(), None, Some(body)),
-                FetchResult::Error(err) => {
-                    let _ = tx_done.send((nav_id, Err(NavigationError::NetworkError(format!("Fetch error: {}", err)))));
-                    return;
-                }
-            };
+            let outcome = route_response_for(
+                RequestDestination::MainDocument,
+                meta,
+                fetch_result,
+                &policy,
+                &mut hooks,
+            );
 
-            let policy = UaPolicy::default();
-            let outcome = decide_handling(&meta, RequestDestination::Navigate, &peek, &policy);
-
-            let forced = self.runtime.pending_action.take(); // e.g., set by Ctrl+U handler
-            let decision = match forced {
-                Some(Action::ViewSource) => HandlingDecision::Render(RenderTarget::TextViewer), // escape+highlight in viewer
-                _ => outcome.decision.clone(),
-            };
-
+            // // At this point we don't really care if the resource was streamed or buffered. We still need to
+            // // decide on how we should handle the resource.
+            // let (meta, peek, shared, body) = match fetch_result {
+            //     FetchResult::Stream { meta, peek, shared } => (meta, peek.clone(), Some(shared), None),
+            //     FetchResult::Buffered { meta, body } => (meta, body.slice(0..5 * 1024).to_vec(), None, Some(body)),
+            //     FetchResult::Error(err) => {
+            //         let _ = tx_done.send((nav_id, Err(NavigationError::NetworkError(format!("Fetch error: {}", err)))));
+            //         return;
+            //     }
+            // };
+            //
+            // let policy = UaPolicy::default();
+            // let outcome = decide_handling(&meta, RequestDestination::Navigate, &peek, &policy);
+            //
+            // let forced = self.runtime.pending_action.take(); // e.g., set by Ctrl+U handler
+            // let decision = match forced {
+            //     Some(Action::ViewSource) => HandlingDecision::Render(RenderTarget::TextViewer), // escape+highlight in viewer
+            //     _ => outcome.decision.clone(),
+            // };
+            //
             let nav_output = match decision {
                 HandlingDecision::Render(RenderTarget::HtmlParser) => {
                     if let Some(reader) = shared {
@@ -565,16 +573,7 @@ impl TabWorker {
                         res = decision_rx => res.unwrap_or(Action::Cancel),
                         _ = req.cancel.cancelled() => Action::Cancel,
                         _ = tokio::time::sleep(Duration::from_secs(30)) => Action::Cancel,
-                    } {
-                                    Action::Download { dest } => dest,
-                                    Action::Cancel | _ => {
-                                        observer.on_event(NetEvent::Cancelled { url: meta.final_url.clone(), reason: "UA Cancelled" });
-                                        return; // or NavigationResult::Cancelled
-                                    }
-                                }
-                            }
-                        }
-                    };
+                    }
 
                     if let Some(reader) = shared {
                         let handle = spawn_pump(

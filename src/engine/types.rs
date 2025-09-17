@@ -27,6 +27,7 @@ pub enum Action {
     Cancel,
     /// Stream will be rendered and mirrored to the specified path
     RenderAndMirror { dest: std::path::PathBuf },
+    ViewSource,
 }
 
 

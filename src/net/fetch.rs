@@ -62,6 +62,7 @@ pub async fn fetch_response_top(
         status_text: resp.status().canonical_reason().unwrap_or("").to_string(),
         headers: resp.headers().clone(),
         content_length: resp.content_length(),
+        content_type: resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
         peek: Vec::new(), // Don't know yet
         has_body: true,   // Don't know yet
     };

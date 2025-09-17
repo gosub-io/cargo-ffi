@@ -16,6 +16,7 @@ mod pump;
 mod fs_utils;
 mod render_html;
 mod decision;
+mod router;
 
 pub use decider::DecisionToken;
 pub use decision::decide_handling;
@@ -31,3 +32,5 @@ pub use io_runtime::IoHandle;
 pub use io_runtime::spawn_io_thread;
 
 pub use fetcher::FetcherConfig;
+
+pub use utils::stream_to_bytes;

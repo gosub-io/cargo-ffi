@@ -4,7 +4,7 @@ use crate::net::decision::sniff::ResponseClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestDestination {
-    Navigate,
+    MainDocument,
     Image,
     Style,
     Script,
@@ -35,7 +35,7 @@ pub struct DecisionOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandlingDecision {
     Render(RenderTarget),
-    Download { path: Option<PathBuf> },
+    Download { path: PathBuf },
     OpenExternal, // placeholder for integration
     Block(BlockReason),
     Cancel,

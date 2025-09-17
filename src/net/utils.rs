@@ -91,7 +91,7 @@ impl Waiter {
 
 /// Convert a streaming body a buffered fetchresult by reading it to the end.
 /// This could be more efficient with allocations probably.
-async fn stream_to_bytes(
+pub async fn stream_to_bytes(
     meta: FetchResultMeta,
     peek: Vec<u8>,
     shared: Arc<SharedBody>,
@@ -171,6 +171,7 @@ mod tests {
             status_text: "OK".into(),
             headers: http::HeaderMap::new(),
             content_length: None,
+            content_type: None,
             peek: Vec::new(),
             has_body: true,
         }

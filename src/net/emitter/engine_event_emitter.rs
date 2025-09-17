@@ -128,7 +128,7 @@ impl NetObserver for EngineEventEmitter {
             NetEvent::Warning { .. } => {
                 // Do nothing
             }
-            NetEvent::DecisionRequired { url, status, headers, content_length, peek, token } => {
+            NetEvent::DecisionRequired { url, status, headers, content_length, content_type, peek, token } => {
                 let has_body = peek.len() > 0;
 
                 self.emit_navigation_event(NavigationEvent::DecisionRequired {
@@ -140,6 +140,7 @@ impl NetObserver for EngineEventEmitter {
                         status_text: StatusCode::from_u16(status).map(|s| s.canonical_reason().unwrap_or("").to_string()).unwrap_or_default(),
                         headers: headers.clone(),
                         content_length,
+                        content_type,
                         peek,
                         has_body,
                     }
