@@ -10,19 +10,18 @@ use gosub_engine::{
 
 use gosub_engine::events::{LoadEvent, NavigationEvent, ResourceEvent};
 use gosub_engine::tab::{TabDefaults, TabId};
-use std::sync::Arc;
-use std::time::Duration;
-use rand::rng;
-use rand::prelude::IndexedRandom;
-use tokio::time::sleep;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use rand::prelude::IndexedRandom;
+use rand::rng;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 
 static UI: Lazy<Mutex<Ui>> = Lazy::new(|| Mutex::new(Ui::new()));
-
 
 struct Ui {
     mp: MultiProgress,
@@ -31,7 +30,10 @@ struct Ui {
 
 impl Ui {
     fn new() -> Self {
-        Self { mp: MultiProgress::new(), bars: HashMap::new() }
+        Self {
+            mp: MultiProgress::new(),
+            bars: HashMap::new(),
+        }
     }
 
     fn bar_for(&mut self, tab: TabId) -> ProgressBar {
@@ -138,13 +140,38 @@ async fn main() -> Result<(), EngineError> {
     #[allow(unused)]
     let autoexec_handle = tokio::spawn(async move {
         let domains: Vec<&'static str> = vec![
-            "google.com", "bing.com", "yahoo.com",
-            "wikipedia.org", "archive.org", "rust-lang.org",
-            "github.com", "stackoverflow.com", "news.ycombinator.com",
-            "x.com", "twitter.com", "facebook.com", "instagram.com", "linkedin.com", "tiktok.com", "reddit.com",
-            "youtube.com", "netflix.com", "spotify.com", "imdb.com",
-            "amazon.com", "apple.com", "microsoft.com", "cloudflare.com",
-            "nytimes.com", "bbc.co.uk", "theguardian.com", "reuters.com", "bloomberg.com", "cnn.com", "arstechnica.com", "theverge.com",
+            "google.com",
+            "bing.com",
+            "yahoo.com",
+            "wikipedia.org",
+            "archive.org",
+            "rust-lang.org",
+            "github.com",
+            "stackoverflow.com",
+            "news.ycombinator.com",
+            "x.com",
+            "twitter.com",
+            "facebook.com",
+            "instagram.com",
+            "linkedin.com",
+            "tiktok.com",
+            "reddit.com",
+            "youtube.com",
+            "netflix.com",
+            "spotify.com",
+            "imdb.com",
+            "amazon.com",
+            "apple.com",
+            "microsoft.com",
+            "cloudflare.com",
+            "nytimes.com",
+            "bbc.co.uk",
+            "theguardian.com",
+            "reuters.com",
+            "bloomberg.com",
+            "cnn.com",
+            "arstechnica.com",
+            "theverge.com",
         ];
 
         loop {
@@ -174,33 +201,33 @@ async fn main() -> Result<(), EngineError> {
 
     loop {
         tokio::select! {
-            Ok(ev) = event_rx.recv() => {
-                // println!("Received event: {:?}", ev);
+                    Ok(ev) = event_rx.recv() => {
+                        // println!("Received event: {:?}", ev);
 
-                // Just count the frames we see for now
-                if matches!(ev, EngineEvent::Redraw { .. }) {
-                    seen_frames += 1;
-//                    println!("Total frames seen so far: {seen_frames}");
-                }
-                handle_event(ev);
-            }
-            _ = tokio::signal::ctrl_c() => {
-//                println!("Received Ctrl-C, shutting down...");
-                break;
-            }
-            _ = interval.tick() => {
-//                println!("Ticking the UA interval");
+                        // Just count the frames we see for now
+                        if matches!(ev, EngineEvent::Redraw { .. }) {
+                            seen_frames += 1;
+        //                    println!("Total frames seen so far: {seen_frames}");
+                        }
+                        handle_event(ev);
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+        //                println!("Received Ctrl-C, shutting down...");
+                        break;
+                    }
+                    _ = interval.tick() => {
+        //                println!("Ticking the UA interval");
 
-                seen_intervals += 1;
-                if seen_intervals >= 1000 {
-//                    println!("Seen {seen_intervals} intervals, exiting main loop");
-                    break;
+                        seen_intervals += 1;
+                        if seen_intervals >= 1000 {
+        //                    println!("Seen {seen_intervals} intervals, exiting main loop");
+                            break;
+                        }
+                    }
                 }
-            }
-        }
     }
 
-//    println!("Shutting down engine...");
+    //    println!("Shutting down engine...");
     engine.shutdown().await?;
 
     // Wait for the engine task to finish
@@ -222,30 +249,52 @@ fn handle_event(ev: EngineEvent) {
         EngineEvent::Load { tab_id, event } => {
             let mut ui = UI.lock();
             match event {
-                LoadEvent::Started { url, .. }   =>
-                    ui.update(tab_id, format!("load: [STAR] {:20}", url)),
-                LoadEvent::Progress { url, finished, bytes_received, ttfb, .. }  =>
-                    ui.update(tab_id, format!("load: [DOWN] {:20} TTFB: {ttfb} FIN: {finished} RX: {bytes_received}", url)),
-                LoadEvent::Finished { url, bytes, .. }  =>
-                    ui.update(tab_id, format!("load: [FINI] {:20} {bytes}", url)),
-                LoadEvent::Failed { url, error, .. }    =>
-                    ui.update(tab_id, format!("load: [FAIL] {:20} {error}", url)),
-                LoadEvent::Cancelled { url, reason, .. } =>
-                    ui.update(tab_id, format!("load: [CNCL] {:20} {reason}", url)),
+                LoadEvent::Started { url, .. } => ui.update(tab_id, format!("load: [STAR] {:20}", url)),
+                LoadEvent::Progress {
+                    url,
+                    finished,
+                    bytes_received,
+                    ttfb,
+                    ..
+                } => ui.update(
+                    tab_id,
+                    format!(
+                        "load: [DOWN] {:20} TTFB: {ttfb} FIN: {finished} RX: {bytes_received}",
+                        url
+                    ),
+                ),
+                LoadEvent::Finished { url, bytes, .. } => ui.update(tab_id, format!("load: [FINI] {:20} {bytes}", url)),
+                LoadEvent::Failed { url, error, .. } => ui.update(tab_id, format!("load: [FAIL] {:20} {error}", url)),
+                LoadEvent::Cancelled { url, reason, .. } => {
+                    ui.update(tab_id, format!("load: [CNCL] {:20} {reason}", url))
+                }
             }
         }
         EngineEvent::Navigation { tab_id, event } => {
             let mut ui = UI.lock();
             match event {
-                NavigationEvent::Started   { url, .. } => ui.update(tab_id, format!("nav: → {url}")),
+                NavigationEvent::Started { url, .. } => ui.update(tab_id, format!("nav: → {url}")),
                 NavigationEvent::Committed { url, .. } => ui.update(tab_id, format!("nav: committed {url}")),
-                NavigationEvent::Finished  { url, .. } => ui.update(tab_id, format!("nav: finished {url}")),
-                NavigationEvent::Failed    { url, error, .. } =>
-                    ui.update(tab_id, format!("nav: FAILED {url} ({error})")),
-                NavigationEvent::Cancelled { url, reason, .. } =>
-                    ui.update(tab_id, format!("nav: cancelled {url} [{reason:?}]")),
-                NavigationEvent::Progress { received_bytes, expected_length, elapsed, .. } => {
-                    ui.update(tab_id, format!("nav: progress: {} {} {:?}", received_bytes, expected_length.unwrap_or(0), elapsed));
+                NavigationEvent::Finished { url, .. } => ui.update(tab_id, format!("nav: finished {url}")),
+                NavigationEvent::Failed { url, error, .. } => ui.update(tab_id, format!("nav: FAILED {url} ({error})")),
+                NavigationEvent::Cancelled { url, reason, .. } => {
+                    ui.update(tab_id, format!("nav: cancelled {url} [{reason:?}]"))
+                }
+                NavigationEvent::Progress {
+                    received_bytes,
+                    expected_length,
+                    elapsed,
+                    ..
+                } => {
+                    ui.update(
+                        tab_id,
+                        format!(
+                            "nav: progress: {} {} {:?}",
+                            received_bytes,
+                            expected_length.unwrap_or(0),
+                            elapsed
+                        ),
+                    );
                 }
                 NavigationEvent::FailedUrl { url, error, .. } => {
                     ui.update(tab_id, format!("nav: failed: {} {}", url, error));
@@ -256,32 +305,49 @@ fn handle_event(ev: EngineEvent) {
             // Build a compact one-line summary per event
             let mut ui = UI.lock();
             match event {
-                ResourceEvent::Queued { kind, priority, .. } =>
-                    ui.update(tab_id, format!("res: queued {kind:?} pri={priority}")),
-                ResourceEvent::Started { url, .. } =>
-                    ui.update(tab_id, format!("res: started {url}")),
-                ResourceEvent::Redirected { from, to, status, .. } =>
-                    ui.update(tab_id, format!("res: redirect {status} {from} → {to}")),
-                ResourceEvent::Progress { received_bytes, .. } =>
-                    ui.update(tab_id, format!("res: {received_bytes} bytes…")),
-                ResourceEvent::Headers { status, content_length, content_type, .. } => {
+                ResourceEvent::Queued { kind, priority, .. } => {
+                    ui.update(tab_id, format!("res: queued {kind:?} pri={priority}"))
+                }
+                ResourceEvent::Started { url, .. } => ui.update(tab_id, format!("res: started {url}")),
+                ResourceEvent::Redirected { from, to, status, .. } => {
+                    ui.update(tab_id, format!("res: redirect {status} {from} → {to}"))
+                }
+                ResourceEvent::Progress { received_bytes, .. } => {
+                    ui.update(tab_id, format!("res: {received_bytes} bytes…"))
+                }
+                ResourceEvent::Headers {
+                    status,
+                    content_length,
+                    content_type,
+                    ..
+                } => {
                     let mut s = String::new();
                     let _ = write!(
                         s,
                         "res: headers {status} len={} type={}",
-                        content_length.map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()),
+                        content_length
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "unknown".into()),
                         content_type.unwrap_or_default()
                     );
                     ui.update(tab_id, s);
                 }
-                ResourceEvent::Finished { url, received_bytes, elapsed, .. } => {
+                ResourceEvent::Finished {
+                    url,
+                    received_bytes,
+                    elapsed,
+                    ..
+                } => {
                     let kb = received_bytes as f64 / 1024.0;
-                    ui.update(tab_id, format!("res: finished {} {:.2}Kb ({:?})", url, kb, elapsed))
+                    ui.update(
+                        tab_id,
+                        format!("res: finished {} {:.2}Kb ({:?})", url, kb, elapsed),
+                    )
                 }
-                ResourceEvent::Failed { url, error, .. } =>
-                    ui.update(tab_id, format!("res: FAILED {url} ({error})")),
-                ResourceEvent::Cancelled { url, reason, .. } =>
-                    ui.update(tab_id, format!("res: cancelled {url} [{reason:?}]")),
+                ResourceEvent::Failed { url, error, .. } => ui.update(tab_id, format!("res: FAILED {url} ({error})")),
+                ResourceEvent::Cancelled { url, reason, .. } => {
+                    ui.update(tab_id, format!("res: cancelled {url} [{reason:?}]"))
+                }
             }
         }
         EngineEvent::Redraw { tab_id, .. } => {

@@ -1,11 +1,19 @@
 use gosub_engine::events::{LoadEvent, MouseButton, NavigationEvent, ResourceEvent, TabCommand};
+use gosub_engine::net::types::FetchResultMeta;
+use gosub_engine::net::DecisionToken;
 use gosub_engine::tab::{TabDefaults, TabHandle};
-use gosub_engine::{cookies::DefaultCookieJar, events::EngineEvent, render::Viewport, storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService}, zone::ZoneConfig, zone::ZoneServices, EngineConfig, EngineError, GosubEngine, NavigationId, Action};
+use gosub_engine::{
+    cookies::DefaultCookieJar,
+    events::EngineEvent,
+    render::Viewport,
+    storage::{InMemoryLocalStore, InMemorySessionStore, PartitionPolicy, StorageService},
+    zone::ZoneConfig,
+    zone::ZoneServices,
+    Action, EngineConfig, EngineError, GosubEngine, NavigationId,
+};
+use http::header;
 use std::sync::Arc;
 use std::time::Duration;
-use http::header;
-use gosub_engine::net::DecisionToken;
-use gosub_engine::net::types::FetchResultMeta;
 
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
@@ -161,9 +169,10 @@ async fn on_decision_required(
     tab_handle: TabHandle,
     nav_id: NavigationId,
     meta: FetchResultMeta,
-    decision_token: DecisionToken
+    decision_token: DecisionToken,
 ) {
-    let ct: String = meta.headers
+    let ct: String = meta
+        .headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
@@ -187,7 +196,8 @@ async fn on_decision_required(
     };
 
     // Send back to the engine what we like to do with this navigation
-    let _ = tab_handle.cmd_tx
+    let _ = tab_handle
+        .cmd_tx
         .send(TabCommand::SubmitDecision {
             nav_id,
             decision_token,
@@ -226,7 +236,11 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
             }
         },
         EngineEvent::Navigation { tab_id, event } => match event {
-            NavigationEvent::DecisionRequired { nav_id, meta, decision_token } => {
+            NavigationEvent::DecisionRequired {
+                nav_id,
+                meta,
+                decision_token,
+            } => {
                 // If we find a response meta event, we need to decide how to handle the response (saving / download, engine rendering etc.)
                 println!("[event] DecisionRequest found: {tab_id} {nav_id} DecisionToken: {decision_token:?}");
 
@@ -260,7 +274,12 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
                 println!("[event] NavigationCancelled:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Reason: {reason:?}");
             }
 
-            NavigationEvent::Progress { nav_id, received_bytes, expected_length, elapsed } => {
+            NavigationEvent::Progress {
+                nav_id,
+                received_bytes,
+                expected_length,
+                elapsed,
+            } => {
                 println!("[event] NavigationProgress:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Received Bytes: {received_bytes}\n     Expected Length: {expected_length:?}\n     Elapsed: {elapsed:?}");
             }
             NavigationEvent::FailedUrl { nav_id, url, error } => {
@@ -310,7 +329,7 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
                 req_id,
                 url,
                 received_bytes,
-                elapsed
+                elapsed,
             } => {
                 // let content_type = content_type.unwrap_or_default();
                 println!("[event] ResourceFinished:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Elapsed: {elapsed:?}\n     Received: {received_bytes}");
