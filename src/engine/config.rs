@@ -117,8 +117,6 @@ use std::{fmt, path::PathBuf, time::Duration};
 
 use crate::zone::ZoneConfig; // adjust path if needed
 
-// ---------- Public types ----------
-
 /// Redirect handling policy for the engine.
 #[derive(Debug, Clone)]
 pub enum RedirectPolicy {
@@ -370,8 +368,7 @@ impl EngineConfig {
     }
 }
 
-// ---------- Builder ----------
-
+/// Fluent builder for [`EngineConfig`] with validation.
 #[derive(Debug, Clone)]
 pub struct EngineConfigBuilder {
     inner: EngineConfig,
@@ -386,14 +383,12 @@ impl Default for EngineConfigBuilder {
 }
 
 impl EngineConfigBuilder {
-    // --- generic helper ---
     #[inline]
     fn map(mut self, f: impl FnOnce(&mut EngineConfig)) -> Self {
         f(&mut self.inner);
         self
     }
 
-    // --- chainable setters (add more as you need) ---
     pub fn user_agent<S: Into<String>>(self, ua: S) -> Self {
         self.map(|c| c.user_agent = ua.into())
     }
@@ -528,8 +523,6 @@ impl EngineConfigBuilder {
         Ok(self.inner)
     }
 }
-
-// ---------- Validation ----------
 
 #[derive(Debug, Clone)]
 pub enum EngineConfigError {

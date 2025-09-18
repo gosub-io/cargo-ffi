@@ -88,7 +88,9 @@ impl Display for Modifiers {
 // Commands sent to the IO / network layer
 #[derive(Debug)]
 pub enum IoCommand {
+    /// Perform a fetch of the given request
     Fetch(FetchRequest),
+    /// Return a decision on a pending request
     Decision { token: DecisionToken, action: Action },
 }
 
@@ -198,25 +200,22 @@ pub enum EngineCommand {
 /// events triggered in this navigation will have the same navigation id.
 #[derive(Debug, Clone)]
 pub enum NavigationEvent {
+    /// Navigation has been started
     Started   { nav_id: NavigationId, url: Url },
-    Committed { nav_id: NavigationId, url: Url }, // new doc will replace old one
+    /// A new document will replace current one
+    Committed { nav_id: NavigationId, url: Url },
+    /// Finished loading the main document for this navigation
     Finished  { nav_id: NavigationId, url: Url },
+    /// Navigation has failed
     Failed    { nav_id: Option<NavigationId>, url: Url, error: Arc<anyhow::Error> },
+    /// Progress of loading the main document for this navigation
     Progress  { nav_id: NavigationId, received_bytes: u64, expected_length: Option<u64>, elapsed: Duration },
+    /// The URL given was invalid
     FailedUrl { nav_id: Option<NavigationId>, url: String, error: Arc<anyhow::Error> },
+    /// The navigation has been cancelled
     Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
+    /// The navigation requires a decision on how to proceed (e.g., auth, certificate, block, allow)
     DecisionRequired { nav_id: NavigationId, meta: FetchResultMeta, decision_token: DecisionToken },
-}
-
-/// Start of loading the main document for this navigation
-#[derive(Debug, Clone)]
-pub enum LoadEvent {
-    Started   { nav_id: NavigationId, url: Url },
-    Finished  { nav_id: NavigationId, url: Url, bytes: u64, content_type: Option<String> },
-    Failed    { nav_id: Option<NavigationId>, url: Url, error: Arc<anyhow::Error> },
-    Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
-    Progress  { nav_id: NavigationId, url: Url, finished: bool, bytes_received: u64, ttfb: bool, elapsed: Duration },
-    MainDocumentParsed { nav_id: NavigationId, title: Option<String> },
 }
 
 /// Events triggered by load resources for a main document. Note that resources can trigger other
@@ -404,8 +403,6 @@ pub enum EngineEvent {
 
     // Navigation events (for main document)
     Navigation { tab_id: TabId, event: NavigationEvent },
-    /// Load events for main document
-    Load { tab_id: TabId, event: LoadEvent },
     /// Lowlevel resource events for all resources loaded
     Resource { tab_id: TabId, event: ResourceEvent },
 

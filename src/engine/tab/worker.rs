@@ -1,5 +1,5 @@
 use std::io::Cursor;
-use crate::engine::events::{CancelReason, EngineEvent, LoadEvent, NavigationEvent};
+use crate::engine::events::{CancelReason, EngineEvent, NavigationEvent};
 use crate::engine::BrowsingContext;
 use crate::events::{IoCommand, TabCommand};
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
@@ -212,19 +212,6 @@ impl TabWorker {
                 }
                 // self.context.set_raw_html(String::from_utf8_lossy(resp.body.as_slice()).as_ref());
 
-                self.send_event(EngineEvent::Load {
-                    tab_id: self.tab_id,
-                    event: LoadEvent::Finished {
-                        nav_id: completed_nav,
-                        url: resp.meta.final_url.clone(),
-                        bytes: 0,
-                        content_type: resp.meta.headers
-                            .get("content_type")
-                            .and_then(|v| v.to_str().ok())
-                            .map(|s| s.to_string()),
-                    },
-                });
-
                 self.send_event(EngineEvent::Navigation {
                     tab_id: self.tab_id,
                     event: NavigationEvent::Finished {
@@ -246,12 +233,6 @@ impl TabWorker {
 
                 let err = Arc::new(anyhow!(e));
 
-                self.send_event(EngineEvent::Load {
-                    tab_id: self.tab_id,
-                    event: LoadEvent::Failed {
-                        nav_id: Some(completed_nav), url: url.clone(), error: err.clone(),
-                    },
-                });
                 self.send_event(EngineEvent::Navigation {
                     tab_id: self.tab_id,
                     event: NavigationEvent::Failed {
@@ -262,10 +243,6 @@ impl TabWorker {
             Err(_) => {
                 self.runtime.load = None;
 
-                self.send_event(EngineEvent::Load {
-                    tab_id: self.tab_id,
-                    event: LoadEvent::Cancelled { nav_id: current_nav, url: url.clone(), reason: CancelReason::ExplicitCancel },
-                });
                 self.send_event(EngineEvent::Navigation {
                     tab_id: self.tab_id,
                     event: NavigationEvent::Cancelled { nav_id: current_nav, url: url.clone(), reason: CancelReason::ExplicitCancel },
@@ -396,10 +373,6 @@ impl TabWorker {
         self.send_event(EngineEvent::Navigation {
             tab_id: self.tab_id,
             event: NavigationEvent::Started { nav_id, url: real_url.clone() }
-        });
-        self.send_event(EngineEvent::Load {
-            tab_id: self.tab_id,
-            event: LoadEvent::Started { nav_id, url: real_url.clone() }
         });
 
 
@@ -539,7 +512,7 @@ impl TabWorker {
                                     headers: meta.headers.clone(),
                                     content_length: meta.content_length,
                                     content_type: meta.headers.get("content-type").and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
-                                    peek: peek.clone(),
+                                    peek_buf: peek_buf.clone(),
                                     token,
                                 });
                                 match tokio::select! {
@@ -551,7 +524,7 @@ impl TabWorker {
                                 if let Some(reader) = shared {
                                     let handle = spawn_pump(
                                         reader,
-                                        PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek.clone() },
+                                        PumpTargets { shared: None, file_dest: Some(dest.clone()), peek_buf: peek_buf.clone() },
                                         PumpCfg {
                                             idle: cfg.read_idle_timeout,
                                             total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d),
@@ -605,7 +578,7 @@ impl TabWorker {
             //     headers: meta.headers.clone(),
             //     content_length: meta.content_length,
             //     content_type: meta.headers.get("content-type").and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
-            //     peek: peek.clone(),
+            //     peek_buf: peek_buf.clone(),
             //     token,
             // });
             //
@@ -657,7 +630,7 @@ impl TabWorker {
             //         if let Some(reader) = shared {
             //             let handle = spawn_pump(
             //                 reader,
-            //                 PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek_to_vec() },
+            //                 PumpTargets { shared: None, file_dest: Some(dest.clone()), peek_buf: peek_to_vec() },
             //                 PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map | d | d + Instant::now() },
             //                 cancel_clone,
             //                 observer_clone,
@@ -680,7 +653,7 @@ impl TabWorker {
             //         if let Some(reader) = shared {
             //             let handle = spawn_pump(
             //                 reader,
-            //                 PumpTargets { shared: None, file_dest: Some(tmp_dest.path().to_path_buf()), peek: peek_to_vec() },
+            //                 PumpTargets { shared: None, file_dest: Some(tmp_dest.path().to_path_buf()), peek_buf: peek_to_vec() },
             //                 PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map | d | d + Instant::now() },
             //                 cancel_clone,
             //                 observer_clone,
@@ -699,7 +672,7 @@ impl TabWorker {
             //
             //         let _ = spawn_pump(
             //             reader,
-            //             PumpTargets { shared: Some(shared_arc.clone()), file_dest: Some(dest), peek: peek_to_vec() },
+            //             PumpTargets { shared: Some(shared_arc.clone()), file_dest: Some(dest), peek_buf: peek_to_vec() },
             //             PumpCfg { idle: cfg.read_idle_timeout, total_deadline: cfg.total_body_timeout.map | d | d + Instant::now() },
             //             cancel_clone,
             //             observer_clone,
@@ -935,15 +908,6 @@ where
 
                 if n == 0 {
                     if total != last_progress_total {
-                        let _ = event_tx.send(EngineEvent::Load{ tab_id, event: LoadEvent::Progress {
-                            nav_id,
-                            url: final_url.clone(),
-                            finished: false,
-                            ttfb: false,
-                            bytes_received: total as u64,
-                            elapsed: time_start.elapsed(),
-                        }});
-
                         // last_progress_total = total;
                     }
                     break;
@@ -952,14 +916,6 @@ where
                 idle.as_mut().reset(Instant::now() + IDLE_TIMEOUT);
 
                 if total == 0 {
-                    let _ = event_tx.send(EngineEvent::Load { tab_id, event: LoadEvent::Progress {
-                        nav_id,
-                        url: final_url.clone(),
-                        finished: false,
-                        bytes_received: 0,
-                        ttfb: true,
-                        elapsed: time_start.elapsed(),
-                    }});
                 }
 
                 document_buffer.extend_from_slice(&buf[..n]);
@@ -986,15 +942,6 @@ where
     }
 
     // Parser should finish up and return a document
-
-    let _ = event_tx.send(EngineEvent::Load{tab_id, event: LoadEvent::Progress {
-        nav_id,
-        url: final_url.clone(),
-        ttfb: false,
-        finished: true,
-        bytes_received: total as u64,
-        elapsed: time_start.elapsed(),
-    }});
 
     match String::from_utf8(document_buffer) {
         Ok(s) => Ok(Document(s)),

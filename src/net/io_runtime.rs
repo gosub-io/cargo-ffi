@@ -48,6 +48,7 @@ impl IoHandle {
         }
     }
 
+    /// Get a clone of the submission channel to send fetch requests from other threads.
     pub fn subscribe(&self) -> IoChannel {
         self.tx_submit.clone()
     }

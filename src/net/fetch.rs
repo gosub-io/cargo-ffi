@@ -11,6 +11,7 @@ use tokio::time::timeout;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use crate::engine::types::PeekBuf;
 
 /// Peek buffer size (first bytes of body). Used for detecting mime type
 const PEEK_MAX: usize = 5 * 1024;
@@ -22,7 +23,7 @@ pub struct ResponseTop {
     /// Metadata about the result
     pub meta: FetchResultMeta,
     /// Peek buffer of the first PEEK_MAX of data
-    pub peek: Vec<u8>,
+    pub peek_buf: PeekBuf,
     /// Stream reader to read the REMAINDER of the body (this does NOT include peek buffer read data)
     pub reader: Box<dyn AsyncRead + Unpin + Send>,
 }
@@ -63,7 +64,6 @@ pub async fn fetch_response_top(
         headers: resp.headers().clone(),
         content_length: resp.content_length(),
         content_type: resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
-        peek: Vec::new(), // Don't know yet
         has_body: true,   // Don't know yet
     };
 
@@ -72,13 +72,13 @@ pub async fn fetch_response_top(
         .bytes_stream()
         .map_err(|e| NetError::Read(Arc::new(anyhow!(e))));
     let mut received_net: u64 = 0;
-    let mut peek_buf: Vec<u8> = Vec::with_capacity(PEEK_MAX);
+    let mut peek_buf_vec: Vec<u8> = Vec::with_capacity(PEEK_MAX);
     let mut excess: Option<Bytes> = None;
 
     let observer_clone = observer.clone();
 
     // We might need more fetches than one. Although it's unlikely unless you set PEEK_MAX to >8KB
-    while peek_buf.len() < PEEK_MAX {
+    while peek_buf_vec.len() < PEEK_MAX {
         let next = tokio::select! {
             // Stream cancelled
             _ = cancel.cancelled() => {
@@ -100,16 +100,16 @@ pub async fn fetch_response_top(
                     expected_length: meta.content_length,
                 });
 
-                let need = PEEK_MAX.saturating_sub(peek_buf.len());
+                let need = PEEK_MAX.saturating_sub(peek_buf_vec.len());
                 if chunk.len() <= need {
                     // Entire chunk fits in our peek_buf.
-                    peek_buf.extend_from_slice(&chunk);
+                    peek_buf_vec.extend_from_slice(&chunk);
                 } else {
                     // Chunk does not fit. For instance: Peek Buf = 12Kb. We read 8Kb in the first
                     // read, and 8kb in the second. In this case we have read 16kb when we only need
                     // the first 12kb. We fill the peek buf until full, and keep the rest in the
                     // 'excess' buffer
-                    peek_buf.extend_from_slice(&chunk[..need]);
+                    peek_buf_vec.extend_from_slice(&chunk[..need]);
                     excess = Some(chunk.slice(need..));
                     break;
                 }
@@ -147,7 +147,7 @@ pub async fn fetch_response_top(
     };
 
     // Update last remaining items in meta struct
-    meta.peek = peek_buf.clone();
+    let peek_buf = PeekBuf::from_vec(peek_buf_vec);
     let has_body_by_len = meta.content_length.unwrap_or(0) > 0 || !peek_buf.is_empty();
     meta.has_body = has_body_by_len;
 
@@ -172,7 +172,7 @@ pub async fn fetch_response_top(
 
     Ok(ResponseTop {
         meta,
-        peek: peek_buf,
+        peek_buf,
         reader: Box::new(progress_reader),
     })
 }
@@ -288,12 +288,12 @@ pub async fn fetch_response_complete(
 ) -> Result<(FetchResultMeta, Vec<u8>), NetError> {
     let started = Instant::now();
 
-    let ResponseTop { meta, peek, mut reader } =
+    let ResponseTop { meta, peek_buf, mut reader } =
         fetch_response_top(client, url, cancel.clone(), observer.clone()).await?;
 
     // We don't care about the peek buffer. We just create a new buffer and read the rest of the
     // stream into it.
-    let mut buf = peek;
+    let mut body_buf = peek_buf.to_vec();
     let mut chunk = [0u8; 16 * 1024];
 
     loop {
@@ -327,7 +327,7 @@ pub async fn fetch_response_complete(
         if let Some(max) = max_bytes {
             // Too many bytes are read. We throw an error (@TODO: should we do this? not just cap
             // the buffer and return that?
-            if buf.len() + n > max {
+            if body_buf.len() + n > max {
                 return Err(NetError::Read(Arc::new(anyhow!(
                     "fetch_request_complete exceeded maximum size of {} bytes",
                     max
@@ -336,10 +336,10 @@ pub async fn fetch_response_complete(
         }
 
         // Exctent the bufferr with read chunk
-        buf.extend_from_slice(&chunk[..n]);
+        body_buf.extend_from_slice(&chunk[..n]);
     }
 
-    Ok((meta, buf))
+    Ok((meta, body_buf))
 }
 
 /// Perform a GET request, following redirects up to MAX_REDIRECTS times, while sending out net events
@@ -548,15 +548,15 @@ mod tests {
         let cancel = CancellationToken::new();
         let observer: Arc<dyn NetObserver + Send + Sync> = Arc::new(TestObserver);
 
-        let ResponseTop { meta, peek, mut reader } =
+        let ResponseTop { meta, peek_buf, mut reader } =
             super::fetch_response_top(client, url, cancel, observer).await.unwrap();
 
-        assert_eq!(peek.len(), super::PEEK_MAX, "peek must be exactly PEEK_MAX");
+        assert_eq!(peek_buf.len(), super::PEEK_MAX, "peek must be exactly PEEK_MAX");
         // Read remainder
         let mut rest = Vec::new();
         reader.read_to_end(&mut rest).await.unwrap();
 
-        assert_eq!(peek.len() + rest.len(), 12 * 1024);
+        assert_eq!(peek_buf.len() + rest.len(), 12 * 1024);
         assert!(meta.has_body);
         assert_eq!(meta.status, 200);
     }

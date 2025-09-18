@@ -17,7 +17,7 @@ use tokio::sync::{Notify, Semaphore};
 use url::Url;
 use crate::Action;
 use crate::engine::types::{EventChannel, IoChannel};
-use crate::net::decider::DecisionHub;
+use crate::net::decision_hub::DecisionHub;
 use crate::net::DecisionToken;
 use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
 use crate::net::emitter::null_emitter::NullEmitter;
@@ -455,7 +455,7 @@ async fn perform_streaming(
     cfg: &FetcherConfig,
 ) -> Result<FetchResult, NetError> {
     // Get the response top (headers + peek)
-    let ResponseTop { meta, peek, reader} = fetch_response_top(
+    let ResponseTop { meta, peek_buf, reader} = fetch_response_top(
         Arc::new(client.clone()),
         req.key_data.url.clone(),
         req.cancel.clone(),
@@ -474,7 +474,7 @@ async fn perform_streaming(
 
     Ok(FetchResult::Stream {
         meta,
-        peek,
+        peek_buf,
         shared: SharedBody::from_reader(reader, opts),
     })
 }

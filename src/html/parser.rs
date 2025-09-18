@@ -20,12 +20,11 @@ pub enum ResourceKind {
 #[derive(Debug, Clone)]
 pub struct ResourceHint {
     pub url: Url,
-    // Style/Script/Image/Font/Audio/Video/Worker
     pub dest: RequestDestination,
     pub kind: ResourceKind,
     pub rel: Option<String>, // e.g. "stylesheet"
     pub from_attr: &'static str, // e.g. "href" or "src
-    pub referrer: Option<url::Url>,
+    pub referrer: Option<Url>,
     pub cross_origin: bool,
     pub integrity: Option<String>,
     pub priority: Priority,

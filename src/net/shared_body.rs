@@ -28,8 +28,46 @@ use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
+use crate::engine::types::PeekBuf;
 use crate::net::types::NetError;
 
+/// Bounded, fan-out byte stream with per-subscriber queues and drop-on-lag.
+///
+/// `SharedBody` lets one producer push `Bytes` while any number of subscribers
+/// receive them as a `Stream<Item = Result<bytes::Bytes, NetError>>`.
+///
+/// - Each subscriber has its **own bounded queue** (capacity set on creation).
+/// - If a subscriber can't keep up and its queue fills, it is **dropped**
+///   (non-blocking broadcast; other subscribers keep receiving).
+/// - `finish()` ends all subscribers with EOF; `error(e)` delivers `Err(e)`
+///   and then ends.
+///
+/// Subscribers see **only future chunks** from the moment they subscribe
+/// (no replay). Useful to tee a response body to multiple consumers such as
+/// the HTML parser, a download writer, and a progress UI.
+///
+/// # Examples
+///
+/// Basic broadcast to two subscribers:
+/// ```no_run
+/// # use bytes::Bytes;
+/// # use futures_util::StreamExt;
+/// # use std::sync::Arc;
+/// # use gosub_engine::net::shared_body::SharedBody;
+/// let sb = SharedBody::new(8);
+/// let mut a = sb.subscribe_stream();
+/// let mut b = sb.subscribe_stream();
+///
+/// sb.push(Bytes::from_static(b"hi"));
+/// sb.finish();
+///
+/// # tokio_test::block_on(async {
+/// assert_eq!(&a.next().await.unwrap().unwrap()[..], b"hi");
+/// assert!(a.next().await.is_none());
+/// assert_eq!(&b.next().await.unwrap().unwrap()[..], b"hi");
+/// assert!(b.next().await.is_none());
+/// # });
+/// ```
 #[derive(Clone)]
 pub struct SharedBody {
     inner: Arc<Mutex<State>>,
@@ -47,7 +85,12 @@ struct State {
 }
 
 impl SharedBody {
-    /// Create a new shared body with the given per-subscriber queue capacity.
+    /// Creates a new `SharedBody` with the given per-subscriber queue capacity.
+    ///
+    /// Each subscriber gets a queue with this capacity. When full, the slow
+    /// subscriber is dropped rather than applying backpressure to the producer.
+    ///
+    /// A capacity of **1–4** keeps latency low; **32+** favors throughput.
     pub fn new(max_queue: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(State {
@@ -59,11 +102,11 @@ impl SharedBody {
         }
     }
 
-    /// Push a chunk to all current subscribers (best-effort, non-blocking).
+    /// Pushes a chunk to all current subscribers (best-effort, non-blocking).
     ///
-    /// Backpressure policy: if a subscriber's queue is full, we drop that subscriber
-    /// (and optionally try to send them a terminal error once). This keeps the producer
-    /// hot and bounds memory.
+    /// - If a subscriber's queue is **full** or **closed**, that subscriber is removed.
+    /// - If [`finish`](Self::finish) or [`error`](Self::error) has been called,
+    ///   additional pushes are ignored.
     pub fn push(&self, chunk: Bytes) {
         let (subs, mut to_remove) = {
             let st = self.inner.lock().unwrap();
@@ -97,8 +140,12 @@ impl SharedBody {
         }
     }
 
-    /// Broadcast an error to all subscribers and close the stream.
-    /// After this, `push()` is ignored and new subscribers won't be added.
+    /// Broadcasts an error to all subscribers and closes the stream.
+    ///
+    /// After this call:
+    /// - The next item each subscriber receives is `Err(e.clone())`.
+    /// - The stream then ends (`None`).
+    /// - New subscribers will see an **empty** stream.
     pub fn error(&self, e: NetError) {
         // drain and drop under lock; send error outside the lock
         let senders: Vec<mpsc::Sender<Result<Bytes, NetError>>> = {
@@ -115,7 +162,10 @@ impl SharedBody {
         }
     }
 
-    /// Finish the stream cleanly (EOF): drop all senders so receivers see `None`.
+    /// Finishes the stream cleanly (EOF).
+    ///
+    /// Dropping all senders causes subscribers to yield `None`. New subscribers
+    /// will see an empty stream.
     pub fn finish(&self) {
         // closed -> drop all senders so receivers see EOF
         let _dropped: Vec<mpsc::Sender<Result<Bytes, NetError>>> = {
@@ -130,12 +180,12 @@ impl SharedBody {
         // dropping senders is enough; receivers yield None (EOF)
     }
 
-    /// Subscribe to the stream **from this point onward**. If a subscriber subscribes to the
-    /// stream when already started, it will NOT receive any previous data.
+    /// Subscribes **from now on**, returning a stream of body chunks.
     ///
-    /// Returns a stream of `Result<Bytes, NetError>`. If the producer finishes, the
-    /// stream ends (`None`). If the producer errors, the next item is `Err(e)` and
-    /// then the stream ends.
+    /// Chunks produced **before** subscribing are **not** replayed.
+    ///
+    /// See also [`subscribe_stream`](Self::subscribe_stream) for using the
+    /// default capacity configured at `SharedBody` creation.
     pub fn subscribe_with_cap(&self, max_queue: usize) -> BoxStream<'static, Result<Bytes, NetError>> {
         let (maybe_rx, id_opt) = {
             let mut st = self.inner.lock().unwrap();
@@ -160,7 +210,9 @@ impl SharedBody {
         }.boxed()
     }
 
-    // Subscribe with the configured per-subscriber queue capacity.
+    /// Subscribes with the default per-subscriber queue capacity.
+    ///
+    /// The capacity is the `max_queue` value that was provided to [`new`](Self::new).
     pub fn subscribe_stream(&self) -> BoxStream<'static, Result<Bytes, NetError>> {
         let cap = {
             let st = self.inner.lock().unwrap();
@@ -170,10 +222,29 @@ impl SharedBody {
         self.subscribe_with_cap(cap)
     }
 
-    /// Produce an `AsyncRead` that yields `peek` first, then the live tail bytes.
-    /// Useful for down-conversion to a single reader (e.g., for `read_to_end`).
-    pub fn combined_reader(peek: Vec<u8>, shared: Arc<SharedBody>) -> Pin<Box<dyn AsyncRead + Send>> {
-        let head = stream::iter([Ok::<Bytes, std::io::Error>(Bytes::from(peek))]);
+    /// Returns an `AsyncRead` that yields `peek` first, then the live tail bytes.
+    ///
+    /// This is useful when downstream code expects an `AsyncRead` instead of a
+    /// `Stream` (e.g., `tokio::io::copy`). The returned reader:
+    ///
+    /// 1. Reads the provided `peek` buffer.
+    /// 2. Continues with chunks from `shared.subscribe_stream()`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use std::{pin::Pin, sync::Arc};
+    /// # use tokio::io::{self, AsyncReadExt};
+    /// # use gosub_engine::net::shared_body::SharedBody;
+    /// let shared = Arc::new(SharedBody::new(8));
+    /// let mut r = SharedBody::combined_reader(b"HEAD".to_vec(), shared.clone());
+    /// # tokio_test::block_on(async {
+    /// let mut out = Vec::new();
+    /// r.read_to_end(&mut out).await.unwrap();
+    /// # let _ = out;
+    /// # });
+    /// ```
+    pub fn combined_reader(peek_buf: PeekBuf, shared: Arc<SharedBody>) -> Pin<Box<dyn AsyncRead + Send>> {
+        let head = stream::iter([Ok::<Bytes, std::io::Error>(peek_buf.into_bytes())]);
         let rest_stream = shared
             .subscribe_stream()
             .map_err(|e: NetError| e.to_io());
@@ -183,18 +254,31 @@ impl SharedBody {
     }
 }
 
+/// Options to wrap an `AsyncRead` into a `SharedBody` via
+/// [`SharedBody::from_reader`].
+///
+/// These control buffering, cancellation, timeouts, and byte limits.
 pub struct ReaderOptions {
-    /// Capacity of the shared body
+    /// Per-subscriber queue capacity for the `SharedBody` created by
+    /// [`from_reader`](SharedBody::from_reader).
+    ///
+    /// Larger values increase tolerance for short subscriber stalls, at the cost
+    /// of memory. Small values drop lagging subscribers sooner.
     pub capacity: usize,
-    /// Read buffer size
+    /// Size of the temporary read buffer used when pulling from the source
+    /// `AsyncRead`. Larger buffers reduce syscalls but may raise latency per chunk.
     pub buf_size: usize,
-    /// Cancellation token
+    /// Optional cooperative cancellation token. If cancelled, reading stops and
+    /// subscribers receive `NetError::Cancelled`.
     pub cancel: Option<CancellationToken>,
-    /// Idle timeout for read operations
+    /// Maximum allowed time between successful read operations. When exceeded,
+    /// reading stops with `NetError::Timeout("read idle timeout")`.
     pub idle_timeout: Option<Duration>,
-    /// Total timeout for the entire read operation
+    /// Total deadline for the entire body. When exceeded, reading stops with
+    /// `NetError::Timeout("total read timeout")`.
     pub total_timeout: Option<Duration>,
-    /// Maximum total size to read (if known)
+    /// Maximum total number of bytes to read. Exceeding this limit triggers an
+    /// error and closes the stream.
     pub max_size: Option<u64>,
 }
 
@@ -212,6 +296,45 @@ impl Default for ReaderOptions {
 }
 
 impl SharedBody {
+    /// Spawns a background task that reads from `reader` and pushes chunks into
+    /// a new `SharedBody`, honoring cancellation, timeouts, and size limits.
+    ///
+    /// - On EOF: calls [`finish`](Self::finish).
+    /// - On I/O error or policy violation: calls [`error`](Self::error).
+    ///
+    /// The returned `Arc<SharedBody>` can be subscribed to immediately; chunks
+    /// will arrive as the background task reads.
+    ///
+    /// # Examples
+    /// Wrap a `reqwest` body (converted to `AsyncRead`) and tee it:
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use futures_util::TryStreamExt;
+    /// # use gosub_engine::net::shared_body::{SharedBody, ReaderOptions};
+    /// # async fn demo(mut r: impl tokio::io::AsyncRead + Send + Unpin + 'static) {
+    /// let body = SharedBody::from_reader(r, ReaderOptions::default());
+    /// let mut a = body.subscribe_stream();
+    /// let mut b = body.subscribe_stream();
+    ///
+    /// // A: count bytes
+    /// tokio::spawn(async move {
+    ///     let mut total = 0usize;
+    ///     while let Some(chunk) = a.next().await {
+    ///         total += chunk.unwrap().len();
+    ///     }
+    ///     println!("A total={}", total);
+    /// });
+    ///
+    /// // B: collect whole body
+    /// tokio::spawn(async move {
+    ///     let collected = b.try_fold(Vec::new(), |mut acc, bytes| async move {
+    ///         acc.extend_from_slice(&bytes);
+    ///         Ok(acc)
+    ///     }).await.unwrap();
+    ///     println!("B len={}", collected.len());
+    /// });
+    /// # }
+    /// ```
     pub fn from_reader<R>(mut reader: R, opts: ReaderOptions) -> Arc<Self>
     where
         R: AsyncRead + Send + 'static + Unpin,
@@ -318,7 +441,10 @@ impl SharedBody {
     }
 }
 
-/// Per-subscriber stream that auto-unregisters on drop.
+/// Per-subscriber stream returned by [`SharedBody::subscribe_*`].
+///
+/// Deregisters itself from the parent `SharedBody` on drop. You normally do not
+/// use `SubStream` directly—treat it as an opaque `Stream<Item = Result<Bytes, NetError>>`.
 struct SubStream {
     id: u64,
     parent: Arc<Mutex<State>>,
@@ -424,7 +550,7 @@ mod tests {
         let sb = SharedBody::new(8);
         let sb2 = sb.clone();
 
-        let peek = b"PEEK-".to_vec();
+        let peek_buf = PeekBuf::from_slice(b"PEEK-");
 
         // write tail in background
         tokio::spawn(async move {
@@ -434,7 +560,7 @@ mod tests {
         });
 
         // use the static helper you defined
-        let mut reader = SharedBody::combined_reader(peek, Arc::new(sb));
+        let mut reader = SharedBody::combined_reader(peek_buf, Arc::new(sb));
 
         let mut out = Vec::new();
         reader.read_to_end(&mut out).await.unwrap();

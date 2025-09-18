@@ -5,6 +5,7 @@ use bytes::Bytes;
 use tokio::io::{AsyncReadExt, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
 use url::Url;
+use crate::engine::types::PeekBuf;
 use crate::net::SharedBody;
 use crate::net::types::{FetchResult, NetError};
 
@@ -17,16 +18,14 @@ pub struct Waiter {
 }
 
 impl Waiter {
-    pub(crate) fn new_arc() -> Arc<Waiter> {
-        Arc::new(Waiter::new())
-    }
-}
-
-impl Waiter {
     pub fn new() -> Self {
         Self {
             listeners: Mutex::new(Vec::new())
         }
+    }
+
+    pub(crate) fn new_arc() -> Arc<Waiter> {
+        Arc::new(Waiter::new())
     }
 
     /// Register a consumer for this waiter. We need to know if the consumer is streaming or not.
@@ -45,7 +44,7 @@ impl Waiter {
                     let _ = tx.send(res.clone());
                 }
             }
-            FetchResult::Stream { meta, peek, shared } => {
+            FetchResult::Stream { meta, peek_buf, shared } => {
                 let mut streaming_ls = Vec::new();
                 let mut buffered_ls = Vec::new();
                 while let Some((wants_stream, tx)) = ls.pop() {
@@ -58,13 +57,13 @@ impl Waiter {
 
                 // Send the stream to all the streaming listeners
                 for tx in streaming_ls {
-                    let res = FetchResult::Stream { meta: meta.clone(), peek: peek.clone(), shared: shared.clone() };
+                    let res = FetchResult::Stream { meta: meta.clone(), peek_buf: peek_buf.clone(), shared: shared.clone() };
                     let _ = tx.send(res);
                 }
 
                 // Send the stream as buffered to all the buffered listeners
                 if !buffered_ls.is_empty() {
-                    match stream_to_bytes(peek, shared).await {
+                    match stream_to_bytes(peek_buf, shared).await {
                         Ok(b) => {
                             let res = FetchResult::Buffered { meta: meta.clone(), body: b };
                             for tx in buffered_ls {
@@ -101,11 +100,11 @@ impl Waiter {
 
 /// Convert a streaming body a buffered fetchresult by reading it to the end.
 /// This could be more efficient with allocations probably.
-pub async fn stream_to_bytes(peek: Vec<u8>, shared: Arc<SharedBody>) -> anyhow::Result<Bytes> {
+pub async fn stream_to_bytes(peek_buf: PeekBuf, shared: Arc<SharedBody>) -> anyhow::Result<Bytes> {
     // Allocate for at least peek buffer, plus some additional to start the streaming
-    let mut out = Vec::with_capacity(peek.len() + 8192);
+    let mut out = Vec::with_capacity(peek_buf.len() + 8192);
 
-    let mut reader = SharedBody::combined_reader(peek, shared);
+    let mut reader = SharedBody::combined_reader(peek_buf, shared);
     if let Err(e) = reader.read_to_end(&mut out).await {
         return Err(NetError::Io(Arc::new(e)).into());
     }
@@ -169,6 +168,7 @@ mod tests {
     use crate::net::shared_body::SharedBody;
     use tokio::io::AsyncReadExt;
     use tokio::time::{sleep, Duration};
+    use crate::net::types::FetchResultMeta;
 
     fn dummy_meta() -> FetchResultMeta {
         FetchResultMeta {
@@ -178,7 +178,6 @@ mod tests {
             headers: http::HeaderMap::new(),
             content_length: None,
             content_type: None,
-            peek: Vec::new(),
             has_body: true,
         }
     }
@@ -274,13 +273,13 @@ mod tests {
         });
 
         let meta = dummy_meta();
-        let peek = b"PEEK-".to_vec();
+        let peek_buf = PeekBuf::from_slice(b"PEEK-");
 
         // Finish with a Stream result (leader would produce this)
         waiter
             .finish(FetchResult::Stream {
                 meta: meta.clone(),
-                peek: peek.clone(),
+                peek_buf: peek_buf.clone(),
                 shared: shared.clone(),
             })
             .await;
@@ -288,7 +287,7 @@ mod tests {
         // Streaming listener should get Stream
         let r_stream = rx_stream.await.unwrap();
         match r_stream {
-            FetchResult::Stream { meta: m, peek: p, .. } => {
+            FetchResult::Stream { meta: m, peek_buf: p, .. } => {
                 assert_eq!(m.status, 200);
                 assert_eq!(&p[..], b"PEEK-");
             }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use async_trait::async_trait;
+use crate::engine::types::PeekBuf;
 use crate::net::{stream_to_bytes, SharedBody};
 use crate::net::types::FetchResultMeta;
 
@@ -10,7 +11,7 @@ pub trait JsPipeline {
     async fn parse_stream(
         &mut self,
         meta: FetchResultMeta,
-        peek: &[u8],
+        peek_buf: PeekBuf,
         body: Arc<SharedBody>
     ) -> anyhow::Result<DummyJsDocument>;
 
@@ -26,9 +27,9 @@ struct JsPipelineImpl;
 
 #[async_trait]
 impl JsPipeline for JsPipelineImpl {
-    async fn parse_stream(&mut self, _meta: FetchResultMeta, peek: &[u8], shared: Arc<SharedBody>) -> anyhow::Result<DummyJsDocument> {
+    async fn parse_stream(&mut self, _meta: FetchResultMeta, peek_buf: PeekBuf, shared: Arc<SharedBody>) -> anyhow::Result<DummyJsDocument> {
         // Normally, we send chunks to the Font parser. Right now, we just collect everything
-        match stream_to_bytes(peek.to_vec(), shared).await {
+        match stream_to_bytes(peek_buf, shared).await {
             Ok(buf) => Ok(String::from_utf8_lossy(buf.as_ref()).to_string()),
             Err(e) => Err(anyhow::anyhow!("Failed to read JS stream: {}", e))
         }

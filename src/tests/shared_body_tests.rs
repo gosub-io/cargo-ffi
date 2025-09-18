@@ -85,7 +85,7 @@ async fn downconvert_stream_to_buffered() {
         status_text: "OK".into(),
         headers: Default::default(),
         content_length: None,
-        peek: Vec::new(),
+        peek_buf: PeekBuf::empty(),
         has_body: true,
     };
 

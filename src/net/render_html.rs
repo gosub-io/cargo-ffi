@@ -1,7 +1,7 @@
 use tokio::io::AsyncRead;
 use url::Url;
+use crate::EngineError;
 use crate::html::DummyDocument;
-use crate::net::NavigationError;
 
 pub async fn render_main_html<R>(
     // tab_id: TabId,
@@ -12,7 +12,7 @@ pub async fn render_main_html<R>(
     // cfg: DummyHtml5Config,
     // mut emit_event: impl FnMut(EngineEvent) + Send,
     // mut enqueue_fetch: impl FnMut(FetchRequest) + Send,
-) -> Result<DummyDocument, NavigationError>
+) -> Result<DummyDocument, EngineError>
 where
     R: AsyncRead + Unpin + Send + 'static
 {
@@ -55,7 +55,6 @@ where
     // ).await.map_err(|e| NavigationError::Other(e) )?;
     //
     // // Fire whatever document/ready events you expose
-    // emit_event(EngineEvent::Load { tab_id, event: LoadEvent::MainDocumentParsed { nav_id, title: doc.title.clone() }});
     // emit_event(EngineEvent::Navigation { tab_id, event: NavigationEvent::Committed { nav_id, url: final_url }});
 
     let doc = DummyDocument {

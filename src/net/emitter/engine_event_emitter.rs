@@ -130,7 +130,7 @@ impl NetObserver for EngineEventEmitter {
             NetEvent::Warning { .. } => {
                 // Do nothing
             }
-            NetEvent::DecisionRequired { url, status, headers, content_length, content_type, peek, token } => {
+            NetEvent::DecisionRequired { url, status, headers, content_length, content_type, peek_buf, token } => {
 
                 let RequestReference::Navigation(nav_id) = self.reference else {
                     // Only navigation requests can trigger decision required events
@@ -138,7 +138,7 @@ impl NetObserver for EngineEventEmitter {
                     return;
                 };
 
-                let has_body = peek.len() > 0;
+                let has_body = peek_buf.len() > 0;
 
                 self.emit_navigation_event(NavigationEvent::DecisionRequired {
                     nav_id,
@@ -150,7 +150,6 @@ impl NetObserver for EngineEventEmitter {
                         headers: headers.clone(),
                         content_length,
                         content_type,
-                        peek,
                         has_body,
                     }
                 });

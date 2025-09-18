@@ -1,7 +1,8 @@
 use std::time::Duration;
 use http::HeaderMap;
 use url::Url;
-use crate::net::decider::DecisionToken;
+use crate::engine::types::PeekBuf;
+use crate::net::decision_hub::DecisionToken;
 
 /// A NetObserver allows to send NetEvents to emitters
 pub trait NetObserver: Send + Sync {
@@ -63,12 +64,19 @@ pub enum NetEvent {
     },
     /// Resource top has been loaded, and UA needs to decide what to do next
     DecisionRequired {
+        /// The URL of the resource
         url: Url,
+        /// The HTTP status code
         status: u16,
+        /// The HTTP headers
         headers: HeaderMap,
+        /// The content length, if known
         content_length: Option<u64>,
+        /// The content type, if known
         content_type: Option<String>,
-        peek: Vec<u8>,
+        /// The first few bytes of the response body
+        peek_buf: PeekBuf,
+        /// The decision token to correlate the decision with the response
         token: DecisionToken
     },
 }

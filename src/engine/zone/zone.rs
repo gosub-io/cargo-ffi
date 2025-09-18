@@ -79,7 +79,7 @@ pub struct ZoneServices {
     pub cookie_store: Option<CookieStoreHandle>,
     /// Cookie jar for this zone (if any)
     pub cookie_jar: Option<CookieJarHandle>,
-    /// Policy for partitioning storage (cookies, localStorage, etc)
+    /// Policy for partitioning storage (cookies, localStorage, etc.)
     pub partition_policy: PartitionPolicy,
 }
 
@@ -249,7 +249,8 @@ impl Zone {
     // /// Returns the services available to tabs within this zone
     // pub fn services(&self) -> ZoneServices { self.services.clone() }
 
-    /// This function does the actual creation of the tab
+    /// Create a new tab in the zone. Will set any initial values provided in `initial`
+    /// and apply any overrides to the default services for the tab if any are required.
     pub async fn create_tab(
         &mut self,
         initial: TabDefaults,
@@ -294,55 +295,7 @@ impl Zone {
         }
 
         Ok(tab_handle)
-
-        // let join = spawn_tab_task(tab_args, ack_tx);
-        //
-        // match timeout(TAB_CREATION_TIMEOUT, ack_rx).await {
-        //     Ok(Ok(Ok(()))) => {
-        //         let title = initial.clone().title.unwrap_or_else(|| "New Tab".to_string());
-        //         self.tabs.insert(
-        //             tab_id,
-        //             tab.shared_state.clone(),
-        //         );
-        //
-        //         self.shared_tabs.event_tx.send(EngineEvent::TabCreated { tab_id, zone_id: self.id }).unwrap();
-        //         Ok(TabHandle::new(tab_id, tab_cmd_tx.clone()))
-        //     }
-        //     Ok(Ok(Err(e))) => {
-        //         join.abort();
-        //         Err(EngineError::TaskInitFailed(e.into()))
-        //     }
-        //     Ok(Err(e)) => {
-        //         join.abort();
-        //         Err(EngineError::TaskInitFailed(e.into()))
-        //     }
-        //     Err(e) => {
-        //         join.abort();
-        //         Err(EngineError::TaskInitFailed(e.into()))
-        //     }
-        // }
     }
-
-    // /// Get the shared localStorage area for this (zone × partition × origin).
-    // #[allow(unused)]
-    // pub fn local_area(
-    //     &self,
-    //     pk: &PartitionKey,
-    //     origin: &url::Origin,
-    // ) -> anyhow::Result<Arc<dyn StorageArea>> {
-    //     self.services.storage.local_for(self.id, pk, origin)
-    // }
-
-    // /// Get the per-tab sessionStorage area for (zone × tab × partition × origin).
-    // #[allow(unused)]
-    // pub fn session_area(
-    //     &self,
-    //     tab: TabId,
-    //     pk: &PartitionKey,
-    //     origin: &url::Origin,
-    // ) -> anyhow::Result<Arc<dyn StorageArea>> {
-    //     self.services.storage.session_for(self.id, tab, pk, origin)
-    // }
 
     /// Forwards storage events from the storage service to the engine event channel.
     fn spawn_storage_events_to_engine(&self) -> Result<tokio::task::JoinHandle<()>, EngineError> {
@@ -383,5 +336,46 @@ impl Zone {
     /// Lists all tab IDs in this zone.
     pub fn list_tabs(&self) -> Vec<TabId> {
         self.tabs.keys().cloned().collect()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use uuid::Uuid;
+    use crate::zone::ZoneId;
+
+    #[test]
+    fn zone_id_new_is_unique_enough() {
+        let mut set = HashSet::new();
+        for _ in 0..256 {
+            set.insert(ZoneId::new());
+        }
+        assert_eq!(set.len(), 256, "ZoneId::new() should produce unique IDs");
+    }
+
+    #[test]
+    fn zone_id_from_uuid_and_display_round_trip() {
+        let u = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let zid = ZoneId::from(u);
+        let s = zid.to_string();
+        assert_eq!(s, u.to_string(), "Display for ZoneId should mirror inner Uuid");
+        // sanity: Debug contains the UUID somewhere
+        let dbg = format!("{zid:?}");
+        assert!(
+            dbg.contains(&u.to_string()),
+            "Debug for ZoneId should include UUID"
+        );
+    }
+
+    #[test]
+    fn shared_flags_default_is_all_false() {
+        let f = SharedFlags::default();
+        assert!(!f.share_autocomplete);
+        assert!(!f.share_bookmarks);
+        assert!(!f.share_passwords);
+        assert!(!f.share_cookiejar);
     }
 }

@@ -113,43 +113,6 @@ impl BrowsingContext {
         self.storage.as_ref().map(|s| s.session.clone())
     }
 
-    // /// Load a URL, mutate the context, and return the raw Response.
-    // /// - On success: sets current_url (after redirects), raw_html (decoded), clears `failed`, invalidates render.
-    // /// - On error/cancel: sets `failed = true` (and leaves previous HTML intact), returns a descriptive error.
-    // ///
-    // /// Caller (e.g., the tab task) can also use `resp.headers` to store cookies into the zone jar.
-    // pub async fn load(&mut self, url: Url, cancel: tokio_util::sync::CancellationToken) -> Result<Response, LoadError> {
-    //     self.failed = false;
-    //     self.current_url = Some(url.clone());
-    //
-    //     let resp = tokio::select! {
-    //         _ = cancel.cancelled() => {
-    //             self.failed = true;
-    //             self.set_raw_html("<pre>Load cancelled</pre>");
-    //             return Err(LoadError::Cancelled);
-    //         }
-    //         r = fetch(url) => {
-    //             match r {
-    //                 Ok(resp) => resp,
-    //                 Err(e) => {
-    //                     self.failed = true;
-    //                     self.set_raw_html(&format!("<pre>Load error: {e}</pre>"));
-    //                     return Err(LoadError::Net(e));
-    //                 }
-    //             }
-    //         }
-    //     };
-    //
-    //     // Update to the final URL after redirects (if your fetch follows redirects)
-    //     self.current_url = Some(resp.url.clone());
-    //
-    //     // Decode body to string using Content-Type charset when available
-    //     let html = decode_response_body(&resp.headers, &resp.body);
-    //     self.set_raw_html(&html); // marks DOM/style/layout and invalidates render
-    //
-    //     Ok(resp)
-    // }
-
     /// Sets the raw HTML for the given tab
     pub fn set_raw_html(&mut self, html: &str) {
         self.raw_html = html.to_string();
@@ -237,6 +200,5 @@ impl BrowsingContext {
     }
 }
 
-#[cfg(test)]
-mod tests {
-}
+
+

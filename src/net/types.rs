@@ -8,35 +8,14 @@ use http::{header, HeaderMap, Method};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::engine::types::RequestId;
+use crate::engine::types::{PeekBuf, RequestId};
 use crate::html::DummyDocument;
 use crate::NavigationId;
 use crate::net::shared_body::SharedBody;
 use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
 use crate::tab::TabId;
 
-#[derive(Debug, Clone, Copy)]
-pub enum BodyDecode {
-    /// Automatically decode the body
-    Auto,
-    /// Return the body as-is
-    Raw,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum FetchMode {
-    // fetch the top of the resource
-    TopOnly,
-    // fetch the complete resource
-    Complete,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResourceKindHint {
-    MainDocument,
-    SubResource,
-}
-
+/// A BodyStream is an async reader that can be used to read the body of a response.
 pub struct BodyStream {
     /// Inner reader
     inner: Pin<Box<dyn AsyncRead + Send + 'static>>,
@@ -106,8 +85,8 @@ pub struct FetchResultMeta {
     pub content_length: Option<u64>,
     /// Content-Type header (if any)
     pub content_type: Option<String>,
-    /// First bytes of the response body, for MIME sniffing etc
-    pub peek: Vec<u8>,
+    // /// First bytes of the response body, for MIME sniffing etc
+    // pub peek_buf: PeekBuf,
     /// True if the response has a body (e.g. HEAD requests do not)
     pub has_body: bool,
 }
@@ -154,8 +133,11 @@ pub enum ResourceKind {
 /// If this is true, the requests are bundled so only once the resource will be fetched.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FetchKeyData {
+    /// URL fetched
     pub url: Url,
+    /// HTTP method used (GET, POST etc)
     pub method: Method,
+    /// HTTP headers
     pub headers: HeaderMap,
 }
 
@@ -166,6 +148,7 @@ impl Display for FetchKeyData {
 }
 
 impl FetchKeyData {
+    /// Creates a new fetch key data with the given URL, method GET and no headers
     pub fn new(url: Url) -> Self {
         Self {
             url,
@@ -225,12 +208,21 @@ type DocumentId = u64;
 type PrefetchId = u64;
 type TaskId = u64;
 
+/// Request references indicate what initiated the request without the net functionality knowning
+/// about its caller. This way, we can let the net module still emit events based on the request
+/// reference. For instance, a request from a navigation (with a navigation_id) can emit at a
+/// low level events to a tab, without the system knowning what a tab is. This leaves the engine
+/// independent of higher level functionaliy.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum RequestReference {
-    Navigation(NavigationId),      // main doc for a tab
-    Document(DocumentId),          // subresources of a specific doc
-    Prefetch(PrefetchId),          // background prefetches
-    Background(TaskId),            // misc/system
+    /// Main doc for a tab
+    Navigation(NavigationId),
+    /// Subresources of a specific doc
+    Document(DocumentId),
+    /// Background prefetches
+    Prefetch(PrefetchId),
+    /// Misc/system
+    Background(TaskId),
 }
 
 /// RequestReferenceMap will map a request reference to a specific tab (for instance, to deliver the result)
@@ -266,21 +258,13 @@ pub struct FetchRequest {
 /// FetchResult defines the resource response. Either a stream or buffered response are possible
 #[derive(Clone)]
 pub enum FetchResult {
-    // Document { meta: FetchResultMeta, doc: DummyDocument },
     /// Streamed response body
-    Stream { meta: FetchResultMeta, peek: Vec<u8>, shared: Arc<SharedBody> },
+    Stream { meta: FetchResultMeta, peek_buf: PeekBuf, shared: Arc<SharedBody> },
     /// Buffered response body
     Buffered { meta: FetchResultMeta, body: Bytes },
-    /// File download started (for large files, or files that should be saved directly)
-    // DownloadStarted { meta: FetchResultMeta, dest: PathBuf, handle: Arc<JoinHandle<Result<Option<PathBuf>, NetError>>> },
-    /// File download completed and ready to be opened externally
-    // OpenExternal { meta: FetchResultMeta, staged_path: PathBuf },
-    /// Request was cancelled
-    // Cancelled,
     /// Network error
     Error(NetError),
 }
-
 
 impl Debug for FetchResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -352,12 +336,6 @@ pub enum NetError {
     Timeout(String),
 }
 
-// impl From<reqwest::Error> for NetError {
-//     fn from(e: reqwest::Error) -> Self {
-//         NetError::Reqwest(Arc::new(e))
-//     }
-// }
-//
 impl From<std::io::Error> for NetError {
     fn from(e: std::io::Error) -> Self {
         NetError::Io(Arc::new(e))
@@ -404,7 +382,6 @@ mod tests {
             headers: HeaderMap::new(),
             content_length: None,
             content_type: None,
-            peek: Vec::new(),
             has_body: true,
         }
     }
@@ -513,7 +490,7 @@ mod tests {
         let shared = Arc::new(SharedBody::new(8));
         let _r = FetchResult::Stream {
             meta,
-            peek: b"PEEK".to_vec(),
+            peek_buf: PeekBuf::from_slice(b"PEEK"),
             shared,
         };
     }
