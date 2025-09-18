@@ -5,6 +5,8 @@ use regex::Regex;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use crate::net::RequestDestination;
+use crate::net::types::Priority;
 
 /// What kind of resource we discovered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -17,10 +19,16 @@ pub enum ResourceKind {
 /// A hint to the engine/IO layer that a subresource should be fetched.
 #[derive(Debug, Clone)]
 pub struct ResourceHint {
-    pub url: Url,                 // fully resolved
+    pub url: Url,
+    // Style/Script/Image/Font/Audio/Video/Worker
+    pub dest: RequestDestination,
     pub kind: ResourceKind,
-    pub rel: Option<String>,      // e.g., "stylesheet"
-    pub from_attr: &'static str,  // e.g., "href" or "src"
+    pub rel: Option<String>, // e.g. "stylesheet"
+    pub from_attr: &'static str, // e.g. "href" or "src
+    pub referrer: Option<url::Url>,
+    pub cross_origin: bool,
+    pub integrity: Option<String>,
+    pub priority: Priority,
 }
 
 /// The "document" we "parsed".
@@ -31,6 +39,17 @@ pub struct DummyDocument {
     /// Whole HTML as UTF-8 (best-effort).
     pub raw_html: String,
 }
+
+impl DummyDocument {
+    /// Synthesize a dummy document from a string.
+    pub fn from(html: String, final_url: Url) -> Self {
+        let title = discover_title(&html);
+        Self {
+            final_url,
+            title,
+            raw_html: html,
+        }
+    }}
 
 /// Error type for this dummy parser.
 #[derive(thiserror::Error, Debug)]
@@ -171,9 +190,14 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
             if let Ok(u) = resolve(base, m.as_str()) {
                 out.push(ResourceHint {
                     url: u,
+                    dest: RequestDestination::MainDocument,
+                    referrer: None,
+                    cross_origin: false,
+                    integrity: None,
                     kind: ResourceKind::Stylesheet,
                     rel: Some("stylesheet".to_string()),
                     from_attr: "href",
+                    priority: Priority::High,
                 });
             }
         }
@@ -188,6 +212,11 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
                     kind: ResourceKind::Script,
                     rel: None,
                     from_attr: "src",
+                    dest: RequestDestination::Script,
+                    referrer: None,
+                    cross_origin: false,
+                    integrity: None,
+                    priority: Priority::Normal,
                 });
             }
         }
@@ -202,6 +231,11 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
                     kind: ResourceKind::Image,
                     rel: None,
                     from_attr: "src",
+                    dest: RequestDestination::Image,
+                    referrer: None,
+                    cross_origin: false,
+                    integrity: None,
+                    priority: Priority::Low,
                 });
             }
         }

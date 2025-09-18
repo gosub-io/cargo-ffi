@@ -1,19 +1,22 @@
+use std::io::Cursor;
 use std::sync::Arc;
+use async_trait::async_trait;
+use image::ImageReader;
 use crate::net::{stream_to_bytes, SharedBody};
 use crate::net::types::FetchResultMeta;
 
+#[async_trait]
 pub trait ImagePipeline {
     async fn parse_stream(
-        &self,
+        &mut self,
         meta: FetchResultMeta,
         peek: &[u8],
         body: Arc<SharedBody>
     ) -> anyhow::Result<image::DynamicImage>;
 
     async fn parse_bytes(
-        &self,
+        &mut self,
         meta: FetchResultMeta,
-        peek: &[u8],
         body: &[u8],
     ) -> anyhow::Result<image::DynamicImage>;
 }
@@ -21,18 +24,23 @@ pub trait ImagePipeline {
 
 struct ImagePipelineImpl;
 
+#[async_trait]
 impl ImagePipeline for ImagePipelineImpl {
-    async fn parse_stream(&self, meta: FetchResultMeta, peek: &[u8], shared: Arc<SharedBody>) -> anyhow::Result<image::DynamicImage> {
+    async fn parse_stream(&mut self, _meta: FetchResultMeta, peek: &[u8], shared: Arc<SharedBody>) -> anyhow::Result<image::DynamicImage> {
         // Normally, we send chunks to the Font parser. Right now, we just collect everything
-        let b = stream_to_bytes(meta, peek.to_vec(), shared);
-        Ok(String::from_utf8_lossy(b).to_string())
+        match stream_to_bytes(peek.to_vec(), shared).await {
+            Ok(buf) => {
+                ImageReader::new(Cursor::new(buf))
+                    .with_guessed_format()?.decode()
+                    .map_err(|e| anyhow::anyhow!("Failed to decode image: {}", e))
+            }
+            Err(e) => Err(anyhow::anyhow!("Failed to read image stream: {}", e))
+        }
     }
 
-    async fn parse_bytes(&self, meta: FetchResultMeta, peek: &[u8], body: &[u8]) -> anyhow::Result<image::DynamicImage>{
-        let mut bytes = Vec::with_capacity(peek.len() + body.len());
-        bytes.extend_from_slice(peek);
-        bytes.extend_from_slice(body);
-
-        Ok(String::from_utf8_lossy(bytes.as_slice()).to_string())
+    async fn parse_bytes(&mut self, _meta: FetchResultMeta, body: &[u8]) -> anyhow::Result<image::DynamicImage>{
+        ImageReader::new(Cursor::new(body))
+            .with_guessed_format()?.decode()
+            .map_err(|e| anyhow::anyhow!("Failed to decode image: {}", e))
     }
 }

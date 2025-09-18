@@ -94,6 +94,8 @@ chrono = "0.4.42"
 regex = "1.11.1"
 mimetype-detector = "0.2.2"
 image = "0.25.8"
+async-trait = "0.1.89"
+logger = "0.4.0"
 
 [features]
 default = ["sqlite_cookie_store", "parley_layout"]

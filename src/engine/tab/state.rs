@@ -1,16 +1,21 @@
-use std::time::Duration;
-use tokio_util::sync::CancellationToken;
-use url::Url;
 use crate::engine::types::NavigationId;
 use crate::net::ResourceLoadResult;
 use crate::render::Viewport;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+use url::Url;
 
 /// Represents an in-flight network load operation. It allows for easy cancellation in case
 /// the load is no longer needed (e.g., user navigated away).
 #[allow(unused)]
 pub(crate) struct InflightLoad {
+    /// Unique ID for the navigation operation
     pub nav_id: NavigationId,
+
+    /// Cancellation token to abort the load if needed
     pub cancel: CancellationToken,
+
+    /// One-shot channel to receive the result of the load operation
     pub rx: tokio::sync::oneshot::Receiver<(NavigationId, ResourceLoadResult)>,
 }
 
@@ -18,18 +23,22 @@ pub(crate) struct InflightLoad {
 pub(crate) struct TabRuntime {
     /// Is drawing enabled (vs suspended)
     pub drawing_enabled: bool,
+
     /// Target frames per second when drawing is enabled
     pub fps: u32,
+
     /// Interval timer for driving ticks
     pub interval: tokio::time::Interval,
+
     /// Current in-flight load operation, if any
     pub load: Option<InflightLoad>,
+
     /// Currently loading URL (if any)
     pub loaded_url: Option<Url>,
-    // /// Current viewport size
-    // pub viewport: Viewport,
+
     /// Has something changed that requires a redraw
     pub dirty: bool,
+
     // When the last tick draw was done
     pub last_tick_draw: std::time::Instant,
 }
@@ -84,8 +93,6 @@ pub enum TabState {
     /// A fatal error occurred while loading or rendering.
     Failed(String),
 }
-
-
 
 /// Activity mode for a [`Tab`]. Schedulers can allocate CPU/time by mode.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

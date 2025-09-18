@@ -33,6 +33,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use crate::engine::types::{EventChannel, IoChannel};
 use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
+use crate::net::types::RequestReferenceMap;
 use crate::util::spawn_named;
 
 pub struct GosubEngine {
@@ -62,6 +63,20 @@ pub struct EngineContext {
     pub config: Arc<EngineConfig>,
     /// I/O thread handle
     pub io_tx: Arc<RwLock<Option<IoChannel>>>,
+    /// Map for requests to tabs
+    pub request_reference_map: Arc<RwLock<RequestReferenceMap>>,
+}
+
+impl Default for EngineContext {
+    fn default() -> Self {
+        Self {
+            backend: Arc::new(RwLock::new(Box::new(crate::render::backends::null::NullBackend::new().unwrap()))),
+            event_tx: broadcast::channel::<EngineEvent>(DEFAULT_CHANNEL_CAPACITY).0,
+            config: Arc::new(EngineConfig::default()),
+            io_tx: Arc::new(RwLock::new(None)),
+            request_reference_map: Arc::new(RwLock::new(RequestReferenceMap::new())),
+        }
+    }
 }
 
 impl GosubEngine {
@@ -89,6 +104,7 @@ impl GosubEngine {
                 event_tx: event_tx.clone(),
                 config: Arc::new(resolved_config),
                 io_tx: Arc::new(RwLock::new(None)),
+                request_reference_map: Arc::new(RwLock::new(RequestReferenceMap::new())),
             }),
             zones: HashMap::new(),
             cmd_tx,
@@ -106,7 +122,7 @@ impl GosubEngine {
 
         // Start I/O thread
         let io_cfg = FetcherConfig::default();
-        let io_handle = spawn_io_thread(io_cfg, self.context.event_tx.clone());
+        let io_handle = spawn_io_thread(io_cfg, self.context.clone());
         let io_tx = io_handle.subscribe();
         {
             let mut guard = self.context.io_tx.write().unwrap();

@@ -100,12 +100,10 @@ async fn downconvert_stream_to_buffered() {
     });
 
     // Use your helper (adjust path) to convert stream -> buffered
-    let res = gosub_engine::net::shared_body::stream_to_bytes(meta.clone(), peek, sb.clone()).await;
-
+    let body = stream_to_bytes(peek, sb.clone()).await;
     match res {
-        FetchResult::Buffered { meta: m2, body } => {
-            assert_eq!(m2.status, 200);
-            assert_eq!(&body[..], b"HEAD-BODY-1-BODY-2");
+        Ok(body) => {
+            assert_eq(&body[..], b"HEAD-BODY-1-BODY-2");
         }
         _ => panic!("expected buffered"),
     }

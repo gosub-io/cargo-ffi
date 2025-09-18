@@ -1,10 +1,11 @@
 use crate::net::fetcher::{Fetcher, FetcherConfig};
-use crate::net::types::FetchRequest;
+use crate::net::types::{FetchRequest};
 use crate::util::spawn_named;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use crate::engine::types::{EventChannel, IoChannel};
+use crate::engine::EngineContext;
+use crate::engine::types::IoChannel;
 use crate::events::IoCommand;
 
 /// IoHandle is the handle that controls the IO thread.
@@ -55,14 +56,14 @@ impl IoHandle {
 /// Spawns the IO thread and runs a single fetcher on top. If needed, we can expand this system to
 /// run multiple fetchers on different OS threads for instance, but most likely the fetching itself
 /// isn't the biggest bottleneck.
-pub fn spawn_io_thread(cfg: FetcherConfig, event_tx: EventChannel) -> IoHandle {
+pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> IoHandle {
     let (tx_submit, mut rx_submit) = mpsc::unbounded_channel::<IoCommand>();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
     let io_tx = tx_submit.clone();
 
     let join_handle = spawn_named("I/O Thread", async move {
-        let fetcher = Arc::new(Fetcher::new(cfg, event_tx.clone(), io_tx.clone()));
+        let fetcher = Arc::new(Fetcher::new(cfg, engine_ctx.event_tx.clone(), io_tx.clone(), engine_ctx.request_reference_map.clone()));
         let cloned_fetcher = fetcher.clone();
         let cloned_shutdown_rx = shutdown_rx.clone();
 
@@ -127,8 +128,13 @@ mod tests {
     async fn driver_starts_and_shuts_down_cleanly() {
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
+        let ctx = Arc::new(EngineContext {
+            event_tx: tx.clone(),
+            .. Default::default()
+        });
+
         let cfg = test_cfg();
-        let handle = spawn_io_thread(cfg, tx.clone());
+        let handle = spawn_io_thread(cfg, ctx.clone());
 
         // Give the driver a moment to boot its internal scheduler
         sleep(Duration::from_millis(10)).await;
@@ -143,8 +149,13 @@ mod tests {
     async fn multiple_subscribers_do_not_block_shutdown() {
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
+        let ctx = Arc::new(EngineContext {
+            event_tx: tx.clone(),
+            .. Default::default()
+        });
+
         let cfg = test_cfg();
-        let handle = spawn_io_thread(cfg, tx.clone());
+        let handle = spawn_io_thread(cfg, ctx.clone());
 
         // create a few clones of the submit handle
         let s1 = handle.subscribe();
@@ -166,8 +177,13 @@ mod tests {
     async fn shutdown_signal_stops_driver_even_without_submissions() {
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
+        let ctx = Arc::new(EngineContext {
+            event_tx: tx.clone(),
+            .. Default::default()
+        });
+
         let cfg = test_cfg();
-        let handle = spawn_io_thread(cfg, tx.clone());
+        let handle = spawn_io_thread(cfg, ctx.clone());
 
         // no submissions; just shut down
         timeout(Duration::from_secs(2), handle.shutdown())
@@ -184,8 +200,13 @@ mod tests {
     async fn dropping_all_producers_plus_shutdown_is_clean() {
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
 
+        let ctx = Arc::new(EngineContext {
+            event_tx: tx.clone(),
+            .. Default::default()
+        });
+
         let cfg = test_cfg();
-        let handle = spawn_io_thread(cfg, tx.clone());
+        let handle = spawn_io_thread(cfg, ctx.clone());
 
         // extra producer
         let s = handle.subscribe();

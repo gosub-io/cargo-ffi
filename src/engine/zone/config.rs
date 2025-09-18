@@ -63,18 +63,31 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct ZoneConfig {
+    /// Maximum number of tabs allowed in this zone.
     pub max_tabs: usize,
+    /// Optional User-Agent string to send with requests.
     pub user_agent: Option<String>,
+    /// Optional Accept-Language header value.
     pub accept_languages: Option<String>,
+    /// Send DNT: 1 header if true.
     pub do_not_track: bool,
+    /// Enable or disable JavaScript execution.
     pub javascript_enabled: bool,
+    /// Enable or disable image loading.
     pub images_enabled: bool,
+    /// Enable or disable plugins (e.g. Flash).
     pub plugins_enabled: bool,
+    /// UI/content scale factor (1.0 = normal size).
     pub font_scale: f32,
+    /// Optional default font family name.
     pub default_font_family: Option<String>,
+    /// Default font size in CSS px (e.g. 16).
     pub default_font_size: u32,
+    /// Minimum allowed font size in CSS px (must be ≤ default_font_size).
     pub minimum_font_size: u32,
+    /// Allow access to local file:// URLs (may have sandboxing concerns).
     pub enable_local_file_access: bool,
+    /// Policy for storage partitioning (cookies, localStorage, etc.).
     pub partition_policy: PartitionPolicy,
 }
 
@@ -193,8 +206,11 @@ impl ZoneConfigBuilder {
 /// These checks help prevent common configuration errors and ensure a valid zone setup.
 #[derive(Debug, Clone)]
 pub enum ZoneConfigError {
+    /// Invalid font scale (must be 0.25..=10.0).
     InvalidFontScale(f32),
+    /// Minimum font size cannot exceed default font size.
     MinFontLarger { min: u32, default: u32 },
+    /// max_tabs must be at least 1.
     ZeroTabs,
 }
 

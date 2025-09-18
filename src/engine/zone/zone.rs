@@ -74,10 +74,12 @@ impl Display for ZoneId {
 /// Services provided to tabs within a zone
 #[derive(Clone, Debug)]
 pub struct ZoneServices {
-    // pub zone_id: ZoneId,
     pub storage: Arc<StorageService>,
+    /// Cookie store for this zone (if any)
     pub cookie_store: Option<CookieStoreHandle>,
+    /// Cookie jar for this zone (if any)
     pub cookie_jar: Option<CookieJarHandle>,
+    /// Policy for partitioning storage (cookies, localStorage, etc)
     pub partition_policy: PartitionPolicy,
 }
 

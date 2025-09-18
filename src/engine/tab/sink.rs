@@ -6,13 +6,17 @@ use crate::engine::types::NavigationId;
 
 /// Things shared upwards to the zone
 pub struct TabSink {
+    /// When the worker thread started
     pub worker_started: OnceLock<Instant>,
-
+    /// How many frames have been drawn
     pub frames_drawn: AtomicU64,
+    /// Last reported FPS * 100 (to keep as integer)
     pub last_fps_times100: AtomicU32,
-
+    /// Current navigation ID
     pub nav_id: RwLock<Option<NavigationId>>,
+    /// Current URL
     pub current_url: RwLock<Option<Url>>,
+    /// Last time we painted a frame
     pub last_paint: RwLock<Option<Instant>>,
 }
 
@@ -59,8 +63,8 @@ impl TabSink {
     }
 }
 
-/// Snapshot of the metrics to return to the caller. This "removes" all the locks and atomics
-/// for easier reading.
+/// Snapshot of the metrics to return to the caller. This removes all the locks and atomics
+/// for easier extraction.
 #[derive(Debug, Clone)]
 pub struct TabMetricsSnapshot {
     pub worker_started: Option<Instant>,

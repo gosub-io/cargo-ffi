@@ -1,15 +1,21 @@
+use std::sync::Arc;
+use bytes::{Buf, Bytes};
 use anyhow::anyhow;
-use crate::engine::pipeline::css::CssPipeline;
-use crate::engine::pipeline::font::FontPipeline;
+use http::Method;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+use crate::engine::pipeline::css::{CssPipeline, DummyStylesheet};
+use crate::engine::pipeline::font::{DummyFont, FontPipeline};
 use crate::engine::pipeline::html::HtmlPipeline;
 use crate::engine::pipeline::image::ImagePipeline;
-use crate::engine::pipeline::js::JsPipeline;
+use crate::engine::pipeline::js::{DummyJsDocument, JsPipeline};
+use crate::engine::types::{IoChannel, RequestId};
 use crate::engine::UaPolicy;
-use crate::html::{DummyDocument, DummyHtml5Config};
+use crate::events::IoCommand;
+use crate::html::{DummyDocument, ResourceHint};
 use crate::net::decision::types::BlockReason;
-use crate::net::{decide_handling, HandlingDecision, RenderTarget, RequestDestination};
-use crate::net::loader::Document;
-use crate::net::types::{FetchResult, FetchResultMeta, NavigationResult};
+use crate::net::{decide_handling, stream_to_bytes, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
+use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, RequestReference, ResourceKind};
 
 /// Hooks are functions that allows the router to call the correct pipeline for each type of
 /// resource.
@@ -26,119 +32,220 @@ pub struct Hooks<'a> {
 
 pub enum RoutedOutcome {
     MainDocument(DummyDocument),
-    ViewerRendered,
+    ViewerRendered(Bytes),
     DownloadStarted(std::path::PathBuf),
     DownloadFinished(std::path::PathBuf),
 
-    CssLoaded(u64 /* id */),
-    ScriptExecuted(u64 /* id */),
-    ImageDecoded(u64 /* id */),
-    FontLoaded(u64 /* id */),
+    CssLoaded(DummyStylesheet),
+    ScriptExecuted(DummyJsDocument),
+    ImageDecoded(image::DynamicImage),
+    FontLoaded(DummyFont),
 
     Blocked(BlockReason),
-    Failed(anyhow::Error),
     Cancelled,
 }
 
+pub fn resource_kind_from_dest(dest: RequestDestination) -> ResourceKind {
+    match dest {
+        RequestDestination::MainDocument => ResourceKind::Document,
+        RequestDestination::Style => ResourceKind::Stylesheet,
+        RequestDestination::Script => ResourceKind::Script { blocking: false },
+        RequestDestination::Image => ResourceKind::Image,
+        RequestDestination::Font => ResourceKind::Font,
+        RequestDestination::Other => ResourceKind::Other,
+        RequestDestination::Audio => ResourceKind::Media,
+        RequestDestination::Video => ResourceKind::Media,
+        RequestDestination::Worker => ResourceKind::Other,
+        RequestDestination::SharedWorker => ResourceKind::Other,
+        RequestDestination::ServiceWorker => ResourceKind::Other,
+        RequestDestination::Manifest => ResourceKind::Other,
+        RequestDestination::Track => ResourceKind::Other,
+        RequestDestination::Xslt => ResourceKind::Other,
+        RequestDestination::Fetch => ResourceKind::Other,
+        RequestDestination::Xhr => ResourceKind::Other,
+    }
+}
+
+enum BodyContent {
+    Stream { shared: Arc<SharedBody> },
+    Buffered { body: Bytes },
+}
+
+impl BodyContent {
+    // Convert to bytses, collecting the stream if necessary. Will take the peek buffer into account (if needed)
+    async fn to_bytes(self, peek: &[u8]) -> anyhow::Result<Bytes> {
+        match self {
+            BodyContent::Stream { shared } => {
+                let buf = stream_to_bytes(peek.to_vec(), shared).await?;
+                Ok(Bytes::from(buf))
+            }
+            BodyContent::Buffered { body } => Ok(body),
+        }
+    }
+}
+
+
 pub async fn route_response_for(
     dest: RequestDestination,
-    meta: FetchResultMeta,
     fetch_result: FetchResult,
-    policy: &*UaPolicy,
-    hooks: &mut Hooks,
-) -> RoutedOutcome {
+    policy: &UaPolicy,
+    hooks: &mut Hooks<'_>,
+) -> anyhow::Result<RoutedOutcome> {
 
-    // Find the peek, either from the stream, or directly from the buffered body
-    let peek = match fetch_result {
-        FetchResult::Stream { peek, .. } => peek.as_slice(),
-        FetchResult::Buffered { body, .. } => body.slice(0..5 * 1024).as_ref(), // first 5 KiB
-        FetchResult::Error(e) => return RoutedOutcome::Failed(anyhow!(e)),
+    // Fetch the meta data, peek buffer and content (type)
+    let (meta, body_content, peek) = match fetch_result {
+        FetchResult::Stream { meta, peek, shared } => {
+            let peek_bytes = Bytes::from(peek);
+            (meta, BodyContent::Stream { shared }, peek_bytes)
+        }
+        FetchResult::Buffered { meta, body } => {
+            let peek_bytes = body.slice(0..5 * 1024);
+            (meta, BodyContent::Buffered { body }, peek_bytes)
+        }
+        FetchResult::Error(e) => {
+            return Err(anyhow!(e));
+        }
     };
 
     // Decide what we need to do with the response
-    let outcome = decide_handling(&meta, dest, peek, policy);
+    let outcome = decide_handling(&meta, dest, peek.chunk(), policy);
 
-    match (dest, outcome.decision) {
-        (RequestDestination::MainDocument, HandlingDecision::Render { target }) => {
-            /// We need to render it
+    match (dest, outcome.decision, body_content) {
+        (RequestDestination::MainDocument, HandlingDecision::Render(target), body_content) => {
+            // We need to render it
             match target {
-                RenderTarget::TextViewer => {
-                    // We need to render it in the viewer (not through a parser)
-                    RoutedOutcome::ViewerRendered
-                }
+                RenderTarget::TextViewer => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
                 RenderTarget::HtmlParser => {
+                    let doc = match body_content {
+                        BodyContent::Stream { shared } => {
+                            hooks.html.parse_stream(meta, peek.chunk(), shared).await?
+                        }
+                        BodyContent::Buffered { body } => {
+                            hooks.html.parse_bytes(meta, body.as_ref()).await?
+                        }
+                    };
+                    Ok(RoutedOutcome::MainDocument(doc))
                     // Render through the HTML parser
-                    if let Some(reader) = shared {
-                        let doc = crate::engine::tab::worker::parse_main_document_stream(
-                            req.tab_id, req.nav_id, meta.final_url.clone(), reader, req.cancel.clone(),
-                            DummyHtml5Config::default(),
-                            |evt| { let _ = event_tx.send(evt); },
-                            |fetch_req| { let _ = io_tx.send(fetch_req); },
-                        ).await.unwrap_or(Document("".to_string()));
-                        NavigationResult::Document { meta, doc }
-                    } else {
-                        let bytes = body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek);
-                        let doc = crate::engine::tab::worker::parse_main_document_bytes(
-                            req.tab_id, req.nav_id, meta.final_url.clone(), bytes,
-                            ignore_cache, event_tx.clone()
-                        ).await.unwrap_or(Document("".to_string()));
-                        NavigationResult::Document { meta, doc }
-                    }
-                }
+                    // if let Some(reader) = shared {
+                    //     let doc = crate::engine::tab::worker::parse_main_document_stream(
+                    //         req.tab_id, req.nav_id, meta.final_url.clone(), reader, req.cancel.clone(),
+                    //         DummyHtml5Config::default(),
+                    //         |evt| { let _ = event_tx.send(evt); },
+                    //         |fetch_req| { let _ = io_tx.send(fetch_req); },
+                    //     ).await.unwrap_or(Document("".to_string()));
+                    //     NavigationResult::Document { meta, doc }
+                    // } else {
+                    //     let bytes = body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek);
+                    //     let doc = crate::engine::tab::worker::parse_main_document_bytes(
+                    //         req.tab_id, req.nav_id, meta.final_url.clone(), bytes,
+                    //         ignore_cache, event_tx.clone()
+                    //     ).await.unwrap_or(Document("".to_string()));
+                    //     NavigationResult::Document { meta, doc }
+                    // }
+                },
+                RenderTarget::CssParser => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
+                RenderTarget::JsEngine => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
+                RenderTarget::ImageDecoder => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
+                RenderTarget::MediaPipeline => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
+                RenderTarget::FontLoader => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
+                RenderTarget::PdfViewer => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
+                RenderTarget::BodyToJs => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(&peek).await?)),
             }
         }
-        (RequestDestination::MainDocument, HandlingDecision::Render(_)) => {
-            // Render a nont textviewer or html parser
-            hooks.viewer.render_top_level(outcome.class, meta, top).await?;
-            RoutedOutcome::ViewerRendered
-        }
-        (RequestDestination::MainDocument, HandlingDecision::Download { path }) => {
+        // (RequestDestination::MainDocument, HandlingDecision::Render(_)) => {
+        //     // Render a non text viewer or html parser
+        //     // hooks.viewer.render_top_level(outcome.class, meta, top).await?;
+        //     Ok(RoutedOutcome::ViewerRendered(fetch_result.to_bytes().await?))
+        // }
+        (RequestDestination::MainDocument, HandlingDecision::Download { .. }, _) => {
             // Download resource if it's a main document
-            let dest = hooks.download.resolve_or_prompt(path, &meta, &outcome).await?;
-            hooks.download.to_file(top, &dest, &meta).await?;
+            // let dest = hooks.download.resolve_or_prompt(path, &meta, &outcome).await?;
+            // hooks.download.to_file(top, &dest, &meta).await?;
             // You can split Started vs Finished if streaming.
-            RoutedOutcome::DownloadFinished(dest)
+            // RoutedOutcome::DownloadFinished(dest)
+            Err(anyhow!("Cannot download main document"))
         }
-        (RequestDestination::MainDocument, HandlingDecision::Block(reason)) => RoutedOutcome::Blocked(reason),
-        (RequestDestination::MainDocument, HandlingDecision::Cancel) => RoutedOutcome::Cancelled,
-        (RequestDestination::MainDocument, HandlingDecision::OpenExternal) => {
-            let p = hooks.external.stage_and_open(top, &meta).await?;
-            RoutedOutcome::DownloadStarted(p)
+        (RequestDestination::MainDocument, HandlingDecision::Block(reason), ..) => Ok(RoutedOutcome::Blocked(reason)),
+        (RequestDestination::MainDocument, HandlingDecision::Cancel, ..) => Ok(RoutedOutcome::Cancelled),
+        (RequestDestination::MainDocument, HandlingDecision::OpenExternal, ..) => {
+            // let p = hooks.external.stage_and_open(top, &meta).await?;
+            // RoutedOutcome::DownloadStarted(p)
+            Err(anyhow!("Cannot open main document in external application"))
         }
 
-        // -------- Subresources (no UA prompts) --------
-        (RequestDestination::Style, HandlingDecision::Render(RenderTarget::CssParser)) => {
-            match fetch_result {
-                FetchResult::Stream { shared, .. } => {
-                    let id = hooks.css.load_stream(meta.final_url.clone(), shared).await?;
-                    RoutedOutcome::CssLoaded(id)
-                }
-                FetchResult::Buffered { body, .. } => {
-                    let id = hooks.css.load_bytes(meta.final_url.clone(), &body).await?;
-                    RoutedOutcome::CssLoaded(id)
-                }
-                FetchResult::Error(_) => {
-                    RoutedOutcome::Failed(anyhow!("Expected stream or buffered body for CSS"))
-                }
-            }
+        // -------- Sub resources (no UA prompts) --------
+        (RequestDestination::Style, HandlingDecision::Render(RenderTarget::CssParser), body_content) => {
+            let stylesheet = match body_content {
+                BodyContent::Stream { shared } => hooks.css.parse_stream(meta, peek.chunk(), shared).await?,
+                BodyContent::Buffered { body } => hooks.css.parse_bytes(meta, body.as_ref()).await?,
+            };
+            Ok(RoutedOutcome::CssLoaded(stylesheet))
         }
-        (RequestDestination::Script, HandlingDecision::Render(RenderTarget::JsEngine)) => {
-            let id = hooks.js.exec(top, &meta).await?;
-            RoutedOutcome::ScriptExecuted(id)
+        (RequestDestination::Script, HandlingDecision::Render(RenderTarget::JsEngine), body_content) => {
+            let script = match body_content {
+                BodyContent::Stream { shared } => hooks.js.parse_stream(meta, peek.chunk(), shared).await?,
+                BodyContent::Buffered { body } => hooks.js.parse_bytes(meta, body.as_ref()).await?,
+            };
+            Ok(RoutedOutcome::ScriptExecuted(script))
         }
-        (RequestDestination::Image, HandlingDecision::Render(RenderTarget::ImageDecoder)) => {
-            let id = hooks.images.decode(top, &meta).await?;
-            RoutedOutcome::ImageDecoded(id)
+        (RequestDestination::Image, HandlingDecision::Render(RenderTarget::ImageDecoder), body_content) => {
+            let image = match body_content {
+                BodyContent::Stream { shared } => hooks.images.parse_stream(meta, peek.chunk(), shared).await?,
+                BodyContent::Buffered { body } => hooks.images.parse_bytes(meta, body.as_ref()).await?,
+            };
+            Ok(RoutedOutcome::ImageDecoded(image))
         }
-        (RequestDestination::Font, HandlingDecision::Render(RenderTarget::FontLoader)) => {
-            let id = hooks.fonts.load(top, &meta).await?;
-            RoutedOutcome::FontLoaded(id)
+        (RequestDestination::Font, HandlingDecision::Render(RenderTarget::FontLoader), body_content) => {
+            let font = match body_content {
+                BodyContent::Stream { shared } => hooks.fonts.parse_stream(meta, peek.chunk(), shared).await?,
+                BodyContent::Buffered { body } => hooks.fonts.parse_bytes(meta, body.as_ref()).await?,
+            };
+            Ok(RoutedOutcome::FontLoaded(font))
         }
 
         // Any other subresource decision that isn’t Render -> block (no download)
-        (_, HandlingDecision::Block(reason)) => RoutedOutcome::Blocked(reason),
-        (_, HandlingDecision::Cancel) => RoutedOutcome::Cancelled,
-        // Safety net: e.g., Download/OpenExternal for subresources → treat as block
-        (_, HandlingDecision::Download { .. } | HandlingDecision::OpenExternal | HandlingDecision::Render(_)) => RoutedOutcome::Blocked(BlockReason::Policy),
+        (_, HandlingDecision::Block(reason), _) => Ok(RoutedOutcome::Blocked(reason)),
+        (_, HandlingDecision::Cancel, _) => Ok(RoutedOutcome::Cancelled),
+
+        // Safety net: e.g., Download/OpenExternal for sub resources: treat as block
+        (_, HandlingDecision::Download { .. } | HandlingDecision::OpenExternal | HandlingDecision::Render(_), _) => Ok(RoutedOutcome::Blocked(BlockReason::Policy)),
     }
+}
+
+
+async fn fetch_and_route_subresource(
+    req_reference: RequestReference,
+    hint: ResourceHint,
+    io_tx: IoChannel,
+    cancel: CancellationToken,
+    policy: &UaPolicy,
+    hooks: &mut Hooks<'_>,
+) -> anyhow::Result<RoutedOutcome> {
+    let (tx, rx) = oneshot::channel();
+
+    let req = FetchRequest {
+        req_id: RequestId::new(),
+        reference: req_reference,
+        key_data: FetchKeyData {
+            url: hint.url,
+            method: Method::GET,
+            headers: Default::default(),
+        },
+        priority: hint.priority,
+        kind: resource_kind_from_dest(hint.dest),
+        initiator: Initiator::Parser,
+        streaming: true,
+        reply: Some(tx),
+        auto_decode: true,
+        max_bytes: None,
+        cancel,
+    };
+    io_tx.send(IoCommand::Fetch(req)).ok();
+
+    let fetch_result = match rx.await.map_err(|_| anyhow!("Failed to receive fetch result")) {
+        Ok(fr) => fr,
+        Err(e) => return Err(anyhow!("Fetch failed: {}", e)),
+    };
+
+    route_response_for(hint.dest, fetch_result, policy, hooks).await
 }

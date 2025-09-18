@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 use url::Url;
 use crate::engine::types::{NavigationId, RequestId, Action};
 use crate::net::DecisionToken;
-use crate::net::types::{FetchRequest, FetchResultMeta, Initiator, Priority, ResourceKind};
+use crate::net::types::{FetchRequest, FetchResultMeta, Initiator, Priority, RequestReference, ResourceKind};
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -42,7 +42,7 @@ pub enum MouseButton {
 }
 
 impl Display for MouseButton {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             MouseButton::Left => write!(f, "Left"),
             MouseButton::Middle => write!(f, "Middle"),
@@ -61,7 +61,7 @@ bitflags! {
 }
 
 impl Display for Modifiers {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut parts = Vec::new();
 
         if self.contains(Modifiers::SHIFT) {
@@ -225,8 +225,10 @@ pub enum LoadEvent {
 pub enum ResourceEvent {
     /// Response metadata for decision on navigation
     Queued {
-        /// Navigation ID that triggered loading this resource
-        nav_id: NavigationId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
         /// Actual URL of the resource
         url: String,
         /// Type of resource
@@ -238,10 +240,10 @@ pub enum ResourceEvent {
     },
     /// Loading of the resource started
     Started {
-        /// Navigation ID that triggered loading this resource
-        nav_id: NavigationId,
-        /// Request ID of the resource load
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
         /// Actual URL of the resource
         url: String,
         /// Type of resource
@@ -251,8 +253,10 @@ pub enum ResourceEvent {
     },
     /// Resource responded by a redirection to another resource (will trigger a new "Started")
     Redirected {
-        nav_id: NavigationId,
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
         // Redirection from this url
         from: String,
         // Redirection to this url
@@ -262,8 +266,10 @@ pub enum ResourceEvent {
     },
     /// Shows the progress of the download of the resource
     Progress {
-        nav_id: NavigationId,
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
         /// Amount of bytes received
         received_bytes: u64,
         /// Expected length (based on content-length for instance)
@@ -273,8 +279,10 @@ pub enum ResourceEvent {
     },
     /// Emitted when we have finished the complete resource
     Finished {
-        nav_id: NavigationId,
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
         url: Url,
         /// Total bytes received
         received_bytes: u64,
@@ -283,27 +291,39 @@ pub enum ResourceEvent {
     },
     /// Emitted when the resource has failed loading
     Failed {
-        nav_id: NavigationId,
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
         url: String,
         /// Reason the resource fetch failed
         error: Arc<anyhow::Error>,
     },
     /// Emitted when the resource loading has been cancelled
     Cancelled {
-        nav_id: NavigationId,
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        // Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
+        /// Actual URL of the resource
         url: String,
         /// Reason for cancellation
         reason: CancelReason,
     },
     Headers {
-        nav_id: NavigationId,
-        req_id: RequestId,
+        /// Request ID of the resource load (what if it contains multiple redirects?)
+        request_id: RequestId,
+        /// Reference ID for this resource (navigation id, document id, background task id etc.)
+        reference: RequestReference,
+        /// Actual URL of the resource
         url: String,
+        /// HTTP status code of the response
         status: u16,
+        /// Content length if known
         content_length: Option<u64>,
+        /// Content type if known
         content_type: Option<String>,
+        /// All response headers
         headers: Vec<(String, String)>,
     },
 }

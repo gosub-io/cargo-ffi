@@ -45,7 +45,8 @@ impl Display for TabId {
     }
 }
 
-/// Create a new tab without spawning
+/// Create a new tab without spawning the run() function. This allows callers to place the worker in
+/// its own task or manage its lifecycle differently.
 pub fn create_tab(
     zone_id: ZoneId,
     services: EffectiveTabServices,
@@ -68,7 +69,7 @@ pub fn create_tab(
     Ok((handle, worker))
 }
 
-/// Creates a new tab and spawns the worker
+/// Creates a new tab and spawns the worker on the current tokio runtime.
 pub fn create_tab_and_spawn(
     zone_id: ZoneId,
     services: EffectiveTabServices,

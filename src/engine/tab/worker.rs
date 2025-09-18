@@ -1,6 +1,6 @@
 use std::io::Cursor;
 use crate::engine::events::{CancelReason, EngineEvent, LoadEvent, NavigationEvent};
-use crate::engine::{BrowsingContext, UaPolicy};
+use crate::engine::BrowsingContext;
 use crate::events::{IoCommand, TabCommand};
 use crate::render::backend::{ErasedSurface, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::{DevicePixelRatio, Viewport};
@@ -18,42 +18,15 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::net::{decide_handling, HandlingDecision, NavigationError, RenderTarget, RequestDestination, Resource, ResourceLoadResult};
-use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, FetchResultMeta, Initiator, NavigationResult, Priority, ResourceKind};
+use crate::net::{HandlingDecision, NavigationError, RenderTarget, RequestDestination, Resource, ResourceLoadResult};
+use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, NavigationResult, Priority, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
 use tokio::time::{sleep, Duration, Instant};
-use crate::Action;
 use crate::engine::types::{EventChannel, NavigationId, RequestId};
 use crate::html::DummyHtml5Config;
 use crate::net::events::NetEvent;
 use crate::net::loader::Document;
-
-// #[allow(unused)]
-// enum InFlightState {
-//     WaitingMeta {
-//         cancel: CancellationToken,
-//     },
-//     WaitingDecision {
-//         meta: FetchResultMeta,
-//         // lease: BodyLease,
-//         cancel: CancellationToken,
-//     },
-//     ConsumingByUA {
-//         cancel: CancellationToken,
-//     },
-//     ConsumingByEngine {
-//         cancel: CancellationToken,
-//     },
-//     Done,
-// }
-//
-// impl InFlightState {
-//     #[allow(unused)]
-//     fn is_done(&self) -> bool {
-//         matches!(self, InFlightState::Done)
-//     }
-// }
 
 pub struct TabWorker {
     /// ID of the tab
@@ -525,7 +498,7 @@ impl TabWorker {
             //     Some(Action::ViewSource) => HandlingDecision::Render(RenderTarget::TextViewer), // escape+highlight in viewer
             //     _ => outcome.decision.clone(),
             // };
-            //
+
             let nav_output = match decision {
                 HandlingDecision::Render(RenderTarget::HtmlParser) => {
                     if let Some(reader) = shared {
@@ -570,28 +543,31 @@ impl TabWorker {
                                     token,
                                 });
                                 match tokio::select! {
-                        res = decision_rx => res.unwrap_or(Action::Cancel),
-                        _ = req.cancel.cancelled() => Action::Cancel,
-                        _ = tokio::time::sleep(Duration::from_secs(30)) => Action::Cancel,
-                    }
+                                    res = decision_rx => res.unwrap_or(Action::Cancel),
+                                    _ = req.cancel.cancelled() => Action::Cancel,
+                                    _ = tokio::time::sleep(Duration::from_secs(30)) => Action::Cancel,
+                                }
 
-                    if let Some(reader) = shared {
-                        let handle = spawn_pump(
-                            reader,
-                            PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek.clone() },
-                            PumpCfg {
-                                idle: cfg.read_idle_timeout,
-                                total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d),
-                            },
-                            req.cancel.clone(),
-                            observer.clone(),
-                            meta.final_url.clone(),
-                        );
-                        NavigationResult::DownloadStarted { meta, dest, handle: Arc::new(handle) }
-                    } else {
-                        // Buffered: write bytes directly
-                        // fs::write(&dest, body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek))?;
-                        NavigationResult::DownloadFinished { meta, dest }
+                                if let Some(reader) = shared {
+                                    let handle = spawn_pump(
+                                        reader,
+                                        PumpTargets { shared: None, file_dest: Some(dest.clone()), peek: peek.clone() },
+                                        PumpCfg {
+                                            idle: cfg.read_idle_timeout,
+                                            total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d),
+                                        },
+                                        req.cancel.clone(),
+                                        observer.clone(),
+                                        meta.final_url.clone(),
+                                    );
+                                    NavigationResult::DownloadStarted { meta, dest, handle: Arc::new(handle) }
+                                } else {
+                                    // Buffered: write bytes directly
+                                    // fs::write(&dest, body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek))?;
+                                    NavigationResult::DownloadFinished { meta, dest }
+                                }
+                            }
+                        }
                     }
                 }
                 HandlingDecision::Block(reason) => {

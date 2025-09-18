@@ -5,13 +5,14 @@
 use crate::net::events::NetObserver;
 use crate::net::fetch::{fetch_response_complete, fetch_response_top, ResponseTop};
 use crate::net::shared_body::{ReaderOptions, SharedBody};
-use crate::net::types::{FetchRequest, FetchResult, NetError, Priority};
+use crate::net::types::{FetchRequest, FetchResult, NetError, Priority, RequestReferenceMap};
 use crate::net::utils::{short_url, Waiter};
 use crate::util::spawn_named;
 use bytes::Bytes;
 use dashmap::{DashMap, Entry};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::sync::RwLock;
 use tokio::sync::{Notify, Semaphore};
 use url::Url;
 use crate::Action;
@@ -19,6 +20,7 @@ use crate::engine::types::{EventChannel, IoChannel};
 use crate::net::decider::DecisionHub;
 use crate::net::DecisionToken;
 use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
+use crate::net::emitter::null_emitter::NullEmitter;
 
 /// How many shared consumers can listen for a resource
 const SHARED_MAX_CAPACITY: usize = 32;
@@ -177,6 +179,9 @@ pub struct Fetcher {
 
     /// Decision hub for handling user decisions on requests
     decision_hub: Arc<DecisionHub>,
+
+    /// Map to track request references for associating requests with their tabs
+    request_reference_map: Arc<RwLock<RequestReferenceMap>>,
 }
 
 impl Fetcher {
@@ -185,6 +190,7 @@ impl Fetcher {
         config: FetcherConfig,
         event_tx: EventChannel,
         io_tx: IoChannel,
+        request_reference_map: Arc<RwLock<RequestReferenceMap>>
     ) -> Self {
 
         // Start default client
@@ -211,6 +217,7 @@ impl Fetcher {
             event_tx,
             io_tx,
             decision_hub: Arc::new(DecisionHub::new()),
+            request_reference_map: request_reference_map.clone(),
         }
     }
 
@@ -355,14 +362,21 @@ impl Fetcher {
             let inflight_entry2 = inflight_entry.clone();
             let mut shutdown_child = shutdown.clone();
 
-            let observer = Arc::new(EngineEventEmitter::new(
-                req.tab_id,
-                req.nav_id,
-                req.req_id,
-                self.event_tx.clone(),
-                req.kind,
-                req.initiator,
-            ));
+            // Check if we this request has a navigation reference so we can emit events to the
+            // correct tab.
+
+            let guard = self.request_reference_map.read().unwrap();
+            let observer = match guard.get(&req.reference) {
+                Some(&tab_id) => Arc::new(EngineEventEmitter::new(
+                    tab_id,
+                    req.req_id,
+                    req.reference.clone(),
+                    self.event_tx.clone(),
+                    req.kind,
+                    req.initiator,
+                )) as Arc<dyn NetObserver + Send + Sync>,
+                _ => Arc::new(NullEmitter) as Arc<dyn NetObserver + Send + Sync>,
+            };
 
             let inflight_guard = InflightGuard::new(inflight.clone(), key_str2.clone());
 

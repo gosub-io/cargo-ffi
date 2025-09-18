@@ -6,7 +6,7 @@ use tokio::io::{AsyncReadExt, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
 use url::Url;
 use crate::net::SharedBody;
-use crate::net::types::{FetchResult, FetchResultMeta, NetError};
+use crate::net::types::{FetchResult, NetError};
 
 // Simple waiter for coalescing responses. If a fetcher detects we are requesting the same resources
 // that is already queued, we add them to the waiter for that request, so the request will fetch the
@@ -64,9 +64,19 @@ impl Waiter {
 
                 // Send the stream as buffered to all the buffered listeners
                 if !buffered_ls.is_empty() {
-                    let buffered_res = stream_to_bytes(meta.clone(), peek, shared).await;
-                    for tx in buffered_ls {
-                        let _ = tx.send(buffered_res.clone());
+                    match stream_to_bytes(peek, shared).await {
+                        Ok(b) => {
+                            let res = FetchResult::Buffered { meta: meta.clone(), body: b };
+                            for tx in buffered_ls {
+                                let _ = tx.send(res.clone());
+                            }
+                        }
+                        Err(e) => {
+                            let res = FetchResult::Error(NetError::Read(Arc::new(e)));
+                            for tx in buffered_ls {
+                                let _ = tx.send(res.clone());
+                            }
+                        }
                     }
                 }
             }
@@ -91,20 +101,16 @@ impl Waiter {
 
 /// Convert a streaming body a buffered fetchresult by reading it to the end.
 /// This could be more efficient with allocations probably.
-pub async fn stream_to_bytes(
-    meta: FetchResultMeta,
-    peek: Vec<u8>,
-    shared: Arc<SharedBody>,
-) -> FetchResult {
+pub async fn stream_to_bytes(peek: Vec<u8>, shared: Arc<SharedBody>) -> anyhow::Result<Bytes> {
     // Allocate for at least peek buffer, plus some additional to start the streaming
     let mut out = Vec::with_capacity(peek.len() + 8192);
 
     let mut reader = SharedBody::combined_reader(peek, shared);
     if let Err(e) = reader.read_to_end(&mut out).await {
-        return FetchResult::Error(NetError::Io(Arc::new(e)));
+        return Err(NetError::Io(Arc::new(e)).into());
     }
 
-    FetchResult::Buffered { meta, body: Bytes::from(out) }
+    Ok(Bytes::from(out))
 }
 
 /// Normalizes a URL by removing its fragment and returning it as a string.

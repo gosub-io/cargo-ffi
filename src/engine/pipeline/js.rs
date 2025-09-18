@@ -1,21 +1,22 @@
 use std::sync::Arc;
+use async_trait::async_trait;
 use crate::net::{stream_to_bytes, SharedBody};
 use crate::net::types::FetchResultMeta;
 
 pub type DummyJsDocument = String;
 
+#[async_trait]
 pub trait JsPipeline {
     async fn parse_stream(
-        &self,
+        &mut self,
         meta: FetchResultMeta,
         peek: &[u8],
         body: Arc<SharedBody>
     ) -> anyhow::Result<DummyJsDocument>;
 
     async fn parse_bytes(
-        &self,
+        &mut self,
         meta: FetchResultMeta,
-        peek: &[u8],
         body: &[u8],
     ) -> anyhow::Result<DummyJsDocument>;
 }
@@ -23,18 +24,17 @@ pub trait JsPipeline {
 
 struct JsPipelineImpl;
 
+#[async_trait]
 impl JsPipeline for JsPipelineImpl {
-    async fn parse_stream(&self, meta: FetchResultMeta, peek: &[u8], shared: Arc<SharedBody>) -> anyhow::Result<DummyJsDocument> {
+    async fn parse_stream(&mut self, _meta: FetchResultMeta, peek: &[u8], shared: Arc<SharedBody>) -> anyhow::Result<DummyJsDocument> {
         // Normally, we send chunks to the Font parser. Right now, we just collect everything
-        let b = stream_to_bytes(meta, peek.to_vec(), shared);
-        Ok(String::from_utf8_lossy(b).to_string())
+        match stream_to_bytes(peek.to_vec(), shared).await {
+            Ok(buf) => Ok(String::from_utf8_lossy(buf.as_ref()).to_string()),
+            Err(e) => Err(anyhow::anyhow!("Failed to read JS stream: {}", e))
+        }
     }
 
-    async fn parse_bytes(&self, meta: FetchResultMeta, peek: &[u8], body: &[u8]) -> anyhow::Result<DummyJsDocument>{
-        let mut bytes = Vec::with_capacity(peek.len() + body.len());
-        bytes.extend_from_slice(peek);
-        bytes.extend_from_slice(body);
-
-        Ok(String::from_utf8_lossy(bytes.as_slice()).to_string())
+    async fn parse_bytes(&mut self, _meta: FetchResultMeta, body: &[u8]) -> anyhow::Result<DummyJsDocument>{
+        Ok(String::from_utf8_lossy(body.as_ref()).to_string())
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use bytes::Bytes;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
@@ -219,13 +220,27 @@ impl FetchKeyData {
     }
 }
 
+// We don't know these types yet
+type DocumentId = u64;
+type PrefetchId = u64;
+type TaskId = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum RequestReference {
+    Navigation(NavigationId),      // main doc for a tab
+    Document(DocumentId),          // subresources of a specific doc
+    Prefetch(PrefetchId),          // background prefetches
+    Background(TaskId),            // misc/system
+}
+
+/// RequestReferenceMap will map a request reference to a specific tab (for instance, to deliver the result)
+pub type RequestReferenceMap = HashMap<RequestReference, TabId>;
+
 /// A fetch request defines what needs to be fetched, how and where to send the result to
 #[derive(Debug)]
 pub struct FetchRequest {
-    // Which Tab is asking for this resource
-    pub tab_id: TabId,
-    /// Which navigation is this request part of (if any)
-    pub nav_id: NavigationId,
+    /// Reference to what initiated this request (navigation, document, prefetch, background task)
+    pub reference: RequestReference,
     /// Unique ID of this request (for logging and tracking)
     pub req_id: RequestId,
     /// Key data identifying the resource to fetch
@@ -265,6 +280,7 @@ pub enum FetchResult {
     /// Network error
     Error(NetError),
 }
+
 
 impl Debug for FetchResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

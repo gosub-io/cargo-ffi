@@ -1,16 +1,16 @@
 use http::StatusCode;
 use crate::engine::events::{CancelReason, ResourceEvent};
-use crate::engine::types::{EventChannel, NavigationId, RequestId};
+use crate::engine::types::{EventChannel, RequestId};
 use crate::events::{EngineEvent, NavigationEvent};
-use crate::tab::TabId;
 use crate::net::events::{NetEvent, NetObserver};
-use crate::net::types::{FetchResultMeta, Initiator, ResourceKind};
+use crate::net::types::{FetchResultMeta, Initiator, RequestReference, ResourceKind};
+use crate::tab::TabId;
 
 /// Converts NetEvents into EngineEvents and send them over to the event_tx channel
 pub struct EngineEventEmitter {
     tab_id: TabId,
-    nav_id: NavigationId,
     req_id: RequestId,
+    reference: RequestReference,
     event_tx: EventChannel,
     kind: ResourceKind,
     initiator: Initiator,
@@ -19,14 +19,16 @@ pub struct EngineEventEmitter {
 impl EngineEventEmitter {
     #[must_use]
     pub fn new(
+        // Normally we don't expose high-level tab IDs to the net layer, but we need it here to
+        // route events back to the right tab. We retrieve this IDs from the resource_request_map
         tab_id: TabId,
-        nav_id: NavigationId,
         req_id: RequestId,
+        reference: RequestReference,
         event_tx: EventChannel,
         kind: ResourceKind,
         initiator: Initiator,
     ) -> Self {
-        Self { tab_id, nav_id, req_id, event_tx, kind, initiator }
+        Self { tab_id, req_id, reference, event_tx, kind, initiator }
     }
 
     #[allow(unused)]
@@ -51,8 +53,8 @@ impl NetObserver for EngineEventEmitter {
         match ev {
             NetEvent::Started { url } => {
                 self.emit(ResourceEvent::Started {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     url: url.to_string(),
                     kind: self.kind,
                     initiator: self.initiator,
@@ -60,8 +62,8 @@ impl NetObserver for EngineEventEmitter {
             }
             NetEvent::Redirected { from, to, status } => {
                 self.emit(ResourceEvent::Redirected {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     from: from.to_string(),
                     to: to.to_string(),
                     status,
@@ -69,8 +71,8 @@ impl NetObserver for EngineEventEmitter {
             }
             NetEvent::ResponseHeaders { url, status, headers } => {
                 self.emit(ResourceEvent::Headers {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     url: url.to_string(),
                     status,
                     content_length: headers
@@ -89,8 +91,8 @@ impl NetObserver for EngineEventEmitter {
             }
             NetEvent::Progress { received_bytes, expected_length, elapsed } => {
                 self.emit(ResourceEvent::Progress {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     received_bytes,
                     expected_length,
                     elapsed,
@@ -98,8 +100,8 @@ impl NetObserver for EngineEventEmitter {
             }
             NetEvent::Finished { url, received_bytes, elapsed } => {
                 self.emit(ResourceEvent::Finished {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     url,
                     received_bytes,
                     elapsed: Some(elapsed),
@@ -107,16 +109,16 @@ impl NetObserver for EngineEventEmitter {
             }
             NetEvent::Failed { url, error } => {
                 self.emit(ResourceEvent::Failed {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     url: url.to_string(),
                     error: error.into(),
                 });
             }
             NetEvent::Cancelled { url, reason } => {
                 self.emit(ResourceEvent::Cancelled {
-                    nav_id: self.nav_id,
-                    req_id: self.req_id,
+                    request_id: self.req_id,
+                    reference: self.reference,
                     url: url.to_string(),
                     reason: CancelReason::Custom(reason.to_string()),
                 });
@@ -129,10 +131,17 @@ impl NetObserver for EngineEventEmitter {
                 // Do nothing
             }
             NetEvent::DecisionRequired { url, status, headers, content_length, content_type, peek, token } => {
+
+                let RequestReference::Navigation(nav_id) = self.reference else {
+                    // Only navigation requests can trigger decision required events
+                    log::warn!("Received DecisionRequired event for non-navigation request: {:?}", self.reference);
+                    return;
+                };
+
                 let has_body = peek.len() > 0;
 
                 self.emit_navigation_event(NavigationEvent::DecisionRequired {
-                    nav_id: self.nav_id,
+                    nav_id,
                     decision_token: token,
                     meta: FetchResultMeta {
                         final_url: url.clone(),

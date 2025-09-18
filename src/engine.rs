@@ -19,6 +19,7 @@ mod policy;
 
 pub use context::BrowsingContext;
 pub use engine::GosubEngine;
+pub use engine::EngineContext;
 pub use errors::EngineError;
 
 pub use policy::UaPolicy;
