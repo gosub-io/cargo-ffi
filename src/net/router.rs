@@ -4,11 +4,10 @@ use anyhow::anyhow;
 use http::Method;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use crate::engine::pipeline::css::{CssPipeline, DummyStylesheet};
-use crate::engine::pipeline::font::{DummyFont, FontPipeline};
-use crate::engine::pipeline::html::HtmlPipeline;
-use crate::engine::pipeline::image::ImagePipeline;
-use crate::engine::pipeline::js::{DummyJsDocument, JsPipeline};
+use crate::engine::pipeline::css::DummyStylesheet;
+use crate::engine::pipeline::font::DummyFont;
+use crate::engine::pipeline::js::DummyJsDocument;
+use crate::engine::pipeline::Hooks;
 use crate::engine::types::{IoChannel, PeekBuf, RequestId};
 use crate::engine::UaPolicy;
 use crate::events::IoCommand;
@@ -16,19 +15,6 @@ use crate::html::{DummyDocument, ResourceHint};
 use crate::net::decision::types::BlockReason;
 use crate::net::{decide_handling, stream_to_bytes, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
 use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, RequestReference, ResourceKind};
-
-/// Hooks are functions that allows the router to call the correct pipeline for each type of
-/// resource.
-pub struct Hooks<'a> {
-    pub html: &'a mut dyn HtmlPipeline,
-    pub css: &'a mut dyn CssPipeline,
-    pub js: &'a mut dyn JsPipeline,
-    pub images: &'a mut dyn ImagePipeline,
-    pub fonts: &'a mut dyn FontPipeline,
-    // pub viewer: &'a mut dyn ViewerPipeline,
-    // pub download: &'a mut dyn DownloadManager,
-    // pub external: &'a mut dyn ExternalOpener,
-}
 
 pub enum RoutedOutcome {
     MainDocument(DummyDocument),
@@ -92,7 +78,8 @@ pub async fn route_response_for(
     dest: RequestDestination,
     fetch_result: FetchResult,
     policy: &UaPolicy,
-    hooks: &mut Hooks<'_>,
+    hooks: &mut Hooks,
+    cancel_token: CancellationToken,
 ) -> anyhow::Result<RoutedOutcome> {
 
     // Fetch the meta data, peek buffer and content (type)
@@ -120,10 +107,10 @@ pub async fn route_response_for(
                 RenderTarget::HtmlParser => {
                     let doc = match body_content {
                         BodyContent::Stream { shared } => {
-                            hooks.html.parse_stream(meta, peek_buf, shared).await?
+                            hooks.html.parse_stream(cancel_token, meta, peek_buf, shared).await?
                         }
                         BodyContent::Buffered { body } => {
-                            hooks.html.parse_bytes(meta, body.as_ref()).await?
+                            hooks.html.parse_bytes(cancel_token, meta, body.as_ref()).await?
                         }
                     };
                     Ok(RoutedOutcome::MainDocument(doc))
@@ -221,7 +208,7 @@ async fn fetch_and_route_subresource(
     io_tx: IoChannel,
     cancel: CancellationToken,
     policy: &UaPolicy,
-    hooks: &mut Hooks<'_>,
+    hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
     let (tx, rx) = oneshot::channel();
 
@@ -240,7 +227,7 @@ async fn fetch_and_route_subresource(
         reply: Some(tx),
         auto_decode: true,
         max_bytes: None,
-        cancel,
+        cancel: cancel.clone(),
     };
     io_tx.send(IoCommand::Fetch(req)).ok();
 
@@ -249,5 +236,5 @@ async fn fetch_and_route_subresource(
         Err(e) => return Err(anyhow!("Fetch failed: {}", e)),
     };
 
-    route_response_for(hint.dest, fetch_result, policy, hooks).await
+    route_response_for(hint.dest, fetch_result, policy, hooks, cancel).await
 }

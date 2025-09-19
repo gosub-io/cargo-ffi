@@ -1,4 +1,4 @@
-use gosub_engine::events::{LoadEvent, MouseButton, NavigationEvent, ResourceEvent, TabCommand};
+use gosub_engine::events::{MouseButton, NavigationEvent, ResourceEvent, TabCommand};
 use gosub_engine::net::types::FetchResultMeta;
 use gosub_engine::net::DecisionToken;
 use gosub_engine::tab::{TabDefaults, TabHandle};
@@ -212,29 +212,6 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
             // let tab = self.tabs.get(&tab_id).expect("Unknown tab");
             println!("[event] TabCreated: {tab_id:?}");
         }
-        EngineEvent::Load { tab_id, event } => match event {
-            LoadEvent::Started { .. } => {
-                println!("[event][load] Started: {tab_id}");
-            }
-            LoadEvent::Finished { .. } => {
-                println!("[event][load] Finished: {tab_id}");
-            }
-            LoadEvent::Failed { .. } => {
-                println!("[event][load] Failed: {tab_id}");
-            }
-            LoadEvent::Cancelled { .. } => {
-                println!("[event][load] Cancelled: {tab_id}");
-            }
-            LoadEvent::Progress {
-                finished,
-                bytes_received,
-                ttfb,
-                elapsed,
-                ..
-            } => {
-                println!("[event][load] Progress: {tab_id}: {bytes_received} bytes TTFB: {ttfb} Fin: {finished} Elapsed: {}us", elapsed.as_micros());
-            }
-        },
         EngineEvent::Navigation { tab_id, event } => match event {
             NavigationEvent::DecisionRequired {
                 nav_id,
@@ -288,71 +265,72 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
         },
         EngineEvent::Resource { tab_id, event } => match event {
             ResourceEvent::Queued {
-                nav_id,
+                request_id,
+                reference,
                 url,
                 kind,
                 initiator,
                 priority,
             } => {
-                println!("[event] ResourceQueued:\n     TabId: {tab_id}\n     NavId: {nav_id}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}\n     Priority: {priority}");
+                println!("[event] ResourceQueued:\n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}\n     Priority: {priority}");
             }
             ResourceEvent::Started {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 url,
                 kind,
                 initiator,
             } => {
-                println!("[event] ResourceStarted:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}");
+                println!("[event] ResourceStarted:\n     TabId: {tab_id}\n     ReqId: {request_id}\n      Ref: {reference}\n     Url: {url}\n     Kind: {kind:?}\n     Initator: {initiator:?}");
             }
             ResourceEvent::Redirected {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 from,
                 to,
                 status,
             } => {
-                println!("[event] ResourceRedirected:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     From: {from}\n     To: {to}\n     Status: {status}");
+                println!("[event] ResourceRedirected:\n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     From: {from}\n     To: {to}\n     Status: {status}");
             }
             ResourceEvent::Progress {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 received_bytes,
                 expected_length,
                 elapsed,
             } => {
                 let el = expected_length.unwrap_or(0);
-                println!("[event] ResourceProgress: \n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Received Bytes: {received_bytes}\n     Expected Length: {el}\n     Elapsed: {elapsed:?}");
+                println!("[event] ResourceProgress: \n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     Received Bytes: {received_bytes}\n     Expected Length: {el}\n     Elapsed: {elapsed:?}");
             }
             ResourceEvent::Finished {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 url,
                 received_bytes,
                 elapsed,
             } => {
                 // let content_type = content_type.unwrap_or_default();
-                println!("[event] ResourceFinished:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Elapsed: {elapsed:?}\n     Received: {received_bytes}");
+                println!("[event] ResourceFinished:\n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     Url: {url}\n     Elapsed: {elapsed:?}\n     Received: {received_bytes}");
             }
             ResourceEvent::Failed {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 url,
                 error,
             } => {
-                println!("[event] ResourceFailed:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Error: {error}");
+                println!("[event] ResourceFailed:\n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     Url: {url}\n     Error: {error}");
             }
             ResourceEvent::Cancelled {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 url,
                 reason,
             } => {
-                println!("[event] ResourceCancelled:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Reason: {reason:?}");
+                println!("[event] ResourceCancelled:\n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     Url: {url}\n     Reason: {reason:?}");
             }
             ResourceEvent::Headers {
-                nav_id,
-                req_id,
+                request_id,
+                reference,
                 url,
                 status,
                 content_length,
@@ -364,7 +342,7 @@ async fn handle_event(ev: EngineEvent, tab_handle: TabHandle) {
                     Some(len) => len.to_string(),
                     None => "unknown".into(),
                 };
-                println!("[event] ResourceHeaders:\n     TabId: {tab_id}\n     ReqId: {req_id}\n     NavId: {nav_id}\n     Url: {url}\n     Status: {status}\n     Content-Length: {content_length}\n     Content-Type: {content_type}\n     Headers:\n");
+                println!("[event] ResourceHeaders:\n     TabId: {tab_id}\n     ReqId: {request_id}\n     Ref: {reference}\n     Url: {url}\n     Status: {status}\n     Content-Length: {content_length}\n     Content-Type: {content_type}\n     Headers:\n");
                 for (k, v) in headers {
                     println!("         {k}: {v}");
                 }

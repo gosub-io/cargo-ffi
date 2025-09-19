@@ -6,6 +6,7 @@ pub struct NullEmitter;
 
 impl NetObserver for NullEmitter {
     fn on_event(&self, _ev: NetEvent) {
+        println!("NullEmitter received an event, but will ignore it.");
         // Do nothing with the event
     }
 }

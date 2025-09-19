@@ -16,7 +16,7 @@ use std::sync::RwLock;
 use tokio::sync::{Notify, Semaphore};
 use url::Url;
 use crate::Action;
-use crate::engine::types::{EventChannel, IoChannel};
+use crate::engine::types::EventChannel;
 use crate::net::decision_hub::DecisionHub;
 use crate::net::DecisionToken;
 use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
@@ -174,8 +174,9 @@ pub struct Fetcher {
 
     /// Event channel to emit engine events
     event_tx: EventChannel,
-    /// Io channel to send IO commands (fetching subresources, etc.)
-    io_tx: IoChannel,
+
+    // /// Io channel to send IO commands (fetching subresources, etc.)
+    // io_tx: IoChannel,
 
     /// Decision hub for handling user decisions on requests
     decision_hub: Arc<DecisionHub>,
@@ -189,7 +190,7 @@ impl Fetcher {
     pub fn new(
         config: FetcherConfig,
         event_tx: EventChannel,
-        io_tx: IoChannel,
+        // io_tx: IoChannel,
         request_reference_map: Arc<RwLock<RequestReferenceMap>>
     ) -> Self {
 
@@ -215,7 +216,7 @@ impl Fetcher {
             inflight: Arc::new(DashMap::new()),
             wake: Notify::new(),
             event_tx,
-            io_tx,
+            // io_tx,
             decision_hub: Arc::new(DecisionHub::new()),
             request_reference_map: request_reference_map.clone(),
         }
@@ -367,18 +368,25 @@ impl Fetcher {
 
             let guard = self.request_reference_map.read().unwrap();
             let observer = match guard.get(&req.reference) {
-                Some(&tab_id) => Arc::new(EngineEventEmitter::new(
-                    tab_id,
-                    req.req_id,
-                    req.reference.clone(),
-                    self.event_tx.clone(),
-                    req.kind,
-                    req.initiator,
-                )) as Arc<dyn NetObserver + Send + Sync>,
-                _ => Arc::new(NullEmitter) as Arc<dyn NetObserver + Send + Sync>,
+                Some(tab_id) => {
+                    Arc::new(EngineEventEmitter::new(
+                        tab_id,
+                        req.req_id,
+                        req.reference.clone(),
+                        self.event_tx.clone(),
+                        req.kind,
+                        req.initiator,
+                    )) as Arc<dyn NetObserver + Send + Sync>
+                },
+                _ => {
+                    log::trace!("Cannot find the request reference for req_id {:?} reference {:?}", req.req_id, req.reference);
+                    Arc::new(NullEmitter) as Arc<dyn NetObserver + Send + Sync>
+                },
             };
 
             let inflight_guard = InflightGuard::new(inflight.clone(), key_str2.clone());
+
+            let request_reference_map_clone = self.request_reference_map.clone();
 
             let title = format!("Fetcher: {}", short_url(&req.key_data.url, 80));
             let _ = spawn_named(&title, async move {
@@ -428,6 +436,9 @@ impl Fetcher {
 
                 // Remove the guard
                 inflight_guard.remove();
+
+                // Remove from the request reference map as well
+                request_reference_map_clone.write().unwrap().remove(&req.reference);
             });
         }
     }

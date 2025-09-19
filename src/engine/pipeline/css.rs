@@ -23,7 +23,7 @@ pub trait CssPipeline {
 }
 
 
-struct CssPipelineImpl;
+pub struct CssPipelineImpl;
 
 #[async_trait]
 impl CssPipeline for CssPipelineImpl {

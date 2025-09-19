@@ -146,27 +146,32 @@ where
 }
 
 // ======== Forgiving resource discovery (regex-based) ========
+fn unquote(s: &str) -> &str {
+    let b = s.as_bytes();
+    if b.len() >= 2 && ((b[0] == b'"' && b[b.len()-1] == b'"') || (b[0] == b'\'' && b[b.len()-1] == b'\'')) {
+        &s[1..s.len()-1]
+    } else {
+        s
+    }
+}
 
 static RE_LINK_STYLESHEET: Lazy<Regex> = Lazy::new(|| {
-    // <link ... rel="stylesheet" ... href="...">
-    // - allow single or double quotes
-    // - allow attributes in any order
+    // allow "..." or '...' or unquoted; capture into the *same* group `href`
     Regex::new(
-        r#"(?is)<\s*link\b[^>]*\brel\s*=\s*(['"])stylesheet\1[^>]*\bhref\s*=\s*(['"])(?P<href>[^"']+)\2[^>]*>"#
+        r#"(?is)<\s*link\b[^>]*\brel\s*=\s*(?:"stylesheet"|'stylesheet')[^>]*\bhref\s*=\s*(?P<href>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#
     ).unwrap()
 });
 
+
 static RE_SCRIPT_SRC: Lazy<Regex> = Lazy::new(|| {
-    // <script ... src="...">
     Regex::new(
-        r#"(?is)<\s*script\b[^>]*\bsrc\s*=\s*(['"])(?P<src>[^"']+)\1[^>]*>"#
+        r#"(?is)<\s*script\b[^>]*\bsrc\s*=\s*(?P<src>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#
     ).unwrap()
 });
 
 static RE_IMG_SRC: Lazy<Regex> = Lazy::new(|| {
-    // <img ... src="...">
     Regex::new(
-        r#"(?is)<\s*img\b[^>]*\bsrc\s*=\s*(['"])(?P<src>[^"']+)\1[^>]*>"#
+        r#"(?is)<\s*img\b[^>]*\bsrc\s*=\s*(?P<src>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#
     ).unwrap()
 });
 
@@ -186,7 +191,7 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
     // Stylesheets
     for cap in RE_LINK_STYLESHEET.captures_iter(html) {
         if let Some(m) = cap.name("href") {
-            if let Ok(u) = resolve(base, m.as_str()) {
+            if let Ok(u) = resolve(base, unquote(m.as_str())) {
                 out.push(ResourceHint {
                     url: u,
                     dest: RequestDestination::MainDocument,
@@ -205,7 +210,7 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
     // Scripts
     for cap in RE_SCRIPT_SRC.captures_iter(html) {
         if let Some(m) = cap.name("src") {
-            if let Ok(u) = resolve(base, m.as_str()) {
+            if let Ok(u) = resolve(base, unquote(m.as_str())) {
                 out.push(ResourceHint {
                     url: u,
                     kind: ResourceKind::Script,
@@ -224,7 +229,7 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
     // Images
     for cap in RE_IMG_SRC.captures_iter(html) {
         if let Some(m) = cap.name("src") {
-            if let Ok(u) = resolve(base, m.as_str()) {
+            if let Ok(u) = resolve(base, unquote(m.as_str())) {
                 out.push(ResourceHint {
                     url: u,
                     kind: ResourceKind::Image,
@@ -299,6 +304,7 @@ mod tests {
 
         // Ensure we discovered 3 resources with resolved URLs
         assert_eq!(hints.len(), 3);
+        dbg!(&hints);
         assert!(hints.iter().any(|h| h.kind == ResourceKind::Stylesheet && h.url.as_str() == "https://example.com/style.css"));
         assert!(hints.iter().any(|h| h.kind == ResourceKind::Script     && h.url.as_str() == "https://example.com/path/app.js"));
         assert!(hints.iter().any(|h| h.kind == ResourceKind::Image      && h.url.as_str() == "https://example.com/path/images/logo.png"));

@@ -31,7 +31,6 @@ impl EngineEventEmitter {
         Self { tab_id, req_id, reference, event_tx, kind, initiator }
     }
 
-    #[allow(unused)]
     fn emit_navigation_event(&self, ev: NavigationEvent) {
         let _ = self.event_tx.send(EngineEvent::Navigation {
             tab_id: self.tab_id,
@@ -39,7 +38,6 @@ impl EngineEventEmitter {
         });
     }
 
-    #[allow(unused)]
     fn emit(&self, ev: ResourceEvent) {
         let _ = self.event_tx.send(EngineEvent::Resource {
             tab_id: self.tab_id,

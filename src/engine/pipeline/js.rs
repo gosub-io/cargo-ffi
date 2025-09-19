@@ -23,7 +23,7 @@ pub trait JsPipeline {
 }
 
 
-struct JsPipelineImpl;
+pub struct JsPipelineImpl;
 
 #[async_trait]
 impl JsPipeline for JsPipelineImpl {

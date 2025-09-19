@@ -4,6 +4,7 @@ pub mod services;
 mod tab;
 mod worker;
 mod sink;
+mod state;
 
 pub use handle::TabHandle;
 pub use tab::*;

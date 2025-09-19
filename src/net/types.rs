@@ -225,8 +225,42 @@ pub enum RequestReference {
     Background(TaskId),
 }
 
+impl Display for RequestReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestReference::Navigation(id) => write!(f, "Nav({})", id),
+            RequestReference::Document(id) => write!(f, "Doc({})", id),
+            RequestReference::Prefetch(id) => write!(f, "Prefetch({})", id),
+            RequestReference::Background(id) => write!(f, "BG({})", id),
+        }
+    }
+}
+
 /// RequestReferenceMap will map a request reference to a specific tab (for instance, to deliver the result)
-pub type RequestReferenceMap = HashMap<RequestReference, TabId>;
+pub struct RequestReferenceMap {
+    tabs: HashMap<RequestReference, TabId>,
+}
+
+impl RequestReferenceMap {
+    pub fn new() -> Self {
+        Self { tabs: HashMap::new() }
+    }
+
+    /// Associates a request reference to a tab ID
+    pub fn insert(&mut self, reference: RequestReference, tab_id: TabId) {
+        self.tabs.insert(reference, tab_id);
+    }
+
+    /// Removes the mapping for a request reference
+    pub fn remove(&mut self, reference: &RequestReference) {
+        self.tabs.remove(reference);
+    }
+
+    /// Gets the tab ID for a request reference
+    pub fn get(&self, reference: &RequestReference) -> Option<TabId> {
+        self.tabs.get(reference).cloned()
+    }
+}
 
 /// A fetch request defines what needs to be fetched, how and where to send the result to
 #[derive(Debug)]
@@ -264,6 +298,21 @@ pub enum FetchResult {
     Buffered { meta: FetchResultMeta, body: Bytes },
     /// Network error
     Error(NetError),
+}
+
+impl FetchResult {
+    /// Returns true if the result is an error
+    pub fn is_error(&self) -> bool {
+        matches!(self, FetchResult::Error(_))
+    }
+
+    pub fn meta(&self) -> Option<&FetchResultMeta> {
+        match self {
+            FetchResult::Stream { meta, .. } => Some(meta),
+            FetchResult::Buffered { meta, .. } => Some(meta),
+            FetchResult::Error(_) => None,
+        }
+    }
 }
 
 impl Debug for FetchResult {
@@ -500,7 +549,7 @@ mod tests {
 
 /// The outcome of a main-frame navigation.
 #[derive(Debug)]
-pub enum NavigationResult {
+pub enum ObsoleteNavigationResult {
     /// Main document (e.g. HTML) was parsed successfully.
     Document {
         meta: FetchResultMeta,

@@ -23,7 +23,7 @@ pub trait ImagePipeline {
 }
 
 
-struct ImagePipelineImpl;
+pub struct ImagePipelineImpl;
 
 #[async_trait]
 impl ImagePipeline for ImagePipelineImpl {

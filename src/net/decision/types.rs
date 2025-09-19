@@ -69,6 +69,17 @@ pub enum BlockReason {
     Policy,
 }
 
+impl std::fmt::Display for BlockReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockReason::TypeMismatch => write!(f, "type mismatch"),
+            BlockReason::NosniffMismatch => write!(f, "nosniff mismatch"),
+            BlockReason::TypeUnknown => write!(f, "unknown type"),
+            BlockReason::Policy => write!(f, "policy block"),
+        }
+    }
+}
+
 // Where to send the stream if we render it inline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenderTarget {

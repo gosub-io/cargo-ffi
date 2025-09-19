@@ -15,9 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 use crate::engine::types::{EventChannel, IoChannel};
+use crate::net::types::RequestReferenceMap;
 use crate::util::spawn_named;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
@@ -95,6 +96,8 @@ pub struct ZoneContext {
     pub(crate) event_tx: EventChannel,
     /// Channel to communicate to the network I/O thread
     pub(crate) io_tx: IoChannel,
+    /// Map of request references to tab IDs, used to route network events back to the right tab
+    pub(crate) request_reference_map: Arc<RwLock<RequestReferenceMap>>
 }
 
 // Things that are shared upwards to the engine
@@ -190,6 +193,7 @@ impl Zone {
             let guard = engine_context.io_tx.read().unwrap();
             guard.as_ref().cloned().expect("I/O thread not running")
         };
+        let request_reference_map = engine_context.request_reference_map.clone();
 
         let zone = Self {
             engine_context,
@@ -207,6 +211,7 @@ impl Zone {
                 },
                 event_tx,
                 io_tx,
+                request_reference_map,
             }),
             id: zone_id,
             tabs: HashMap::new(),

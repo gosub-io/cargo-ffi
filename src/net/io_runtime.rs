@@ -64,7 +64,7 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
     let io_tx = tx_submit.clone();
 
     let join_handle = spawn_named("I/O Thread", async move {
-        let fetcher = Arc::new(Fetcher::new(cfg, engine_ctx.event_tx.clone(), io_tx.clone(), engine_ctx.request_reference_map.clone()));
+        let fetcher = Arc::new(Fetcher::new(cfg, engine_ctx.event_tx.clone(), engine_ctx.request_reference_map.clone()));
         let cloned_fetcher = fetcher.clone();
         let cloned_shutdown_rx = shutdown_rx.clone();
 

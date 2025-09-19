@@ -79,3 +79,21 @@ pub enum EngineError {
     #[error("I/O runtime not started")]
     IoNotStarted,
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum NavigationError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("network error: {0}")]
+    NetworkError(String),
+
+    #[error("io cancelled: {0}")]
+    Cancelled(String),
+
+    // #[error("io timeout: {0}")]
+    // Timeout(String),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
