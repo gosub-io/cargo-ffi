@@ -199,6 +199,3 @@ impl BrowsingContext {
         self.current_url.as_ref()
     }
 }
-
-
-

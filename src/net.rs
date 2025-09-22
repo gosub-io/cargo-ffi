@@ -1,31 +1,29 @@
 //! Network utilities for making HTTP requests.
 //!
-mod response;
-pub mod loader;
-pub mod types;
-pub mod events;
-mod emitter;
-mod utils;
-mod fetcher;
-mod io_runtime;
-mod fetch;
-mod shared_body;
-mod decision_hub;
-mod pump;
-mod fs_utils;
-mod render_html;
 mod decision;
+mod decision_hub;
+mod emitter;
+pub mod events;
+mod fetch;
+mod fetcher;
+mod fs_utils;
+mod io_runtime;
+mod pump;
 mod router;
+mod shared_body;
+pub mod types;
+mod utils;
+pub mod req_ref_tracker;
 
-pub use decision_hub::DecisionToken;
 pub use decision::decide_handling;
 pub use decision::types::{DecisionOutcome, HandlingDecision, RenderTarget, RequestDestination};
+pub use decision_hub::DecisionToken;
 
 pub use shared_body::SharedBody;
 
-pub use io_runtime::IoHandle;
 pub use io_runtime::spawn_io_thread;
 pub use io_runtime::submit_to_io;
+pub use io_runtime::IoHandle;
 
 pub use fetcher::FetcherConfig;
 

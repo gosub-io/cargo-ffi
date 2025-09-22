@@ -1,8 +1,8 @@
+use crate::engine::types::NavigationId;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Instant;
 use url::Url;
-use crate::engine::types::NavigationId;
 
 /// Things shared upwards to the zone
 pub struct TabSink {

@@ -1,10 +1,10 @@
 mod handle;
 mod options;
 pub mod services;
-mod tab;
-mod worker;
 mod sink;
 mod state;
+mod tab;
+mod worker;
 
 pub use handle::TabHandle;
 pub use tab::*;

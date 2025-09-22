@@ -21,8 +21,11 @@
 //!   destruction.
 
 use crate::engine::events::{EngineCommand, EngineEvent};
+use crate::engine::types::{EventChannel, IoChannel};
 use crate::engine::DEFAULT_CHANNEL_CAPACITY;
+use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
 use crate::render::backend::RenderBackend;
+use crate::util::spawn_named;
 use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices, ZoneSink};
 use crate::{EngineConfig, EngineError};
 use anyhow::Result;
@@ -31,10 +34,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
-use crate::engine::types::{EventChannel, IoChannel};
-use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
-use crate::net::types::RequestReferenceMap;
-use crate::util::spawn_named;
+use crate::net::req_ref_tracker::RequestReferenceMap;
 
 pub struct GosubEngine {
     /// Context is what can be shared downstream
@@ -70,7 +70,9 @@ pub struct EngineContext {
 impl Default for EngineContext {
     fn default() -> Self {
         Self {
-            backend: Arc::new(RwLock::new(Box::new(crate::render::backends::null::NullBackend::new().unwrap()))),
+            backend: Arc::new(RwLock::new(Box::new(
+                crate::render::backends::null::NullBackend::new().unwrap(),
+            ))),
             event_tx: broadcast::channel::<EngineEvent>(DEFAULT_CHANNEL_CAPACITY).0,
             config: Arc::new(EngineConfig::default()),
             io_tx: Arc::new(RwLock::new(None)),
@@ -128,7 +130,7 @@ impl GosubEngine {
             let mut guard = self.context.io_tx.write().unwrap();
             *guard = Some(io_tx);
         }
-        self.io_handle= Some(io_handle);
+        self.io_handle = Some(io_handle);
 
         // Start main engine run loop
         let join_handle = if let Some(task) = self.run() {
@@ -190,7 +192,7 @@ impl GosubEngine {
                     }
                 }
             }
-//            println!("run() loop has exited")
+            //            println!("run() loop has exited")
         })
     }
 
@@ -201,7 +203,7 @@ impl GosubEngine {
         }
 
         // Shutdown I/O thread
-//        println!("Shutting down I/O thread");
+        //        println!("Shutting down I/O thread");
         if let Some(io_handle) = self.io_handle.take() {
             io_handle.shutdown().await
         }

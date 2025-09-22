@@ -57,8 +57,6 @@ impl StorageService {
         }
     }
 
-
-
     pub fn subscribe(&self) -> Subscription {
         self.bus.subscribe()
     }

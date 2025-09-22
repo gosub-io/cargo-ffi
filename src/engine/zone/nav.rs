@@ -1,8 +1,8 @@
 use crate::net::types::{FetchHandle, FetchRequest, FetchResult};
+use crate::net::FetchInflightMap;
 use crate::tab::TabId;
 use crate::NavigationId;
 use std::collections::HashMap;
-use crate::net::FetchInflightMap;
 
 /// Unique key for a navigation in a tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,6 +77,7 @@ impl NavInflightMap {
     ) -> (tokio::sync::oneshot::Receiver<FetchResult>, FetchHandle) {
         // Cancel existing navigation if it exists
         if let Some(old) = self.map.remove(&nav_key) {
+            println!("Restarting navigation: cancelling old fetch");
             old.fetch.cancel.cancel();
         }
         // Start a new navigation
@@ -97,6 +98,7 @@ impl NavInflightMap {
     pub fn cancel_navigation(&mut self, nav_key: &NavKey) {
         if let Some(e) = self.map.get(nav_key) {
             // child cancel: drops this subscriber; fetch may continue
+            println!("Cancelling navigation: cancelling fetch");
             e.fetch.cancel.cancel();
         }
         self.map.remove(nav_key);

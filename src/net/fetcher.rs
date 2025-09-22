@@ -2,29 +2,32 @@
 //! and scheduling HTTP requests. It includes mechanisms for prioritizing requests, coalescing
 //! identical requests, and handling streaming or buffered responses.
 
+use crate::engine::types::{EventChannel, RequestId};
+use crate::net::decision_hub::DecisionHub;
+use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
+use crate::net::emitter::null_emitter::NullEmitter;
 use crate::net::events::NetObserver;
 use crate::net::fetch::{fetch_response_complete, fetch_response_top, ResponseTop};
+use crate::net::pump::{spawn_pump, PumpCfg, PumpTargets};
 use crate::net::shared_body::{ReaderOptions, SharedBody};
-use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResult, NetError, Priority, RequestReferenceMap};
+use crate::net::types::{
+    FetchHandle, FetchKeyData, FetchRequest, FetchResult, NetError, Priority,
+};
 use crate::net::utils::{short_url, Waiter};
+use crate::net::DecisionToken;
 use crate::util::spawn_named;
+use crate::Action;
 use bytes::Bytes;
 use dashmap::{DashMap, Entry};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{collections::VecDeque, sync::Arc, time::Duration};
 use std::sync::RwLock;
 use std::time::Instant;
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 use tokio::sync::{oneshot, Notify, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::Action;
-use crate::engine::types::{EventChannel, RequestId};
-use crate::net::decision_hub::DecisionHub;
-use crate::net::DecisionToken;
-use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
-use crate::net::emitter::null_emitter::NullEmitter;
-use crate::net::pump::{spawn_pump, PumpCfg, PumpTargets};
+use crate::net::req_ref_tracker::{RequestRefTracker, RequestReferenceMap};
 
 /// How many shared consumers can listen for a resource
 const SHARED_MAX_CAPACITY: usize = 32;
@@ -86,6 +89,7 @@ impl FetchInflightEntry {
     fn dec_sub_and_maybe_cancel(&self) {
         // If this was the last subscriber, cancel the parent fetch
         if self.subs.fetch_sub(1, Ordering::AcqRel) == 1 {
+            println!("Last subscriber gone, cancelling parent fetch");
             self.parent_cancel.cancel();
         }
     }
@@ -99,11 +103,7 @@ pub struct FetchInflightMap {
 }
 
 impl FetchInflightMap {
-    pub fn new(
-        client: Arc<reqwest::Client>,
-        observer: Arc<dyn NetObserver + Send + Sync>,
-        cfg: FetcherConfig,
-    ) -> Self {
+    pub fn new(client: Arc<reqwest::Client>, observer: Arc<dyn NetObserver + Send + Sync>, cfg: FetcherConfig) -> Self {
         Self {
             map: Arc::new(DashMap::new()),
             client,
@@ -121,7 +121,7 @@ impl FetchInflightMap {
     pub fn join_or_start(
         &self,
         req: &FetchRequest,
-        wants_stream: bool
+        wants_stream: bool,
     ) -> (FetchHandle, oneshot::Receiver<FetchResult>, bool) {
         match self.map.entry(req.key_data.clone()) {
             Entry::Occupied(e) => {
@@ -140,7 +140,7 @@ impl FetchInflightMap {
             }
             Entry::Vacant(v) => {
                 // No existing entry, create one and spawn fetch task
-                let entry = Arc::new(FetchInflightEntry{
+                let entry = Arc::new(FetchInflightEntry {
                     parent_cancel: CancellationToken::new(),
                     waiter: Arc::new(Waiter::new()),
                     wants_streaming: AtomicBool::new(wants_stream),
@@ -163,8 +163,10 @@ impl FetchInflightMap {
                     self.observer.clone(),
                     self.cfg.clone(),
                     {
-                        move || { map.remove(&key); }
-                    }
+                        move || {
+                            map.remove(&key);
+                        }
+                    },
                 );
 
                 let handle = FetchHandle {
@@ -179,14 +181,12 @@ impl FetchInflightMap {
     }
 }
 
-
 /// Represents an item in the fetch queue, including the request, its handle, and a channel to send the result back.
 struct QueueItem {
     req: FetchRequest,
     handle: FetchHandle,
     reply: oneshot::Sender<FetchResult>,
 }
-
 
 /// The `Fetcher` struct manages the scheduling and execution of HTTP requests.
 /// It supports prioritization, coalescing of identical requests, and streaming or buffered responses.
@@ -221,12 +221,12 @@ pub struct Fetcher {
 
     // /// Io channel to send IO commands (fetching sub-resources, etc.)
     // io_tx: IoChannel,
-
     /// Decision hub for handling user decisions on requests
     decision_hub: Arc<DecisionHub>,
 
     /// Map to track request references for associating requests with their tabs
     request_reference_map: Arc<RwLock<RequestReferenceMap>>,
+    request_reference_tracker: Arc<RequestRefTracker>,
 }
 
 impl Fetcher {
@@ -234,8 +234,7 @@ impl Fetcher {
     pub fn new(
         config: FetcherConfig,
         event_tx: EventChannel,
-        // io_tx: IoChannel,
-        request_reference_map: Arc<RwLock<RequestReferenceMap>>
+        request_reference_map: Arc<RwLock<RequestReferenceMap>>,
     ) -> Self {
         // Start default client
         let client = reqwest::Client::builder()
@@ -262,6 +261,7 @@ impl Fetcher {
             // io_tx,
             decision_hub: Arc::new(DecisionHub::new()),
             request_reference_map: request_reference_map.clone(),
+            request_reference_tracker: Arc::new(RequestRefTracker::new()),
         }
     }
 
@@ -320,7 +320,11 @@ impl Fetcher {
             Priority::Low => self.q_low.lock().await,
             Priority::Idle => self.q_idle.lock().await,
         };
-        lane.push_back(QueueItem { req, handle: req_handle, reply: reply_tx });
+        lane.push_back(QueueItem {
+            req,
+            handle: req_handle,
+            reply: reply_tx,
+        });
         self.wake.notify_one();
     }
 
@@ -344,7 +348,12 @@ impl Fetcher {
             };
 
             // If none, wait for notification of new requests, or shutdown
-            let Some(QueueItem { req, handle, reply: reply_tx } ) = next else {
+            let Some(QueueItem {
+                req,
+                handle,
+                reply: reply_tx,
+            }) = next
+            else {
                 tokio::select! {
                     _ = self.wake.notified() => {},
                     _ = shutdown.changed() => {},
@@ -386,8 +395,16 @@ impl Fetcher {
                 }
             };
 
+            // If we are the leader, we need to track the request reference
+            if is_leader {
+                self.request_reference_tracker.inc(&req.reference);
+            }
+
             // Register the caller to the waiter
-            inflight_entry.waiter.register(reply_tx, req.streaming).await;
+            inflight_entry
+                .waiter
+                .register(reply_tx, req.streaming)
+                .await;
 
             // Increase ref counter
             inflight_entry.inc_sub();
@@ -416,10 +433,11 @@ impl Fetcher {
             }
 
             let observer: Arc<dyn NetObserver + Send + Sync> = {
+                println!("RFM: Reading for {}", req.reference);
                 let guard = self.request_reference_map.read().unwrap();
                 match guard.get(&req.reference) {
                     Some(tab_id) => Arc::new(EngineEventEmitter::new(
-                        tab_id,
+                        *tab_id,
                         req.req_id,
                         req.reference.clone(),
                         self.event_tx.clone(),
@@ -427,12 +445,15 @@ impl Fetcher {
                         req.initiator,
                     )),
                     None => {
-                        log::trace!("Cannot find the request reference for req_id {:?} reference {:?}", req.req_id, req.reference);
+                        log::trace!(
+                            "Cannot find the request reference for req_id {:?} reference {:?}",
+                            req.req_id,
+                            req.reference
+                        );
                         Arc::new(NullEmitter) as Arc<dyn NetObserver + Send + Sync>
-                    },
+                    }
                 }
             };
-
 
             let client = self.client.clone();
             let global = self.global_slots.clone();
@@ -445,20 +466,30 @@ impl Fetcher {
             let req_ref_map_clone = self.request_reference_map.clone();
             let req_for_task = req.clone();
             let cancel_parent = inflight_entry2.parent_cancel.clone();
+            let ref_ref_tracker_clone = self.request_reference_tracker.clone();
 
             let title = format!("Fetcher: {}", short_url(&req.key_data.url, 80));
             let _ = spawn_named(&title, async move {
                 let origin = Fetcher::origin_key(&req.key_data.url);
                 let slots = per_origin
                     .entry(origin.clone())
-                    .or_insert_with(|| Arc::new(Semaphore::new(per_origin_limit_for(&cfg, &req.key_data.url))))
+                    .or_insert_with(|| {
+                        Arc::new(Semaphore::new(per_origin_limit_for(
+                            &cfg,
+                            &req.key_data.url,
+                        )))
+                    })
                     .clone();
 
                 let g = tokio::select! { p = global.acquire_owned() => Some(p), _ = shutdown_child.changed() => None };
-                if g.is_none() { return; } // guard will drop -> cleanup
+                if g.is_none() {
+                    return;
+                } // guard will drop -> cleanup
 
                 let h = tokio::select! { p = slots.acquire_owned() => Some(p), _ = shutdown_child.changed() => None };
-                if h.is_none() { return; } // guard will drop -> cleanup
+                if h.is_none() {
+                    return;
+                } // guard will drop -> cleanup
 
                 let should_stream = req.streaming || inflight_entry2.wants_streaming.load(Ordering::Relaxed);
 
@@ -470,7 +501,8 @@ impl Fetcher {
                         &req_for_task,
                         &cfg,
                         cancel_parent.clone(),
-                    ).await
+                    )
+                    .await
                 } else {
                     perform_buffered(
                         &client,
@@ -492,9 +524,12 @@ impl Fetcher {
                 inflight_entry2.waiter.finish(fr).await;
 
                 // Cleanup
+                println!("Fetch task done, cleaning up inflight entry for key {}", key_for_remove);
                 inflight_entry2.done.cancel();
                 inflight.remove(&key_for_remove);
-                req_ref_map_clone.write().unwrap().remove(&req.reference);
+
+                // Decrease the request reference count and maybe clean it up when nothing is using it anymore
+                ref_ref_tracker_clone.dec_and_maybe_cleanup(&req.reference, &req_ref_map_clone);
             });
         }
     }
@@ -523,7 +558,7 @@ async fn perform_streaming(
     cancel: CancellationToken,
 ) -> Result<FetchResult, NetError> {
     // Get the response top (headers + peek)
-    let ResponseTop { meta, peek_buf, reader} = fetch_response_top(
+    let ResponseTop { meta, peek_buf, reader } = fetch_response_top(
         Arc::new(client.clone()),
         req.key_data.url.clone(),
         cancel.clone(),
@@ -546,7 +581,6 @@ async fn perform_streaming(
         shared: SharedBody::from_reader(reader, opts),
     })
 }
-
 
 /// Perform an HTTP request using buffered mode
 async fn perform_buffered(
@@ -578,7 +612,6 @@ async fn perform_buffered(
     })
 }
 
-
 pub fn spawn_fetch_task(
     req: FetchRequest,
     entry: Arc<FetchInflightEntry>,
@@ -607,7 +640,9 @@ pub fn spawn_fetch_task(
             url.clone(),
             cancel_parent.clone(),
             observer.clone(),
-        ).await {
+        )
+        .await
+        {
             Ok(top) => top,
             Err(e) => {
                 let _ = entry.waiter.finish(FetchResult::Error(e)).await;
@@ -625,7 +660,11 @@ pub fn spawn_fetch_task(
 
         let _pump = spawn_pump(
             reader,
-            PumpTargets { shared: Some(shared.clone()), file_dest: None, peek_buf: peek_buf.clone() },
+            PumpTargets {
+                shared: Some(shared.clone()),
+                file_dest: None,
+                peek_buf: peek_buf.clone(),
+            },
             pump_cfg,
             cancel_parent.clone(),
             observer.clone(),

@@ -93,7 +93,6 @@ pub enum NavigationError {
 
     // #[error("io timeout: {0}")]
     // Timeout(String),
-
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

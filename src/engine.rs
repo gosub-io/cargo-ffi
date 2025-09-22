@@ -13,13 +13,13 @@ pub mod tab;
 pub mod zone;
 
 pub mod config;
-pub mod types;
 mod downloader;
 mod policy;
+pub mod types;
 
 pub use context::BrowsingContext;
-pub use engine::GosubEngine;
 pub use engine::EngineContext;
+pub use engine::GosubEngine;
 pub use errors::EngineError;
 
 pub use policy::UaPolicy;

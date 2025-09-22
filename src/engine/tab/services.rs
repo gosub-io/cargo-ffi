@@ -13,7 +13,6 @@ pub struct EffectiveTabServices {
     pub cookie_jar: CookieJarHandle,
 }
 
-
 /// Resolve the effective services for a tab based on the zone services and tab overrides.
 pub fn resolve_tab_services(zone_id: ZoneId, services: &ZoneServices, ov: &TabOverrides) -> EffectiveTabServices {
     let partition_key = ov

@@ -1,7 +1,7 @@
-use std::str::FromStr;
+use crate::engine::types::PeekBuf;
 use mime::Mime;
 use mimetype_detector::detect;
-use crate::engine::types::PeekBuf;
+use std::str::FromStr;
 
 // Coarse response class used for routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,11 +55,11 @@ pub fn sniff_class(peek_buf: PeekBuf) -> ResponseClass {
     dbg!(&mime_type.mime());
     dbg!(&mime_type.extension());
 
-    let mime = Mime::from_str(format!("{}/{}", mime_type.mime(), mime_type.extension()).as_str()).unwrap_or(mime::APPLICATION_OCTET_STREAM);
+    let mime = Mime::from_str(format!("{}/{}", mime_type.mime(), mime_type.extension()).as_str())
+        .unwrap_or(mime::APPLICATION_OCTET_STREAM);
     ResponseClass::from_mime(&mime)
     // ResponseClass::Audio
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -95,13 +95,15 @@ mod tests {
 
     #[test]
     pub fn test_sniff_class() {
-        let html_peek = PeekBuf::from_slice(b"<!DOCTYPE html><html><head><title>Test</title></head><body></body></html>");
+        let html_peek =
+            PeekBuf::from_slice(b"<!DOCTYPE html><html><head><title>Test</title></head><body></body></html>");
         let css_peek = PeekBuf::from_slice(b"body { background-color: #fff; }");
         let js_peek = PeekBuf::from_slice(b"console.log('Hello, world!');");
         let png_peek = PeekBuf::from_slice(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01");
         let mp3_peek = PeekBuf::from_slice(b"ID3\x03\x00\x00\x00\x00\x0fTIT2\x00\x00\x00\x0f\x00\x00Test Title");
         let woff_peek = PeekBuf::from_slice(b"\x77\x4F\x46\x46"); // 'wOFF'
-        let pdf_peek = PeekBuf::from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        let pdf_peek =
+            PeekBuf::from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
         let unknown_peek = PeekBuf::from_slice(b"\x00\x01\x02\x03\x04");
 
         assert_eq!(sniff_class(html_peek), ResponseClass::Html);

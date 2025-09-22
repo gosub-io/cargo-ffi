@@ -13,24 +13,24 @@
 //!   that starts receiving future chunks from this point onward.
 //! - `combined_reader(peek, shared)`: convenient `AsyncRead` of `peek` then tail.
 
+use crate::engine::types::PeekBuf;
+use crate::net::types::NetError;
+use bytes::Bytes;
+use futures_core::stream::BoxStream;
+use futures_core::Stream;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use bytes::Bytes;
-use futures_core::Stream;
-use futures_core::stream::BoxStream;
-use futures_util::{stream, StreamExt, TryStreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
-use crate::engine::types::PeekBuf;
-use crate::net::types::NetError;
 
 /// Bounded, fan-out byte stream with per-subscriber queues and drop-on-lag.
 ///
@@ -99,7 +99,7 @@ impl SharedBody {
                 next_id: AtomicU64::new(1),
                 max_queue,
                 closed: false,
-            }))
+            })),
         }
     }
 
@@ -114,15 +114,14 @@ impl SharedBody {
             if st.closed {
                 return;
             }
-            let subs: Vec<(u64, mpsc::Sender<_>)> =
-                st.subs.iter().map(|(id, tx)| (*id, tx.clone())).collect();
+            let subs: Vec<(u64, mpsc::Sender<_>)> = st.subs.iter().map(|(id, tx)| (*id, tx.clone())).collect();
 
             (subs, Vec::new())
         };
 
         for (id, tx) in subs {
             match tx.try_send(Ok(chunk.clone())) {
-                Ok(()) => {},
+                Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     to_remove.push(id);
                 }
@@ -195,7 +194,9 @@ impl SharedBody {
             }
 
             let (tx, rx) = mpsc::channel(max_queue);
-            let id = st.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let id = st
+                .next_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             st.subs.insert(id, tx);
             (Some(rx), Some(id))
         };
@@ -207,7 +208,8 @@ impl SharedBody {
             id,
             parent: self.inner.clone(),
             inner: ReceiverStream::new(rx),
-        }.boxed()
+        }
+        .boxed()
     }
 
     /// Subscribes with the default per-subscriber queue capacity.
@@ -245,9 +247,7 @@ impl SharedBody {
     /// ```
     pub fn combined_reader(peek_buf: PeekBuf, shared: Arc<SharedBody>) -> Pin<Box<dyn AsyncRead + Send>> {
         let head = stream::iter([Ok::<Bytes, std::io::Error>(peek_buf.into_bytes())]);
-        let rest_stream = shared
-            .subscribe_stream()
-            .map_err(|e: NetError| e.to_io());
+        let rest_stream = shared.subscribe_stream().map_err(|e: NetError| e.to_io());
 
         let combined = head.chain(rest_stream);
         Box::pin(StreamReader::new(combined))
@@ -344,12 +344,19 @@ impl SharedBody {
 
         // read in background
         tokio::spawn(async move {
-            let ReaderOptions { capacity: _, buf_size, cancel, idle_timeout, total_timeout, max_size } = opts;
+            let ReaderOptions {
+                capacity: _,
+                buf_size,
+                cancel,
+                idle_timeout,
+                total_timeout,
+                max_size,
+            } = opts;
 
             let deadline = total_timeout.map(|d| Instant::now() + d);
             let cancel = cancel.unwrap_or_else(CancellationToken::new);
             let mut buf = vec![0u8; buf_size];
-            let mut total_read: u64 = 0;  // Does NOT take into account the peek buf!
+            let mut total_read: u64 = 0; // Does NOT take into account the peek buf!
 
             // Some helper functions
             let check_total_deadline = |now: Instant| -> Result<(), NetError> {
@@ -395,7 +402,10 @@ impl SharedBody {
                         .map_err(|_| NetError::Timeout("read idle timeout".to_string()))
                         .and_then(|r| r.map_err(|e| NetError::Io(Arc::new(e))))
                 } else {
-                    reader.read(&mut buf[..read_cap]).await.map_err(|e| NetError::Io(Arc::new(e)))
+                    reader
+                        .read(&mut buf[..read_cap])
+                        .await
+                        .map_err(|e| NetError::Io(Arc::new(e)))
                 };
 
                 match read_res {
@@ -462,12 +472,11 @@ impl Stream for SubStream {
 
 impl Drop for SubStream {
     fn drop(&mut self) {
-        if let Ok(mut st)= self.parent.lock() {
+        if let Ok(mut st) = self.parent.lock() {
             st.subs.remove(&self.id);
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -539,9 +548,9 @@ mod tests {
         let fc = fast.next().await.unwrap().unwrap();
 
         // Fast should have all three chunks
-        let exp1: &[u8]  = b"A";
-        let exp2: &[u8]  = b"B";
-        let exp3: &[u8]  = b"C";
+        let exp1: &[u8] = b"A";
+        let exp2: &[u8] = b"B";
+        let exp3: &[u8] = b"C";
         assert_eq!((&fa[..], &fb[..], &fc[..]), (exp1, exp2, exp3));
     }
 

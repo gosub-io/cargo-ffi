@@ -1,20 +1,18 @@
-use std::collections::HashMap;
+use crate::engine::types::{PeekBuf, RequestId};
+use crate::html::DummyDocument;
+use crate::net::shared_body::SharedBody;
+use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
 use bytes::Bytes;
+use http::{header, HeaderMap, Method};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use http::{header, HeaderMap, Method};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::engine::types::{PeekBuf, RequestId};
-use crate::html::DummyDocument;
-use crate::NavigationId;
-use crate::net::shared_body::SharedBody;
-use crate::net::utils::{normalize_url, short_hash, BytesAsyncReader};
-use crate::tab::TabId;
+use crate::net::req_ref_tracker::RequestReference;
 
 /// A BodyStream is an async reader that can be used to read the body of a response.
 pub struct BodyStream {
@@ -55,8 +53,8 @@ impl BodyStream {
         Self {
             inner: reader,
             len: Some(len),
-            is_seekable: true,  // It's a buffer so we can seek it
-            clonable: true,     // It's a buffer so we can clone it
+            is_seekable: true, // It's a buffer so we can seek it
+            clonable: true,    // It's a buffer so we can clone it
         }
     }
 }
@@ -225,64 +223,9 @@ impl FetchKeyData {
 }
 
 // We don't know these types yet
-type DocumentId = u64;
-type PrefetchId = u64;
-type TaskId = u64;
-
-/// Request references, indicate what initiated the request without the net functionality known
-/// about its caller. This way, we can let the net module still emit events based on the request
-/// reference. For instance, a request from a navigation (with a navigation_id) can emit at a
-/// low level events to a tab, without the system known what a tab is. This leaves the engine
-/// independent of higher level functionality.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-pub enum RequestReference {
-    /// Main doc for a tab
-    Navigation(NavigationId),
-    /// Sub resources of a specific doc
-    Document(DocumentId),
-    /// Background prefetches
-    Prefetch(PrefetchId),
-    /// Misc/system
-    Background(TaskId),
-}
-
-impl Display for RequestReference {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RequestReference::Navigation(id) => write!(f, "Nav({})", id),
-            RequestReference::Document(id) => write!(f, "Doc({})", id),
-            RequestReference::Prefetch(id) => write!(f, "Prefetch({})", id),
-            RequestReference::Background(id) => write!(f, "BG({})", id),
-        }
-    }
-}
-
-/// RequestReferenceMap will map a request reference to a specific tab (for instance, to deliver the result)
-pub struct RequestReferenceMap {
-    tabs: HashMap<RequestReference, TabId>,
-}
-
-impl RequestReferenceMap {
-    pub fn new() -> Self {
-        Self { tabs: HashMap::new() }
-    }
-
-    /// Associates a request reference to a tab ID
-    pub fn insert(&mut self, reference: RequestReference, tab_id: TabId) {
-        self.tabs.insert(reference, tab_id);
-    }
-
-    /// Removes the mapping for a request reference
-    pub fn remove(&mut self, reference: &RequestReference) {
-        self.tabs.remove(reference);
-    }
-
-    /// Gets the tab ID for a request reference
-    pub fn get(&self, reference: &RequestReference) -> Option<TabId> {
-        self.tabs.get(reference).cloned()
-    }
-}
-
+pub(crate) type DocumentId = u64;
+pub(crate) type PrefetchId = u64;
+pub(crate) type TaskId = u64;
 
 #[derive(Clone)]
 pub struct FetchHandle {
@@ -305,7 +248,6 @@ impl Debug for FetchHandle {
             .finish()
     }
 }
-
 
 /// A fetch request defines what needs to be fetched, how and where to send the result to
 #[derive(Debug, Clone)]
@@ -334,7 +276,11 @@ pub struct FetchRequest {
 #[derive(Clone)]
 pub enum FetchResult {
     /// Streamed response body
-    Stream { meta: FetchResultMeta, peek_buf: PeekBuf, shared: Arc<SharedBody> },
+    Stream {
+        meta: FetchResultMeta,
+        peek_buf: PeekBuf,
+        shared: Arc<SharedBody>,
+    },
     /// Buffered response body
     Buffered { meta: FetchResultMeta, body: Bytes },
     /// Network error
@@ -457,7 +403,6 @@ pub enum Initiator {
     Other,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,12 +443,18 @@ mod tests {
     fn fetch_key_generate_get_and_headers() {
         let mut fk = FetchKeyData::new(Url::parse("https://example.org/a/b#frag").unwrap());
         // set method GET (already default) and headers that impact the key
-        fk.headers.insert(header::RANGE, "bytes=0-99".parse().unwrap());
-        fk.headers.insert(header::ACCEPT, "text/html".parse().unwrap());
-        fk.headers.insert(header::ACCEPT_LANGUAGE, "en-US".parse().unwrap());
-        fk.headers.insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
-        fk.headers.insert(header::AUTHORIZATION, "Bearer abc".parse().unwrap());
-        fk.headers.insert(header::COOKIE, "a=1; b=2".parse().unwrap());
+        fk.headers
+            .insert(header::RANGE, "bytes=0-99".parse().unwrap());
+        fk.headers
+            .insert(header::ACCEPT, "text/html".parse().unwrap());
+        fk.headers
+            .insert(header::ACCEPT_LANGUAGE, "en-US".parse().unwrap());
+        fk.headers
+            .insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+        fk.headers
+            .insert(header::AUTHORIZATION, "Bearer abc".parse().unwrap());
+        fk.headers
+            .insert(header::COOKIE, "a=1; b=2".parse().unwrap());
 
         let key = fk.generate().expect("GET should produce a key");
 
@@ -555,7 +506,10 @@ mod tests {
     fn fetchresult_debug_and_clone() {
         let meta = dummy_meta();
         let body = Bytes::from_static(b"DATA");
-        let r1 = FetchResult::Buffered { meta: meta.clone(), body: body.clone() };
+        let r1 = FetchResult::Buffered {
+            meta: meta.clone(),
+            body: body.clone(),
+        };
 
         let dbg = format!("{r1:?}");
         assert!(dbg.contains("FetchResult::Buffered"));
@@ -585,8 +539,6 @@ mod tests {
         };
     }
 }
-
-
 
 /// The outcome of a main-frame navigation.
 #[derive(Debug)]
@@ -625,5 +577,7 @@ pub enum ObsoleteNavigationResult {
         meta: Option<FetchResultMeta>,
         error: Arc<anyhow::Error>,
     },
-    RenderedByViewer { meta: FetchResultMeta },
+    RenderedByViewer {
+        meta: FetchResultMeta,
+    },
 }

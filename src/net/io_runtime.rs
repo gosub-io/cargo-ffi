@@ -1,15 +1,15 @@
+use crate::engine::types::IoChannel;
+use crate::engine::EngineContext;
+use crate::events::IoCommand;
 use crate::net::fetcher::{Fetcher, FetcherConfig};
+use crate::net::types::{FetchHandle, FetchRequest, FetchResult};
 use crate::util::spawn_named;
-use std::sync::Arc;
+use crate::zone::ZoneId;
 use dashmap::DashMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use crate::engine::EngineContext;
-use crate::engine::types::IoChannel;
-use crate::events::IoCommand;
-use crate::net::types::{FetchHandle, FetchRequest, FetchResult};
-use crate::zone::ZoneId;
 
 /// Handle to the I/O runtime thread and its submission channel.
 pub struct IoHandle {
@@ -28,7 +28,9 @@ impl IoHandle {
             .send(IoCommand::ShutdownZone { zone_id, reply_tx: tx })
             .map_err(|e| anyhow::anyhow!("send ShutdownZone failed: {e}"))?;
         // wait until the zone's scheduler has actually stopped
-        let _ = rx.await.map_err(|e| anyhow::anyhow!("ShutdownZone ack failed: {e}"))?;
+        let _ = rx
+            .await
+            .map_err(|e| anyhow::anyhow!("ShutdownZone ack failed: {e}"))?;
         Ok(())
     }
 
@@ -54,7 +56,6 @@ impl IoHandle {
         }
     }
 
-
     /// Get a clone of the submission channel (hand to zones/tabs).
     pub fn subscribe(&self) -> IoChannel {
         self.tx_submit.clone()
@@ -66,7 +67,6 @@ pub struct ZoneEntry {
     shutdown_tx: watch::Sender<bool>,
     join: JoinHandle<()>,
 }
-
 
 /// Routes I/O requests to per-zone fetchers, spawning them on first use.
 pub struct IoRouter {
@@ -81,7 +81,6 @@ pub struct IoRouter {
 }
 
 impl IoRouter {
-
     pub fn new(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Self {
         Self {
             zones: DashMap::new(),
@@ -100,7 +99,7 @@ impl IoRouter {
         let f = Arc::new(Fetcher::new(
             self.cfg.clone(),
             self.engine_ctx.event_tx.clone(),
-            self.engine_ctx.request_reference_map.clone()
+            self.engine_ctx.request_reference_map.clone(),
         ));
 
         let f_run = f.clone();
@@ -109,11 +108,14 @@ impl IoRouter {
             f_run.run(zone_shutdown_rx).await;
         });
 
-        self.zones.insert(zone_id, ZoneEntry {
-            fetcher: f.clone(),
-            shutdown_tx: zone_shutdown_tx.clone(),
-            join: join_handle,
-        });
+        self.zones.insert(
+            zone_id,
+            ZoneEntry {
+                fetcher: f.clone(),
+                shutdown_tx: zone_shutdown_tx.clone(),
+                join: join_handle,
+            },
+        );
 
         f
     }
@@ -142,7 +144,7 @@ impl IoRouter {
         }
 
         for j in tasks {
-            let _= j.await;
+            let _ = j.await;
         }
     }
 }
@@ -166,12 +168,14 @@ pub async fn submit_to_io(
         cancel: cancel.clone(),
     };
 
-    io_tx.send(IoCommand::Fetch{
-        zone_id,
-        req,
-        handle: handle.clone(),
-        reply_tx
-    }).map_err(|_| anyhow::anyhow!("I/O thread has shut down"))?;
+    io_tx
+        .send(IoCommand::Fetch {
+            zone_id,
+            req,
+            handle: handle.clone(),
+            reply_tx,
+        })
+        .map_err(|_| anyhow::anyhow!("I/O thread has shut down"))?;
 
     Ok((handle, reply_rx))
 }
@@ -232,7 +236,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::time::{sleep, timeout};
-    use tokio::sync::watch;
 
     fn test_cfg() -> FetcherConfig {
         FetcherConfig {
@@ -303,9 +306,8 @@ mod tests {
     async fn router_spawns_and_shuts_down_zone() {
         let cfg = test_cfg();
         let ctx = test_engine_ctx();
-        let (_g_tx, g_rx) = watch::channel(false);
 
-        let router = IoRouter::new(cfg, ctx, g_rx.clone());
+        let router = IoRouter::new(cfg, ctx);
         let z = ZoneId::new();
 
         // Lazily create fetcher for zone z
@@ -322,9 +324,8 @@ mod tests {
     async fn router_isolates_zones() {
         let cfg = test_cfg();
         let ctx = test_engine_ctx();
-        let (_g_tx, g_rx) = watch::channel(false);
 
-        let router = IoRouter::new(cfg, ctx, g_rx.clone());
+        let router = IoRouter::new(cfg, ctx);
         let z1 = ZoneId::new();
         let z2 = ZoneId::new();
 
@@ -338,7 +339,10 @@ mod tests {
 
         // z2 should still have a running fetcher; get_or_spawn must return the same Arc ptr
         let f2_again = router.get_or_spawn_zone_fetcher(z2);
-        assert!(Arc::ptr_eq(&f2, &f2_again), "z2 fetcher must remain the same instance");
+        assert!(
+            Arc::ptr_eq(&f2, &f2_again),
+            "z2 fetcher must remain the same instance"
+        );
 
         // Clean up remaining zones to avoid leaking tasks in test
         router.shutdown_all().await;
@@ -349,9 +353,8 @@ mod tests {
     async fn router_shutdown_unknown_zone_is_noop() {
         let cfg = test_cfg();
         let ctx = test_engine_ctx();
-        let (_g_tx, g_rx) = watch::channel(false);
 
-        let router = IoRouter::new(cfg, ctx, g_rx.clone());
+        let router = IoRouter::new(cfg, ctx);
 
         let z_never_spawned = ZoneId::new();
         let stopped = router.shutdown_zone(z_never_spawned).await;

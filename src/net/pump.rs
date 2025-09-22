@@ -1,17 +1,20 @@
-use tokio::{io::AsyncRead, time::{timeout, sleep}};
-use bytes::BytesMut;
-use std::{path::PathBuf, time::Instant};
-use tokio::fs::OpenOptions;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
-use url::Url;
 use crate::engine::types::PeekBuf;
 use crate::net::events::{NetEvent, NetObserver};
 use crate::net::fs_utils::temp_path_for;
-use crate::net::SharedBody;
 use crate::net::types::NetError;
+use crate::net::SharedBody;
+use bytes::BytesMut;
+use std::sync::Arc;
+use std::{path::PathBuf, time::Instant};
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::task::JoinHandle;
+use tokio::{
+    io::AsyncRead,
+    time::{sleep, timeout},
+};
+use tokio_util::sync::CancellationToken;
+use url::Url;
 
 /// Configuration for a single pump run.
 ///
@@ -122,9 +125,13 @@ pub fn spawn_pump<R>(
     url: Url,
 ) -> JoinHandle<Result<Option<PathBuf>, NetError>>
 where
-    R: AsyncRead + Unpin + Send + 'static
+    R: AsyncRead + Unpin + Send + 'static,
 {
-    let PumpTargets { shared, file_dest, peek_buf } = targets;
+    let PumpTargets {
+        shared,
+        file_dest,
+        peek_buf,
+    } = targets;
     let idle = cfg.idle;
     let total_deadline = cfg.total_deadline;
 
@@ -148,10 +155,12 @@ where
 
             // Write peek data first
             if !peek_buf.is_empty() {
-                f.write_all(&peek_buf).await.map_err(|e| NetError::Io(Arc::new(e)))?;
+                f.write_all(&peek_buf)
+                    .await
+                    .map_err(|e| NetError::Io(Arc::new(e)))?;
             }
 
-            Some ((tmp_dest, BufWriter::new(f)))
+            Some((tmp_dest, BufWriter::new(f)))
         } else {
             None
         };
@@ -168,7 +177,7 @@ where
         let finish_ok = loop {
             let total_left = total_deadline.map(|dl| dl.saturating_duration_since(Instant::now()));
 
-            let read_res = tokio::select!{
+            let read_res = tokio::select! {
                 _ = cancel.cancelled() => {
                     // Cancelled
                     if let Some(s) = &shared {
@@ -229,7 +238,7 @@ where
                             if let Err(e) = w.flush().await {
                                 observer.on_event(NetEvent::Warning {
                                     url: url.clone(),
-                                    message: format!("Failed to flush file: {}", e)
+                                    message: format!("Failed to flush file: {}", e),
                                 });
                             }
                         }
@@ -271,7 +280,9 @@ where
         if let Some((tmp, _w)) = writer {
             if finish_ok {
                 if let Some(dest) = file_dest {
-                    tokio::fs::rename(&tmp, &dest).await.map_err(|e| NetError::Io(Arc::new(e)))?;
+                    tokio::fs::rename(&tmp, &dest)
+                        .await
+                        .map_err(|e| NetError::Io(Arc::new(e)))?;
 
                     return Ok(Some(dest));
                 }

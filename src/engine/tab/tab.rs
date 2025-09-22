@@ -1,15 +1,15 @@
-use std::fmt::Display;
-use crate::engine::{DEFAULT_CHANNEL_CAPACITY};
+use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 use crate::events::TabCommand;
+use crate::tab::services::EffectiveTabServices;
+use crate::tab::sink::TabSink;
+use crate::tab::worker::TabWorker;
 use crate::tab::TabHandle;
 use crate::zone::{ZoneContext, ZoneId};
+use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
-use crate::tab::services::EffectiveTabServices;
-use crate::tab::sink::TabSink;
-use crate::tab::worker::TabWorker;
 
 /// A unique identifier for a browser tab within a [`GosubEngine`](crate::engine::GosubEngine).
 ///

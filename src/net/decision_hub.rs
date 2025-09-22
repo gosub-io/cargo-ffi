@@ -7,9 +7,9 @@
 //! - UA/tab decides action, then calls [`DecisionHub::fulfill`] with the same `token`.
 //! - The IO/fetcher awaits `rx.await` and proceeds accordingly.
 
+use crate::Action;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::oneshot;
-use crate::Action;
 
 /// Correlation handle for a pending decision.
 /// Opaque outside the hub; equality/hashable so it can be used as a key.
@@ -40,7 +40,10 @@ impl DecisionHub {
     /// [`fulfill`](Self::fulfill) with the final `Action`.
     #[inline]
     pub fn register(&self) -> (DecisionToken, oneshot::Receiver<Action>) {
-        let token = DecisionToken(self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let token = DecisionToken(
+            self.counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
         let (tx, rx) = oneshot::channel();
         self.waiters.insert(token, tx);
         (token, rx)
@@ -57,7 +60,6 @@ impl DecisionHub {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

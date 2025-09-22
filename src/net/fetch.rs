@@ -1,3 +1,4 @@
+use crate::engine::types::PeekBuf;
 use crate::net::events::{NetEvent, NetObserver};
 use crate::net::types::{FetchResultMeta, NetError};
 use anyhow::{anyhow, Context};
@@ -6,12 +7,12 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use http::header::CONTENT_LENGTH;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::timeout;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::engine::types::PeekBuf;
 
 /// Peek buffer size (first bytes of body). Used for detecting mime type
 const PEEK_MAX: usize = 5 * 1024;
@@ -42,7 +43,6 @@ pub async fn fetch_response_top(
     // Observer which can send out NetEvents to the UA
     observer: Arc<dyn NetObserver + Send + Sync>,
 ) -> Result<ResponseTop, NetError> {
-
     // Emit we are starting
     let started = Instant::now();
     observer.on_event(NetEvent::Started { url: url.clone() });
@@ -56,15 +56,28 @@ pub async fn fetch_response_top(
     )
     .await?;
 
+    let hdrs = resp.headers().clone();
+    for (h, v) in hdrs.iter() {
+        println!("{}: {}", h.as_str(), v.to_str().unwrap());
+    }
+    let raw_len = hdrs
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+
     // Response is received, setup our meta structure
     let mut meta = FetchResultMeta {
         final_url: resp.url().clone(),
         status: resp.status().as_u16(),
         status_text: resp.status().canonical_reason().unwrap_or("").to_string(),
         headers: resp.headers().clone(),
-        content_length: resp.content_length(),
-        content_type: resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
-        has_body: true,   // Don't know yet
+        content_length: raw_len,
+        content_type: resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+        has_body: true, // Don't know yet
     };
 
     // Peek the stream up to PEEK_MAX bytes
@@ -288,8 +301,11 @@ pub async fn fetch_response_complete(
 ) -> Result<(FetchResultMeta, Vec<u8>), NetError> {
     let started = Instant::now();
 
-    let ResponseTop { meta, peek_buf, mut reader } =
-        fetch_response_top(client, url, cancel.clone(), observer.clone()).await?;
+    let ResponseTop {
+        meta,
+        peek_buf,
+        mut reader,
+    } = fetch_response_top(client, url, cancel.clone(), observer.clone()).await?;
 
     // We don't care about the peek buffer. We just create a new buffer and read the rest of the
     // stream into it.
@@ -402,23 +418,20 @@ async fn get_with_redirects(
     Err(NetError::Redirect(Arc::new(anyhow!("too many redirects"))))
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io;
     use std::net::SocketAddr;
     use std::time::Duration;
-    use tokio::io::{AsyncWriteExt as _};
+    use tokio::io::AsyncWriteExt as _;
     use tokio::net::{TcpListener, TcpStream};
     use tokio_util::sync::CancellationToken;
 
     struct TestObserver;
 
     impl NetObserver for TestObserver {
-        fn on_event(&self, _event: NetEvent) {
-        }
+        fn on_event(&self, _event: NetEvent) {}
     }
 
     async fn read_request(stream: &mut TcpStream) -> io::Result<String> {
@@ -548,10 +561,19 @@ mod tests {
         let cancel = CancellationToken::new();
         let observer: Arc<dyn NetObserver + Send + Sync> = Arc::new(TestObserver);
 
-        let ResponseTop { meta, peek_buf, mut reader } =
-            super::fetch_response_top(client, url, cancel, observer).await.unwrap();
+        let ResponseTop {
+            meta,
+            peek_buf,
+            mut reader,
+        } = super::fetch_response_top(client, url, cancel, observer)
+            .await
+            .unwrap();
 
-        assert_eq!(peek_buf.len(), super::PEEK_MAX, "peek must be exactly PEEK_MAX");
+        assert_eq!(
+            peek_buf.len(),
+            super::PEEK_MAX,
+            "peek must be exactly PEEK_MAX"
+        );
         // Read remainder
         let mut rest = Vec::new();
         reader.read_to_end(&mut rest).await.unwrap();
@@ -576,10 +598,12 @@ mod tests {
             url,
             cancel,
             observer,
-            None,                           // max_bytes
-            Duration::from_secs(3),         // read_idle_timeout
-            Some(Duration::from_secs(5)),   // total_body_timeout
-        ).await.unwrap();
+            None,                         // max_bytes
+            Duration::from_secs(3),       // read_idle_timeout
+            Some(Duration::from_secs(5)), // total_body_timeout
+        )
+        .await
+        .unwrap();
 
         assert_eq!(meta.status, 200);
         assert_eq!(body.len(), 12 * 1024);
@@ -602,14 +626,18 @@ mod tests {
             cancel,
             observer,
             None,
-            Duration::from_millis(100),     // read_idle_timeout
-            Some(Duration::from_secs(2)),   // total_body_timeout
-        ).await;
+            Duration::from_millis(100),   // read_idle_timeout
+            Some(Duration::from_secs(2)), // total_body_timeout
+        )
+        .await;
 
         assert!(res.is_err(), "expected timeout error");
         let err = res.err().unwrap();
         let s = err.to_string().to_lowercase();
-        assert!(s.contains("timeout"), "error should mention timeout, got: {s}");
+        assert!(
+            s.contains("timeout"),
+            "error should mention timeout, got: {s}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -622,11 +650,11 @@ mod tests {
         let observer: Arc<dyn NetObserver + Send + Sync> = Arc::new(TestObserver);
 
         // Kick off, then cancel quickly; server sends headers + PEEK_MAX fast, but we cancel immediately
-        let cancel2 = cancel.clone();
+        let cancel_clone = cancel.clone();
         let fut = super::fetch_response_top(client, url, cancel.clone(), observer);
 
         // Cancel immediately
-        cancel2.cancel();
+        cancel_clone.cancel();
 
         let res = fut.await;
         assert!(res.is_err(), "expected cancellation");

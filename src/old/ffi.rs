@@ -1,6 +1,6 @@
+use crate::engine::Engine;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use crate::engine::Engine;
 
 #[repr(C)]
 pub struct GosubEngineHandle(*mut Engine);

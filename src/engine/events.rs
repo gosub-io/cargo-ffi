@@ -14,6 +14,11 @@
 
 use crate::config::LogLevel;
 use crate::cookies::Cookie;
+use crate::engine::types::{Action, NavigationId, RequestId};
+use crate::net::types::{
+    FetchHandle, FetchRequest, FetchResult, FetchResultMeta, Initiator, Priority, ResourceKind,
+};
+use crate::net::DecisionToken;
 use crate::render::backend::ExternalHandle;
 use crate::render::Viewport;
 use crate::storage::event::StorageScope;
@@ -26,9 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use url::Url;
-use crate::engine::types::{NavigationId, RequestId, Action};
-use crate::net::DecisionToken;
-use crate::net::types::{FetchHandle, FetchRequest, FetchResult, FetchResultMeta, Initiator, Priority, RequestReference, ResourceKind};
+use crate::net::req_ref_tracker::RequestReference;
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -93,13 +96,13 @@ pub enum IoCommand {
         zone_id: ZoneId,
         req: FetchRequest,
         handle: FetchHandle,
-        reply_tx: oneshot::Sender<FetchResult>
+        reply_tx: oneshot::Sender<FetchResult>,
     },
     /// Return a decision on a pending request
     Decision {
         zone_id: ZoneId,
         token: DecisionToken,
-        action: Action
+        action: Action,
     },
     /// Ask IO to shut down a specific zone; replies when fully stopped.
     ShutdownZone {
@@ -120,7 +123,11 @@ pub enum TabCommand {
     /// Cancel the current navigation
     CancelNavigation,
     /// Make a decision what to do with the navigated resource
-    SubmitDecision { nav_id: NavigationId, decision_token: DecisionToken, action: Action },
+    SubmitDecision {
+        nav_id: NavigationId,
+        decision_token: DecisionToken,
+        action: Action,
+    },
     /// Close tab
     CloseTab,
 
@@ -215,21 +222,42 @@ pub enum EngineCommand {
 #[derive(Debug, Clone)]
 pub enum NavigationEvent {
     /// Navigation has been started
-    Started   { nav_id: NavigationId, url: Url },
+    Started { nav_id: NavigationId, url: Url },
     /// A new document will replace current one
     Committed { nav_id: NavigationId, url: Url },
     /// Finished loading the main document for this navigation
-    Finished  { nav_id: NavigationId, url: Url },
+    Finished { nav_id: NavigationId, url: Url },
     /// Navigation has failed
-    Failed    { nav_id: Option<NavigationId>, url: Url, error: Arc<anyhow::Error> },
+    Failed {
+        nav_id: Option<NavigationId>,
+        url: Url,
+        error: Arc<anyhow::Error>,
+    },
     /// Progress of loading the main document for this navigation
-    Progress  { nav_id: NavigationId, received_bytes: u64, expected_length: Option<u64>, elapsed: Duration },
+    Progress {
+        nav_id: NavigationId,
+        received_bytes: u64,
+        expected_length: Option<u64>,
+        elapsed: Duration,
+    },
     /// The URL given was invalid
-    FailedUrl { nav_id: Option<NavigationId>, url: String, error: Arc<anyhow::Error> },
+    FailedUrl {
+        nav_id: Option<NavigationId>,
+        url: String,
+        error: Arc<anyhow::Error>,
+    },
     /// The navigation has been cancelled
-    Cancelled { nav_id: NavigationId, url: Url, reason: CancelReason },
+    Cancelled {
+        nav_id: NavigationId,
+        url: Url,
+        reason: CancelReason,
+    },
     /// The navigation requires a decision on how to proceed (e.g., auth, certificate, block, allow)
-    DecisionRequired { nav_id: NavigationId, meta: FetchResultMeta, decision_token: DecisionToken },
+    DecisionRequired {
+        nav_id: NavigationId,
+        meta: FetchResultMeta,
+        decision_token: DecisionToken,
+    },
 }
 
 /// Events triggered by load resources for a main document. Note that resources can trigger other
@@ -288,7 +316,7 @@ pub enum ResourceEvent {
         /// Expected length (based on content-length for instance)
         expected_length: Option<u64>,
         /// Time since start of the resource fetch
-        elapsed: Duration
+        elapsed: Duration,
     },
     /// Emitted when we have finished the complete resource
     Finished {
@@ -365,7 +393,6 @@ impl Display for CancelReason {
             CancelReason::Timeout => write!(f, "Cancelling timeout"),
             CancelReason::Custom(msg) => write!(f, "{}", msg),
         }
-
     }
 }
 
@@ -374,75 +401,120 @@ impl Display for CancelReason {
 pub enum EngineEvent {
     // ****************************************
     // ** Engine lifecycle
-
     /// Engine has started
     EngineStarted,
     /// Render backend has changed for the engine
-    BackendChanged { old: String, new: String },
+    BackendChanged {
+        old: String,
+        new: String,
+    },
     /// Warning from the engine
-    Warning { message: String },
+    Warning {
+        message: String,
+    },
     /// Engine is shutting down
-    EngineShutdown { reason: String },
+    EngineShutdown {
+        reason: String,
+    },
 
     // ****************************************
     // ** Zone lifecycle
-
     /// Zone created
-    ZoneCreated { zone_id: ZoneId },
+    ZoneCreated {
+        zone_id: ZoneId,
+    },
     /// Zone closed
-    ZoneClosed { zone_id: ZoneId },
+    ZoneClosed {
+        zone_id: ZoneId,
+    },
 
     // ****************************************
     // ** Rendering
-
     /// A redraw frame is available
-    Redraw { tab_id: TabId, handle: ExternalHandle },
+    Redraw {
+        tab_id: TabId,
+        handle: ExternalHandle,
+    },
     /// Frame has been completed (@TODO: do we need this?)
-    FrameComplete { tab_id: TabId, frame_id: u64 },
+    FrameComplete {
+        tab_id: TabId,
+        frame_id: u64,
+    },
 
     // ****************************************
     // ** Tab state
-
     /// Title of the tab has changed
-    TitleChanged { tab_id: TabId, title: String },
+    TitleChanged {
+        tab_id: TabId,
+        title: String,
+    },
     /// Favicon of tab has changed
-    FavIconChanged { tab_id: TabId, favicon: Vec<u8> },
+    FavIconChanged {
+        tab_id: TabId,
+        favicon: Vec<u8>,
+    },
     /// Location of the tab has changed
-    LocationChanged { tab_id: TabId, url: String },
+    LocationChanged {
+        tab_id: TabId,
+        url: String,
+    },
     /// Viewport of the tab has changed
-    TabResized { tab_id: TabId, viewport: Viewport },
+    TabResized {
+        tab_id: TabId,
+        viewport: Viewport,
+    },
 
     // ****************************************
     // ** Navigation
 
     // Navigation events (for main document)
-    Navigation { tab_id: TabId, event: NavigationEvent },
+    Navigation {
+        tab_id: TabId,
+        event: NavigationEvent,
+    },
     /// Lowlevel resource events for all resources loaded
-    Resource { tab_id: TabId, event: ResourceEvent },
+    Resource {
+        tab_id: TabId,
+        event: ResourceEvent,
+    },
 
     // /// Redirect occurred
     // Redirect { tab_id: TabId, from: String, to: String },
 
     // ********************************************
     // ** Networking
-
     /// Network connection has been established
-    ConnectionEstablished { tab_id: TabId, url: String },
+    ConnectionEstablished {
+        tab_id: TabId,
+        url: String,
+    },
 
     // ****************************************
     // ** Tab lifecycle
     /// New tab created in zone
-    TabCreated { tab_id: TabId, zone_id: ZoneId },
+    TabCreated {
+        tab_id: TabId,
+        zone_id: ZoneId,
+    },
     /// Tab closed in zone
-    TabClosed { tab_id: TabId, zone_id: ZoneId },
+    TabClosed {
+        tab_id: TabId,
+        zone_id: ZoneId,
+    },
 
     // ** Tab
     /// Title of the tab has changed
-    TabTitleChanged { tab_id: TabId, title: String },
+    TabTitleChanged {
+        tab_id: TabId,
+        title: String,
+    },
 
     // ** Session / zone state
     /// A cookie has been added
-    CookieAdded { tab_id: TabId, cookie: Cookie },
+    CookieAdded {
+        tab_id: TabId,
+        cookie: Cookie,
+    },
     /// Storage has changed
     StorageChanged {
         tab_id: Option<TabId>,
@@ -455,19 +527,30 @@ pub enum EngineEvent {
 
     // ****************************************
     // ** Media / scripting
-
     /// Media has started
-    MediaStarted { tab_id: TabId, element_id: u64 },
+    MediaStarted {
+        tab_id: TabId,
+        element_id: u64,
+    },
     /// Media has paused
-    MediaPaused { tab_id: TabId, element_id: u64 },
+    MediaPaused {
+        tab_id: TabId,
+        element_id: u64,
+    },
     /// Result of a script is returned (console stuff?)
-    ScriptResult { tab_id: TabId, result: serde_json::Value },
+    ScriptResult {
+        tab_id: TabId,
+        result: serde_json::Value,
+    },
 
     // ****************************************
     // ** Errors / diagnostics
-
     /// Network error occurred
-    NetworkError { tab_id: TabId, url: Url, message: String },
+    NetworkError {
+        tab_id: TabId,
+        url: Url,
+        message: String,
+    },
     /// Javascript (parse) error
     JavaScriptError {
         tab_id: TabId,
@@ -476,8 +559,10 @@ pub enum EngineEvent {
         column: u32,
     },
     /// Engine crashed
-    TabCrashed { tab_id: TabId, reason: String },
-
+    TabCrashed {
+        tab_id: TabId,
+        reason: String,
+    },
     // Uncategorized / generic
 }
 

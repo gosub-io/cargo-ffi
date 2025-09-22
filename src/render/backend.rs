@@ -21,14 +21,13 @@ use crate::engine::BrowsingContext;
 use crate::render::Viewport;
 use std::any::Any;
 
-
 /// A surface rect has the same properties as a viewport, but a surface rect
 /// is usually computed with DevicePixelRatio.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SurfaceRect {
-    pub x: i32,      // physical px
+    pub x: i32, // physical px
     pub y: i32,
-    pub width: u32,  // physical px
+    pub width: u32, // physical px
     pub height: u32,
 }
 

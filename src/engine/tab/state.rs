@@ -1,6 +1,6 @@
+use crate::render::Viewport;
 use std::time::Duration;
 use url::Url;
-use crate::render::Viewport;
 
 /// State for the tab task driving a single tab.
 pub(crate) struct TabRuntime {
@@ -58,8 +58,6 @@ pub enum TabState {
     /// A fatal error occurred while loading or rendering.
     Failed(String),
 }
-
-
 
 /// Activity mode for a [`Tab`]. Schedulers can allocate CPU/time by mode.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

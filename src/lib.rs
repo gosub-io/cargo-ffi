@@ -133,8 +133,8 @@ pub use engine::storage;
 pub use crate::engine::config::EngineConfig;
 
 pub mod events {
-    pub use crate::engine::events::{EngineCommand, EngineEvent, MouseButton, TabCommand, IoCommand};
-    pub use crate::engine::events::{ResourceEvent, NavigationEvent };
+    pub use crate::engine::events::{EngineCommand, EngineEvent, IoCommand, MouseButton, TabCommand};
+    pub use crate::engine::events::{NavigationEvent, ResourceEvent};
 }
 
 // Public `config` namespace with the enums/structs:

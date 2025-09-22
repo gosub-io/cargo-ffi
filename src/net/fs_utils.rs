@@ -1,7 +1,7 @@
-use tempfile::{NamedTempFile, Builder};
-use std::path::Path;
-use url::Url;
 use std::io;
+use std::path::Path;
+use tempfile::{Builder, NamedTempFile};
+use url::Url;
 
 /// Create a temp file in the same directory as `dest` for atomic renaming
 /// Example: `/downloads/file.pdf` -> `/downloads/.file.pdf.part-AB12cd.tmp`
@@ -39,7 +39,8 @@ pub fn stage_temp_path_for(url: &Url) -> io::Result<NamedTempFile> {
 }
 
 fn sanitize_filename(s: &str) -> String {
-    let mut result: String = s.chars()
+    let mut result: String = s
+        .chars()
         .map(|c| {
             // Allow simple safe set; replace everything else with '_'
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
@@ -51,12 +52,14 @@ fn sanitize_filename(s: &str) -> String {
         .collect();
 
     // Remove leading/trailing non-alphanumeric characters and dots
-    result = result.trim_matches(|c: char| !c.is_ascii_alphanumeric() || c == '.')
+    result = result
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric() || c == '.')
         .to_string();
 
     // Remove any remaining consecutive special characters
     let mut prev_was_special = false;
-    result = result.chars()
+    result = result
+        .chars()
         .filter(|&c| {
             let is_special = !c.is_ascii_alphanumeric();
             let keep = !is_special || !prev_was_special;
@@ -74,7 +77,6 @@ fn sanitize_filename(s: &str) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,7 +88,10 @@ mod tests {
 
         assert!(temp_file.path().exists());
         assert!(temp_file.path().parent() == Some(Path::new("/tmp")));
-        assert!(temp_file.path().to_string_lossy().contains("testfile.txt.part-"));
+        assert!(temp_file
+            .path()
+            .to_string_lossy()
+            .contains("testfile.txt.part-"));
 
         Ok(())
     }
@@ -107,11 +112,17 @@ mod tests {
     fn test_sanitize_filename() {
         assert_eq!(sanitize_filename("normal file.txt"), "normal file.txt");
         assert_eq!(sanitize_filename("file with/slashes"), "file with_slashes");
-        assert_eq!(sanitize_filename("file with\\backslashes"), "file with_backslashes");
+        assert_eq!(
+            sanitize_filename("file with\\backslashes"),
+            "file with_backslashes"
+        );
         assert_eq!(sanitize_filename("file with..dots"), "file with.dots");
         assert_eq!(sanitize_filename(""), "download");
         assert_eq!(sanitize_filename("."), "download");
         assert_eq!(sanitize_filename(".."), "download");
-        assert_eq!(sanitize_filename("very<>long|filename*with?many:bad\"chars"), "very_long_filename_with_many_bad_chars");
+        assert_eq!(
+            sanitize_filename("very<>long|filename*with?many:bad\"chars"),
+            "very_long_filename_with_many_bad_chars"
+        );
     }
 }

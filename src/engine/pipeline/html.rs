@@ -1,16 +1,17 @@
-use std::sync::{Arc, Mutex};
+use crate::engine::types::{IoChannel, PeekBuf, RequestId};
+use crate::html::{parse_main_document_stream, DummyDocument, ResourceHint};
+use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResultMeta, Initiator};
+use crate::net::{submit_to_io, SharedBody};
+use crate::zone::ZoneId;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream;
 use http::Method;
+use std::sync::{Arc, Mutex};
 use tokio::io::AsyncRead;
+use tokio::task::JoinHandle;
 use tokio_util::io::StreamReader;
-use crate::engine::types::{IoChannel, PeekBuf, RequestId};
-use crate::html::{parse_main_document_stream, DummyDocument, ResourceHint};
-use crate::net::{submit_to_io, SharedBody};
-use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResultMeta, Initiator};
-use crate::zone::ZoneId;
 
 #[async_trait]
 pub trait HtmlPipeline {
@@ -20,7 +21,7 @@ pub trait HtmlPipeline {
         handle: FetchHandle,
         meta: FetchResultMeta,
         peek_buf: PeekBuf,
-        body: Arc<SharedBody>
+        body: Arc<SharedBody>,
     ) -> anyhow::Result<DummyDocument>;
 
     async fn parse_bytes(
@@ -31,7 +32,6 @@ pub trait HtmlPipeline {
         body: &[u8],
     ) -> anyhow::Result<DummyDocument>;
 }
-
 
 pub struct HtmlPipelineImpl {
     io_tx: IoChannel,
@@ -51,7 +51,7 @@ impl HtmlPipelineImpl {
         reader: R,
     ) -> anyhow::Result<DummyDocument>
     where
-      R: AsyncRead + Unpin + Send + 'static
+        R: AsyncRead + Unpin + Send + 'static,
     {
         let cfg = crate::html::DummyHtml5Config::default();
 
@@ -61,7 +61,10 @@ impl HtmlPipelineImpl {
         let parent_cancel = handle.cancel.clone();
 
         let child_handles = Arc::new(Mutex::new(Vec::<FetchHandle>::new()));
+        let child_tasks = Arc::new(Mutex::new(Vec::<JoinHandle<()>>::new()));
+
         let child_handles_for_closure = child_handles.clone();
+        let child_tasks_for_closure = child_tasks.clone();
 
         let mut on_discover = |hint: ResourceHint| {
             // For now, we do nothing when discovering resources
@@ -87,8 +90,14 @@ impl HtmlPipelineImpl {
             let io_tx_cloned = io_tx.clone();
             let parent_cancel_cloned = parent_cancel.clone();
             let child_handles = child_handles_for_closure.clone();
+            let child_tasks = child_tasks_for_closure.clone();
 
-            tokio::spawn(async move {
+            // Parent cancelled, so we don't have to do anything
+            if parent_cancel_cloned.is_cancelled() {
+                return;
+            }
+
+            let join_handle = tokio::spawn(async move {
                 match submit_to_io(zone_id, sub_req, io_tx_cloned, Some(parent_cancel_cloned)).await {
                     Ok((child_handle, rx)) => {
                         child_handles.lock().unwrap().push(child_handle);
@@ -100,19 +109,35 @@ impl HtmlPipelineImpl {
                     }
                 }
             });
+
+            child_tasks.lock().unwrap().push(join_handle);
         };
+
+        let was_cancelled = handle.cancel.is_cancelled();
 
         let res = parse_main_document_stream(
             meta.final_url, // This is the base URL
             reader,
             handle.cancel.clone(),
             cfg,
-            &mut on_discover
-        ).await;
+            &mut on_discover,
+        )
+        .await;
 
-        // Cancel any child requests that were spawned
-        for h in child_handles.lock().unwrap().drain(..) {
-            h.cancel.cancel();
+        if was_cancelled || res.is_err() {
+            for h in child_handles.lock().unwrap().drain(..) {
+                log::trace!("Cancelling child handle for URL: {}", h.key.url);
+                h.cancel.cancel();
+            }
+
+            let joins: Vec<JoinHandle<()>> = {
+                let mut g = child_tasks.lock().unwrap();
+                std::mem::take(&mut *g)    // drain without keeping the guard alive
+            };
+
+            for jh in joins {
+                let _ = jh.await;
+            }
         }
 
         res.map_err(|e| anyhow!("Failed to parse HTML document: {:?}", e))
@@ -138,10 +163,12 @@ impl HtmlPipeline for HtmlPipelineImpl {
         request: FetchRequest,
         handle: FetchHandle,
         meta: FetchResultMeta,
-        body: &[u8]
-    ) -> anyhow::Result<DummyDocument>{
+        body: &[u8],
+    ) -> anyhow::Result<DummyDocument> {
         // parsing bytes is just creating a stream of those bytes and passing it to the stream reader
-        let stream = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::copy_from_slice(body))]);
+        let stream = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::copy_from_slice(
+            body,
+        ))]);
         let reader = StreamReader::new(stream);
         self.parse_with_reader(request, handle, meta, reader).await
     }
@@ -154,6 +181,10 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::time::sleep;
     use url::Url;
+    use crate::events::IoCommand;
+    use crate::NavigationId;
+    use crate::net::req_ref_tracker::RequestReference;
+    use crate::net::types::{Priority, ResourceKind};
 
     // Minimal HTML that triggers 3 resource discoveries: link/script/img + a title.
     const HTML_WITH_RESOURCES: &str = r#"
@@ -181,14 +212,14 @@ mod tests {
     fn test_request(base: &str) -> (FetchRequest, FetchHandle) {
         let req = FetchRequest {
             req_id: RequestId::new(),
-            reference: Default::default(), // or whatever your reference type needs
+            reference: RequestReference::Navigation(NavigationId::new()), // or whatever your reference type needs
             key_data: FetchKeyData {
                 url: Url::parse(base).unwrap(),
                 method: Method::GET,
                 headers: Default::default(),
             },
-            priority: crate::net::types::Priority::High,
-            kind: crate::net::types::RequestKind::Document,
+            priority: Priority::High,
+            kind: ResourceKind::Document,
             initiator: Initiator::Parser,
             streaming: true,
             auto_decode: true,
@@ -213,7 +244,12 @@ mod tests {
         tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
-                    IoCommand::Fetch { zone_id: _, req: _, handle, reply_tx } => {
+                    IoCommand::Fetch {
+                        zone_id: _,
+                        req: _,
+                        handle,
+                        reply_tx,
+                    } => {
                         // record the child handle so tests can inspect cancellation state later
                         seen_children_clone.lock().unwrap().push(handle);
                         // drop the sender to unblock the pipeline's `rx.await` without crafting a FetchResult
@@ -270,16 +306,25 @@ mod tests {
         let body = HTML_WITH_RESOURCES.as_bytes();
 
         // Act
-        let _ = pipeline.parse_bytes(req, handle, meta, body).await.expect("parse ok");
+        let _ = pipeline
+            .parse_bytes(req, handle, meta, body)
+            .await
+            .expect("parse ok");
 
         // Give the pipeline a tick to run the post-parse cancellation
         sleep(Duration::from_millis(10)).await;
 
         // Assert: all recorded children are canceled (pipeline proactively cancels them at end)
         let children = seen_children.lock().unwrap();
-        assert!(!children.is_empty(), "expected subresource children to be recorded");
+        assert!(
+            !children.is_empty(),
+            "expected subresource children to be recorded"
+        );
         for h in children.iter() {
-            assert!(h.cancel.is_cancelled(), "child handle should be canceled after parse end");
+            assert!(
+                h.cancel.is_cancelled(),
+                "child handle should be canceled after parse end"
+            );
         }
     }
 }

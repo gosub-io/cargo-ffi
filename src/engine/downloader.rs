@@ -1,13 +1,13 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
-use anyhow::anyhow;
 use crate::engine::types::{EventChannel, NavigationId};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::task::JoinHandle;
 use crate::events::{EngineEvent, NavigationEvent};
 use crate::net::types::{BodyStream, FetchResultMeta};
 use crate::tab::TabId;
+use anyhow::anyhow;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::task::JoinHandle;
 
 #[allow(unused)]
 pub fn start_download(

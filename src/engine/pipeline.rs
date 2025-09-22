@@ -3,18 +3,18 @@
 //! Each module defines a trait for parsing streams and byte slices of the respective asset type.
 
 use crate::engine::pipeline::css::{CssPipeline, CssPipelineImpl};
+use crate::engine::pipeline::font::{FontPipeline, FontPipelineImpl};
 use crate::engine::pipeline::html::{HtmlPipeline, HtmlPipelineImpl};
 use crate::engine::pipeline::image::{ImagePipeline, ImagePipelineImpl};
 use crate::engine::pipeline::js::{JsPipeline, JsPipelineImpl};
-use crate::engine::pipeline::font::{FontPipeline, FontPipelineImpl};
 use crate::engine::types::IoChannel;
 use crate::zone::ZoneId;
 
-pub mod html;
 pub mod css;
-pub mod js;
 pub mod font;
+pub mod html;
 pub mod image;
+pub mod js;
 
 /// Hooks are functions that allows the router to call the correct pipeline for each type of
 /// resource.

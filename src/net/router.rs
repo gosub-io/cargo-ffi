@@ -1,7 +1,3 @@
-use std::sync::Arc;
-use bytes::Bytes;
-use anyhow::anyhow;
-use http::Method;
 use crate::engine::pipeline::css::DummyStylesheet;
 use crate::engine::pipeline::font::DummyFont;
 use crate::engine::pipeline::js::DummyJsDocument;
@@ -10,9 +6,15 @@ use crate::engine::types::{IoChannel, PeekBuf, RequestId};
 use crate::engine::UaPolicy;
 use crate::html::{DummyDocument, ResourceHint};
 use crate::net::decision::types::BlockReason;
-use crate::net::{decide_handling, stream_to_bytes, submit_to_io, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
 use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResult, Initiator, ResourceKind};
+use crate::net::{
+    decide_handling, stream_to_bytes, submit_to_io, HandlingDecision, RenderTarget, RequestDestination, SharedBody,
+};
 use crate::zone::ZoneId;
+use anyhow::anyhow;
+use bytes::Bytes;
+use http::Method;
+use std::sync::Arc;
 
 pub enum RoutedOutcome {
     MainDocument(DummyDocument),
@@ -70,7 +72,6 @@ impl BodyContent {
     }
 }
 
-
 /// Route a fetch result based on its destination and the UA policy.
 pub async fn route_response_for(
     dest: RequestDestination,
@@ -80,14 +81,11 @@ pub async fn route_response_for(
     policy: &UaPolicy,
     hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
-
     // Fetch the meta data, peek buffer and content (type)
     let (meta, body_content, peek_buf) = match fetch_result {
-        FetchResult::Stream { meta, peek_buf, shared } => {
-            (meta, BodyContent::Stream { shared }, peek_buf)
-        }
+        FetchResult::Stream { meta, peek_buf, shared } => (meta, BodyContent::Stream { shared }, peek_buf),
         FetchResult::Buffered { meta, body } => {
-            let peek_buf = PeekBuf::from_slice(&body[0..5*1024]);
+            let peek_buf = PeekBuf::from_slice(&body[0..5 * 1024]);
             (meta, BodyContent::Buffered { body }, peek_buf)
         }
         FetchResult::Error(e) => {
@@ -102,14 +100,22 @@ pub async fn route_response_for(
         (RequestDestination::MainDocument, HandlingDecision::Render(target), body_content) => {
             // We need to render it
             match target {
-                RenderTarget::TextViewer => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf.clone()).await?)),
+                RenderTarget::TextViewer => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf.clone()).await?,
+                )),
                 RenderTarget::HtmlParser => {
                     let doc = match body_content {
                         BodyContent::Stream { shared } => {
-                            hooks.html.parse_stream(request, handle, meta, peek_buf, shared).await?
+                            hooks
+                                .html
+                                .parse_stream(request, handle, meta, peek_buf, shared)
+                                .await?
                         }
                         BodyContent::Buffered { body } => {
-                            hooks.html.parse_bytes(request, handle, meta, body.as_ref()).await?
+                            hooks
+                                .html
+                                .parse_bytes(request, handle, meta, body.as_ref())
+                                .await?
                         }
                     };
                     Ok(RoutedOutcome::MainDocument(doc))
@@ -130,14 +136,28 @@ pub async fn route_response_for(
                     //     ).await.unwrap_or(Document("".to_string()));
                     //     NavigationResult::Document { meta, doc }
                     // }
-                },
-                RenderTarget::CssParser => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
-                RenderTarget::JsEngine => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
-                RenderTarget::ImageDecoder => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
-                RenderTarget::MediaPipeline => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
-                RenderTarget::FontLoader => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
-                RenderTarget::PdfViewer => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
-                RenderTarget::BodyToJs => Ok(RoutedOutcome::ViewerRendered(body_content.to_bytes(peek_buf).await?)),
+                }
+                RenderTarget::CssParser => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
+                RenderTarget::JsEngine => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
+                RenderTarget::ImageDecoder => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
+                RenderTarget::MediaPipeline => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
+                RenderTarget::FontLoader => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
+                RenderTarget::PdfViewer => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
+                RenderTarget::BodyToJs => Ok(RoutedOutcome::ViewerRendered(
+                    body_content.to_bytes(peek_buf).await?,
+                )),
             }
         }
         // (RequestDestination::MainDocument, HandlingDecision::Render(_)) => {
@@ -196,11 +216,11 @@ pub async fn route_response_for(
         (_, HandlingDecision::Cancel, _) => Ok(RoutedOutcome::Cancelled),
 
         // Safety net: e.g., Download/OpenExternal for sub resources: treat as block
-        (_, HandlingDecision::Download { .. } | HandlingDecision::OpenExternal | HandlingDecision::Render(_), _) => Ok(RoutedOutcome::Blocked(BlockReason::Policy)),
+        (_, HandlingDecision::Download { .. } | HandlingDecision::OpenExternal | HandlingDecision::Render(_), _) => {
+            Ok(RoutedOutcome::Blocked(BlockReason::Policy))
+        }
     }
 }
-
-
 
 /// Fetch a subresource and route it based on its destination and the UA policy.
 pub async fn fetch_and_route_subresource(
@@ -212,7 +232,6 @@ pub async fn fetch_and_route_subresource(
     policy: &UaPolicy,
     hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
-
     let sub_req = FetchRequest {
         req_id: RequestId::new(),
         reference: parent_request.reference,
@@ -229,11 +248,21 @@ pub async fn fetch_and_route_subresource(
         max_bytes: None,
     };
 
-    let (handle, rx) = submit_to_io(zone_id, sub_req, io_tx, Some(parent_handle.cancel.clone())).await
+    let (handle, rx) = submit_to_io(zone_id, sub_req, io_tx, Some(parent_handle.cancel.clone()))
+        .await
         .map_err(|e| anyhow!("Failed to submit fetch to IO thread: {}", e))?;
 
-    let fetch_result: FetchResult = rx.await
+    let fetch_result: FetchResult = rx
+        .await
         .map_err(|e| anyhow!("Failed to receive fetch result: {}", e))?;
 
-    route_response_for(hint.dest, handle, parent_request.clone(), fetch_result, policy, hooks).await
+    route_response_for(
+        hint.dest,
+        handle,
+        parent_request.clone(),
+        fetch_result,
+        policy,
+        hooks,
+    )
+    .await
 }

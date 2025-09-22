@@ -18,15 +18,14 @@ pub fn decide_handling(
     // The user-agent policy, including settings like no-sniff, etc.
     _policy: &UaPolicy,
 ) -> DecisionOutcome {
-
     // @TODO: hardcoded for now
     DecisionOutcome {
-        class: ResponseClass::Html,         // pretend we classified it as HTML
-        sniffed_class: None,                // no sniffing performed
-        declared_mime: None,                // no declared mime
-        disposition_attachment: false,      // not an attachment
+        class: ResponseClass::Html,    // pretend we classified it as HTML
+        sniffed_class: None,           // no sniffing performed
+        declared_mime: None,           // no declared mime
+        disposition_attachment: false, // not an attachment
         decision: HandlingDecision::Render(
-            RenderTarget::HtmlParser        // force it into HTML parser
+            RenderTarget::HtmlParser, // force it into HTML parser
         ),
     }
 }

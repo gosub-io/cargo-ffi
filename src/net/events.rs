@@ -1,8 +1,8 @@
-use std::time::Duration;
-use http::HeaderMap;
-use url::Url;
 use crate::engine::types::PeekBuf;
 use crate::net::decision_hub::DecisionToken;
+use http::HeaderMap;
+use std::time::Duration;
+use url::Url;
 
 /// A NetObserver allows to send NetEvents to emitters
 pub trait NetObserver: Send + Sync {
@@ -13,30 +13,15 @@ pub trait NetObserver: Send + Sync {
 #[derive(Debug)]
 pub enum NetEvent {
     /// Io error happened
-    Io {
-        message: String
-    },
+    Io { message: String },
     /// Warning happened
-    Warning {
-        url: Url,
-        message: String
-    },
+    Warning { url: Url, message: String },
     /// Resource is started to load
-    Started {
-        url: Url,
-    },
+    Started { url: Url },
     /// Resource is redirected to another URL
-    Redirected {
-        from: Url,
-        to: Url,
-        status: u16,
-    },
+    Redirected { from: Url, to: Url, status: u16 },
     /// Response headers are received
-    ResponseHeaders {
-        url: Url,
-        status: u16,
-        headers: HeaderMap,
-    },
+    ResponseHeaders { url: Url, status: u16, headers: HeaderMap },
     /// Progress updates, how many bytes already read
     Progress {
         // How many bytes received in this resource
@@ -53,15 +38,9 @@ pub enum NetEvent {
         url: Url,
     },
     /// Resource failed to fetch
-    Failed {
-        url: Url,
-        error: anyhow::Error,
-    },
+    Failed { url: Url, error: anyhow::Error },
     /// Resource fetching was cancelled
-    Cancelled {
-        url: Url,
-        reason: &'static str,
-    },
+    Cancelled { url: Url, reason: &'static str },
     /// Resource top has been loaded, and UA needs to decide what to do next
     DecisionRequired {
         /// The URL of the resource
@@ -77,6 +56,6 @@ pub enum NetEvent {
         /// The first few bytes of the response body
         peek_buf: PeekBuf,
         /// The decision token to correlate the decision with the response
-        token: DecisionToken
+        token: DecisionToken,
     },
 }

@@ -118,8 +118,8 @@ mod render_list;
 pub use render_list::*;
 
 mod viewport;
-pub use viewport::Viewport;
 pub use viewport::DevicePixelRatio;
+pub use viewport::Viewport;
 
 mod compositor;
 pub use compositor::DefaultCompositor;

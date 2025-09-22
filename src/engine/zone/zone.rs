@@ -4,9 +4,11 @@ use crate::engine::engine::EngineContext;
 use crate::engine::events::EngineEvent;
 use crate::engine::storage::{StorageService, Subscription};
 use crate::engine::tab::TabId;
+use crate::engine::types::{EventChannel, IoChannel};
 use crate::storage::types::PartitionPolicy;
 use crate::tab::services::resolve_tab_services;
 use crate::tab::{create_tab_and_spawn, TabDefaults, TabHandle, TabOverrides, TabSink};
+use crate::util::spawn_named;
 use crate::zone::ZoneConfig;
 use crate::EngineError;
 use rand::rngs::StdRng;
@@ -17,9 +19,7 @@ use std::fmt::{Debug, Display};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-use crate::engine::types::{EventChannel, IoChannel};
-use crate::net::types::RequestReferenceMap;
-use crate::util::spawn_named;
+use crate::net::req_ref_tracker::RequestReferenceMap;
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -214,7 +214,6 @@ impl Zone {
                 event_tx,
                 io_tx,
                 request_reference_map,
-                // fetch_inflight_map: Arc::new(FetchInflightMap::new()),
             }),
             id: zone_id,
             tabs: HashMap::new(),
@@ -312,17 +311,17 @@ impl Zone {
         let zone_id = self.id;
 
         let join_handle = spawn_named("storage-events-forwarder", async move {
-                while let Ok(ev) = rx.recv().await {
-                    let _ = tx.send(EngineEvent::StorageChanged {
-                        tab_id: ev.source_tab,
-                        zone: Some(zone_id),
-                        key: ev.key.unwrap_or_default(),
-                        value: ev.new_value,
-                        scope: ev.scope,
-                        origin: ev.origin.clone(),
-                    });
-                }
-            });
+            while let Ok(ev) = rx.recv().await {
+                let _ = tx.send(EngineEvent::StorageChanged {
+                    tab_id: ev.source_tab,
+                    zone: Some(zone_id),
+                    key: ev.key.unwrap_or_default(),
+                    value: ev.new_value,
+                    scope: ev.scope,
+                    origin: ev.origin.clone(),
+                });
+            }
+        });
 
         Ok(join_handle)
     }
@@ -347,13 +346,12 @@ impl Zone {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::zone::ZoneId;
     use std::collections::HashSet;
     use uuid::Uuid;
-    use crate::zone::ZoneId;
 
     #[test]
     fn zone_id_new_is_unique_enough() {
@@ -369,7 +367,11 @@ mod tests {
         let u = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap();
         let zid = ZoneId::from(u);
         let s = zid.to_string();
-        assert_eq!(s, u.to_string(), "Display for ZoneId should mirror inner Uuid");
+        assert_eq!(
+            s,
+            u.to_string(),
+            "Display for ZoneId should mirror inner Uuid"
+        );
         // sanity: Debug contains the UUID somewhere
         let dbg = format!("{zid:?}");
         assert!(

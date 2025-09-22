@@ -1,10 +1,10 @@
+use crate::engine::types::TabChannel;
 use crate::events::TabCommand;
 use crate::render::Viewport;
+use crate::tab::sink::TabSink;
 use crate::tab::TabId;
 use crate::EngineError;
 use std::sync::Arc;
-use crate::engine::types::TabChannel;
-use crate::tab::sink::TabSink;
 
 /// A handle to a running [`Tab`](crate::tab).
 ///

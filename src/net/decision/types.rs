@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use mime::Mime;
 use crate::net::decision::sniff::ResponseClass;
+use mime::Mime;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestDestination {

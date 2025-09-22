@@ -1,14 +1,13 @@
+use crate::events::{EngineEvent, IoCommand, TabCommand};
+use bytes::Bytes;
 use std::fmt::Display;
 use std::ops::Deref;
-use bytes::Bytes;
 use uuid::Uuid;
-use crate::events::{EngineEvent, IoCommand, TabCommand};
 
 // Defined channels for communication
 pub type EventChannel = tokio::sync::broadcast::Sender<EngineEvent>;
 pub type IoChannel = tokio::sync::mpsc::UnboundedSender<IoCommand>;
 pub type TabChannel = tokio::sync::mpsc::Sender<TabCommand>;
-
 
 /// A small buffer that contains the first bytes of a stream.
 /// This is used to "peek" into the stream, to determine the content type
@@ -50,11 +49,15 @@ impl PeekBuf {
 }
 
 impl AsRef<[u8]> for PeekBuf {
-    fn as_ref(&self) -> &[u8] { self.as_slice() }
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
 }
 impl Deref for PeekBuf {
     type Target = [u8];
-    fn deref(&self) -> &Self::Target { self.as_slice() }
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
 }
 
 /// Used to send back which action needs to be taken for a navigation request.
@@ -80,7 +83,6 @@ pub enum Action {
     /// Stream will be shown as source (for HTML documents)
     ViewSource,
 }
-
 
 /// Navigation ID is the same for each complete load, including iframes, resources redirect etc
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

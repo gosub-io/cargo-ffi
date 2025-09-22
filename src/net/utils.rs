@@ -1,13 +1,13 @@
+use crate::engine::types::PeekBuf;
+use crate::net::types::{FetchResult, NetError};
+use crate::net::SharedBody;
+use bytes::Bytes;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::pin::Pin;
 use std::sync::Arc;
-use bytes::Bytes;
 use tokio::io::{AsyncReadExt, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
 use url::Url;
-use crate::engine::types::PeekBuf;
-use crate::net::SharedBody;
-use crate::net::types::{FetchResult, NetError};
 
 // Simple waiter for coalescing responses. If a fetcher detects we are requesting the same resources
 // that is already queued, we add them to the waiter for that request, so the request will fetch the
@@ -20,8 +20,13 @@ pub struct Waiter {
 impl Waiter {
     pub fn new() -> Self {
         Self {
-            listeners: Mutex::new(Vec::new())
+            listeners: Mutex::new(Vec::new()),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_arc() -> Arc<Waiter> {
+        Arc::new(Waiter::new())
     }
 
     /// Register a consumer for this waiter. We need to know if the consumer is streaming or not.
@@ -35,7 +40,10 @@ impl Waiter {
 
         match result {
             FetchResult::Buffered { meta, body } => {
-                let res = FetchResult::Buffered { meta: meta.clone(), body: body.clone() };
+                let res = FetchResult::Buffered {
+                    meta: meta.clone(),
+                    body: body.clone(),
+                };
                 for (_, tx) in ls.drain(..) {
                     let _ = tx.send(res.clone());
                 }
@@ -53,7 +61,11 @@ impl Waiter {
 
                 // Send the stream to all the streaming listeners
                 for tx in streaming_ls {
-                    let res = FetchResult::Stream { meta: meta.clone(), peek_buf: peek_buf.clone(), shared: shared.clone() };
+                    let res = FetchResult::Stream {
+                        meta: meta.clone(),
+                        peek_buf: peek_buf.clone(),
+                        shared: shared.clone(),
+                    };
                     let _ = tx.send(res);
                 }
 
@@ -61,7 +73,10 @@ impl Waiter {
                 if !buffered_ls.is_empty() {
                     match stream_to_bytes(peek_buf, shared).await {
                         Ok(b) => {
-                            let res = FetchResult::Buffered { meta: meta.clone(), body: b };
+                            let res = FetchResult::Buffered {
+                                meta: meta.clone(),
+                                body: b,
+                            };
                             for tx in buffered_ls {
                                 let _ = tx.send(res.clone());
                             }
@@ -80,16 +95,15 @@ impl Waiter {
                 for (_, tx) in ls.drain(..) {
                     let _ = tx.send(res.clone());
                 }
-            }
-            // FetchResult::DownloadStarted { .. } => {}
-            // FetchResult::OpenExternal { .. } => {}
-            // FetchResult::Cancelled => {}
-            // FetchResult::Document { meta, doc } => {
-            //     let res = FetchResult::Document { meta: meta.clone(), doc: doc.clone() };
-            //     for (_, tx) in ls.drain(..) {
-            //         let _ = tx.send(res.clone());
-            //     }
-            // }
+            } // FetchResult::DownloadStarted { .. } => {}
+              // FetchResult::OpenExternal { .. } => {}
+              // FetchResult::Cancelled => {}
+              // FetchResult::Document { meta, doc } => {
+              //     let res = FetchResult::Document { meta: meta.clone(), doc: doc.clone() };
+              //     for (_, tx) in ls.drain(..) {
+              //         let _ = tx.send(res.clone());
+              //     }
+              // }
         }
     }
 }
@@ -132,7 +146,6 @@ pub fn short_url(u: &Url, max: usize) -> String {
     }
 }
 
-
 // Small async reader for BodyStream::from_bytes
 pub struct BytesAsyncReader {
     pub data: Bytes,
@@ -157,14 +170,13 @@ impl tokio::io::AsyncRead for BytesAsyncReader {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::net::shared_body::SharedBody;
+    use crate::net::types::FetchResultMeta;
     use tokio::io::AsyncReadExt;
     use tokio::time::{sleep, Duration};
-    use crate::net::types::FetchResultMeta;
 
     fn dummy_meta() -> FetchResultMeta {
         FetchResultMeta {
@@ -217,7 +229,7 @@ mod tests {
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();
         waiter.register(tx1, false).await; // buffered
-        waiter.register(tx2, true).await;  // streaming-flag shouldn't matter for Buffered result
+        waiter.register(tx2, true).await; // streaming-flag shouldn't matter for Buffered result
 
         let body = Bytes::from_static(b"BODY");
         let meta = dummy_meta();
@@ -253,7 +265,7 @@ mod tests {
 
         let waiter = Waiter::new_arc();
         waiter.register(tx_stream, true).await; // wants streaming
-        waiter.register(tx_buf, false).await;   // wants buffered
+        waiter.register(tx_buf, false).await; // wants buffered
 
         // Prepare shared body that will receive tail bytes shortly
         let shared = Arc::new(SharedBody::new(8));
@@ -283,7 +295,9 @@ mod tests {
         // Streaming listener should get Stream
         let r_stream = rx_stream.await.unwrap();
         match r_stream {
-            FetchResult::Stream { meta: m, peek_buf: p, .. } => {
+            FetchResult::Stream {
+                meta: m, peek_buf: p, ..
+            } => {
                 assert_eq!(m.status, 200);
                 assert_eq!(&p[..], b"PEEK-");
             }
