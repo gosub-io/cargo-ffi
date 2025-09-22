@@ -142,7 +142,7 @@ pub struct FetchKeyData {
 
 impl Hash for FetchKeyData {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // Headermap cannot be hashed directly, so we generate the key and hash that
+        // Header map cannot be hashed directly, so we generate the key and hash that
         let key = self.generate();
         key.hash(state);
     }
@@ -224,7 +224,7 @@ type TaskId = u64;
 pub enum RequestReference {
     /// Main doc for a tab
     Navigation(NavigationId),
-    /// Subresources of a specific doc
+    /// Sub resources of a specific doc
     Document(DocumentId),
     /// Background prefetches
     Prefetch(PrefetchId),
@@ -272,12 +272,14 @@ impl RequestReferenceMap {
 
 #[derive(Clone)]
 pub struct FetchHandle {
+    /// Unique ID of this request (for logging and tracking)
     pub req_id: RequestId,
+    /// Key data identifying the resource to fetch
     pub key: FetchKeyData,
     /// Cancellation token
     pub cancel: CancellationToken,
-    // // Reply channel
-    // pub reply_channel: tokio::sync::oneshot::Sender<FetchResult>,
+    // /// Reply channel
+    // pub reply: Arc<tokio::sync::oneshot::Sender<FetchResult>>,
 }
 
 impl Debug for FetchHandle {

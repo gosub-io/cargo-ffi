@@ -17,20 +17,26 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::net::{route_response_for, FetchInflightMap, RequestDestination, RoutedOutcome};
-use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, Priority, RequestReference, ResourceKind};
+use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, NetError, Priority, RequestReference, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{TabActivityMode, TabRuntime, TabState};
 use tokio::time::Duration;
 use crate::engine::errors::NavigationError;
 use crate::engine::pipeline::Hooks;
 use crate::engine::types::{NavigationId, RequestId};
-use crate::tab::nav::{NavInflightMap};
 use crate::util::spawn_named;
 
 
 #[derive(Debug)]
 pub enum NavigationResult {
     Err{ nav_id: NavigationId, error: NavigationError },
+}
+
+// Current active navigation
+struct ActiveNav {
+    pub nav_id: NavigationId,
+    pub cancel: CancellationToken,
+    pub url: Url,
 }
 
 pub struct TabWorker {
@@ -96,8 +102,11 @@ pub struct TabWorker {
     /// Keeps track of the tab worker runtime data
     pub(crate) runtime: TabRuntime,
 
-    nav_inflight_map: NavInflightMap,
+    // nav_inflight_map: NavInflightMap,
     fetch_inflight_map: Arc<FetchInflightMap>,
+
+    /// Current active navigation (if any)
+    active_nav: Option<ActiveNav>,
 }
 
 
@@ -137,6 +146,7 @@ impl TabWorker {
             runtime: TabRuntime::default(),
             nav_inflight_map: NavInflightMap::default(),
             fetch_inflight_map: zone_context.fetch_inflight_map.clone(),
+            active_nav: None,
         }
     }
 
@@ -354,11 +364,18 @@ impl TabWorker {
     fn navigate_to(&mut self, url: impl Into<String>, _ignore_cache: bool) {
         self.cancel_current_nav();
 
+        let url = match self.parse_url(url.into()) {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+
         let nav_id = NavigationId::new();
         let cancel = CancellationToken::new();
-        self.active_nav = Some(ActiveNav { nav_id, cancel: cancel.clone() });
-
-        let url = parse_url(url.into());
+        self.active_nav = Some(ActiveNav {
+            nav_id,
+            cancel: cancel.clone(),
+            url,
+        });
 
         self.bind_storage_for(&url);
 
@@ -407,19 +424,6 @@ impl TabWorker {
             load.cancel.cancel();
         }
 
-        // Convert the URL string into an actual URL
-        let unvalidated_url = url.into();
-        let real_url = match Url::parse(&unvalidated_url) {
-            Ok(u) => u,
-            Err(e) => {
-                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
-                self.send_event(EngineEvent::Navigation {
-                    tab_id: self.tab_id,
-                    event: NavigationEvent::FailedUrl { nav_id: None, url: unvalidated_url , error: Arc::new(e.into()) },
-                });
-                return;
-            }
-        };
 
         // Prepare storage for the URL
         if let Err(e) = self.prepare_storage_for(&real_url) {
@@ -713,24 +717,6 @@ impl TabWorker {
         Ok(())
     }
 
-    fn prepare_storage_for(&mut self, url: &Url) -> anyhow::Result<()> {
-        let pk = compute_partition_key(url, self.services.partition_policy);
-        let origin = url.origin().clone();
-
-        let local = self.services
-            .storage
-            .local_for(self.zone_id, &pk, &origin)
-            .context("cannot get local storage for tab")?;
-
-        let session = self.services
-            .storage
-            .session_for(self.zone_id, self.tab_id, &pk, &origin)
-            .context("cannot get session storage for tab")?;
-
-        self.bind_storage(StorageHandles { local, session });
-        Ok(())
-    }
-
     #[allow(unused)]
     fn begin_render(&mut self, backend: &dyn RenderBackend) -> anyhow::Result<()> {
         if self.committed_viewport != self.desired_viewport {
@@ -754,6 +740,73 @@ impl TabWorker {
             self.state = TabState::Idle;
         }
     }
+
+    /// Cancel the current navigation (if any)
+    fn cancel_current_nav(&mut self) {
+        if let Some(active) = self.active_nav.take() {
+            log::warn!("**** Cancelling active navigation for tab {:?} nav {:?}", self.tab_id, active.nav_id);
+            active.cancel.cancel();
+        }
+    }
+
+    /// Convert the URL string into an actual URL
+    fn parse_url(&self, url: impl Into<String>) -> anyhow::Result<Url> {
+        let unvalidated_url = url.into();
+
+        match Url::parse(&unvalidated_url) {
+            Ok(u) => Ok(u),
+            Err(e) => {
+                log::error!("Tab[{:?}]: Cannot parse URL: {}", self.tab_id, e);
+
+                self.send_event(EngineEvent::Navigation {
+                    tab_id: self.tab_id,
+                    event: NavigationEvent::FailedUrl { nav_id: None, url: unvalidated_url.to_string() , error: Arc::new(e.into()) },
+                });
+
+                Err(NetError::Other(Arc::new(anyhow!("Cannot parse URL: {}", e))).into())
+            }
+        }
+    }
+
+    // Prepare storage for the URL
+    fn bind_storage_for(&mut self, url: Url) -> anyhow::Result<()>{
+        match self.prepare_storage_for(&url) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                log::error!("Tab[{:?}]: Cannot prepare storage for URL {}: {}", self.tab_id, url, e);
+
+                self.send_event(EngineEvent::Navigation {
+                    tab_id: self.tab_id,
+                    event: NavigationEvent::Failed {
+                        nav_id: None,
+                        url: url.clone(),
+                        error: Arc::new(e),
+                    },
+                });
+
+                Err(NetError::Other(Arc::new(anyhow!("Cannot bind storage for URL {}: {}", self.tab_id, url))).into())
+            }
+        }
+    }
+
+    fn prepare_storage_for(&mut self, url: &Url) -> anyhow::Result<()> {
+        let pk = compute_partition_key(url, self.services.partition_policy);
+        let origin = url.origin().clone();
+
+        let local = self.services
+            .storage
+            .local_for(self.zone_id, &pk, &origin)
+            .context("cannot get local storage for tab")?;
+
+        let session = self.services
+            .storage
+            .session_for(self.zone_id, self.tab_id, &pk, &origin)
+            .context("cannot get session storage for tab")?;
+
+        self.bind_storage(StorageHandles { local, session });
+        Ok(())
+    }
+
 }
 
 ///

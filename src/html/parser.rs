@@ -1,12 +1,12 @@
 use std::io;
 
+use crate::net::types::{Priority, ResourceKind};
+use crate::net::RequestDestination;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::net::RequestDestination;
-use crate::net::types::{Priority, ResourceKind};
 
 /// A hint to the engine/IO layer that a subresource should be fetched.
 #[derive(Debug, Clone)]
@@ -14,7 +14,7 @@ pub struct ResourceHint {
     pub url: Url,
     pub dest: RequestDestination,
     pub kind: ResourceKind,
-    pub rel: Option<String>, // e.g. "stylesheet"
+    pub rel: Option<String>,     // e.g. "stylesheet"
     pub from_attr: &'static str, // e.g. "href" or "src
     pub referrer: Option<Url>,
     pub cross_origin: bool,
@@ -40,7 +40,8 @@ impl DummyDocument {
             title,
             raw_html: html,
         }
-    }}
+    }
+}
 
 /// Error type for this dummy parser.
 #[derive(thiserror::Error, Debug)]
@@ -64,7 +65,9 @@ pub struct DummyHtml5Config {
 
 impl Default for DummyHtml5Config {
     fn default() -> Self {
-        Self { max_bytes: 1 * 1024 * 1024 } // 1 MiB
+        Self {
+            max_bytes: 1 * 1024 * 1024,
+        } // 1 MiB
     }
 }
 
@@ -97,10 +100,7 @@ where
         if n == 0 {
             break;
         }
-        let remaining = cfg
-            .max_bytes
-            .saturating_sub(buf.len())
-            .min(n);
+        let remaining = cfg.max_bytes.saturating_sub(buf.len()).min(n);
         if remaining > 0 {
             buf.extend_from_slice(&tmp[..remaining]);
         }
@@ -140,8 +140,8 @@ where
 // ======== Forgiving resource discovery (regex-based) ========
 fn unquote(s: &str) -> &str {
     let b = s.as_bytes();
-    if b.len() >= 2 && ((b[0] == b'"' && b[b.len()-1] == b'"') || (b[0] == b'\'' && b[b.len()-1] == b'\'')) {
-        &s[1..s.len()-1]
+    if b.len() >= 2 && ((b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\'')) {
+        &s[1..s.len() - 1]
     } else {
         s
     }
@@ -154,22 +154,14 @@ static RE_LINK_STYLESHEET: Lazy<Regex> = Lazy::new(|| {
     ).unwrap()
 });
 
+static RE_SCRIPT_SRC: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)<\s*script\b[^>]*\bsrc\s*=\s*(?P<src>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#).unwrap());
 
-static RE_SCRIPT_SRC: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"(?is)<\s*script\b[^>]*\bsrc\s*=\s*(?P<src>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#
-    ).unwrap()
-});
+static RE_IMG_SRC: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)<\s*img\b[^>]*\bsrc\s*=\s*(?P<src>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#).unwrap());
 
-static RE_IMG_SRC: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"(?is)<\s*img\b[^>]*\bsrc\s*=\s*(?P<src>"[^"]*"|'[^']*'|[^\s>]+)[^>]*>"#
-    ).unwrap()
-});
-
-static RE_TITLE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?is)<\s*title\s*>\s*(?P<title>.*?)\s*<\s*/\s*title\s*>"#).unwrap()
-});
+static RE_TITLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?is)<\s*title\s*>\s*(?P<title>.*?)\s*<\s*/\s*title\s*>"#).unwrap());
 
 fn discover_title(html: &str) -> Option<String> {
     RE_TITLE
@@ -288,8 +280,8 @@ mod tests {
             DummyHtml5Config::default(),
             |h| hints.push(h),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         assert_eq!(doc.title.as_deref(), Some("Hello World"));
         assert!(doc.raw_html.contains("Hello World"));
@@ -297,9 +289,16 @@ mod tests {
         // Ensure we discovered 3 resources with resolved URLs
         assert_eq!(hints.len(), 3);
         dbg!(&hints);
-        assert!(hints.iter().any(|h| h.kind == ResourceKind::Stylesheet && h.url.as_str() == "https://example.com/style.css"));
-        assert!(hints.iter().any(|h| h.kind == ResourceKind::Script     && h.url.as_str() == "https://example.com/path/app.js"));
-        assert!(hints.iter().any(|h| h.kind == ResourceKind::Image      && h.url.as_str() == "https://example.com/path/images/logo.png"));
+        assert!(hints
+            .iter()
+            .any(|h| h.kind == ResourceKind::Stylesheet && h.url.as_str() == "https://example.com/style.css"));
+        assert!(hints
+            .iter()
+            .any(|h| h.kind == ResourceKind::Script { blocking: true }
+                && h.url.as_str() == "https://example.com/path/app.js"));
+        assert!(hints
+            .iter()
+            .any(|h| h.kind == ResourceKind::Image && h.url.as_str() == "https://example.com/path/images/logo.png"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -314,14 +313,7 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel(); // cancel immediately
 
-        let res = parse_main_document_stream(
-            base,
-            reader,
-            cancel,
-            DummyHtml5Config::default(),
-            |_h| {},
-        )
-            .await;
+        let res = parse_main_document_stream(base, reader, cancel, DummyHtml5Config::default(), |_h| {}).await;
 
         match res {
             Err(DocumentError::Cancelled) => {}
@@ -342,8 +334,8 @@ mod tests {
             cfg.clone(),
             |_h| {},
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         assert_eq!(doc.raw_html.len(), cfg.max_bytes);
     }
@@ -351,7 +343,10 @@ mod tests {
     #[test]
     fn discover_title_basic() {
         assert_eq!(discover_title("<title>x</title>").as_deref(), Some("x"));
-        assert_eq!(discover_title("<TITLE>  spaced \n</TITLE>").as_deref(), Some("spaced"));
+        assert_eq!(
+            discover_title("<TITLE>  spaced \n</TITLE>").as_deref(),
+            Some("spaced")
+        );
         assert_eq!(discover_title("<head></head>").is_none(), true);
     }
 }

@@ -25,6 +25,7 @@ pub use shared_body::SharedBody;
 
 pub use io_runtime::IoHandle;
 pub use io_runtime::spawn_io_thread;
+pub use io_runtime::submit_to_io;
 
 pub use fetcher::FetcherConfig;
 

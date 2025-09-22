@@ -2,7 +2,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use anyhow::anyhow;
 use http::Method;
-use tokio::sync::oneshot;
 use crate::engine::pipeline::css::DummyStylesheet;
 use crate::engine::pipeline::font::DummyFont;
 use crate::engine::pipeline::js::DummyJsDocument;
@@ -11,8 +10,9 @@ use crate::engine::types::{IoChannel, PeekBuf, RequestId};
 use crate::engine::UaPolicy;
 use crate::html::{DummyDocument, ResourceHint};
 use crate::net::decision::types::BlockReason;
-use crate::net::{decide_handling, stream_to_bytes, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
+use crate::net::{decide_handling, stream_to_bytes, submit_to_io, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
 use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, ResourceKind};
+use crate::zone::ZoneId;
 
 pub enum RoutedOutcome {
     MainDocument(DummyDocument),
@@ -199,19 +199,22 @@ pub async fn route_response_for(
     }
 }
 
+
+
 /// Fetch a subresource and route it based on its destination and the UA policy.
-async fn fetch_and_route_subresource(
-    request: FetchRequest,
+pub async fn fetch_and_route_subresource(
+    zone_id: ZoneId,
+    parent_request: &FetchRequest,
     hint: ResourceHint,
     io_tx: IoChannel,
     policy: &UaPolicy,
     hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
-    let (tx, rx) = oneshot::channel();
+    // let (tx, rx) = oneshot::channel();
 
-    let req = FetchRequest {
+    let sub_req = FetchRequest {
         req_id: RequestId::new(),
-        reference: request.reference,
+        reference: parent_request.reference,
         key_data: FetchKeyData {
             url: hint.url,
             method: Method::GET,
@@ -224,12 +227,12 @@ async fn fetch_and_route_subresource(
         auto_decode: true,
         max_bytes: None,
     };
-    let req_handle = submit_to_io(req, tx).await;
 
-    let fetch_result = match rx.await.map_err(|_| anyhow!("Failed to receive fetch result")) {
-        Ok(fr) => fr,
-        Err(e) => return Err(anyhow!("Fetch failed: {}", e)),
-    };
+    let (_handle, rx) = submit_to_io(zone_id, sub_req, io_tx).await
+        .map_err(|e| anyhow!("Failed to submit fetch to IO thread: {}", e))?;
 
-    route_response_for(hint.dest, request, fetch_result, policy, hooks).await
+    let fetch_result: FetchResult = rx.await
+        .map_err(|e| anyhow!("Failed to receive fetch result: {}", e))?;
+
+    route_response_for(hint.dest, parent_request.clone(), fetch_result, policy, hooks).await
 }

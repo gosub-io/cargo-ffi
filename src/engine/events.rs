@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 use url::Url;
 use crate::engine::types::{NavigationId, RequestId, Action};
 use crate::net::DecisionToken;
-use crate::net::types::{FetchHandle, FetchRequest, FetchResultMeta, Initiator, Priority, RequestReference, ResourceKind};
+use crate::net::types::{FetchHandle, FetchRequest, FetchResult, FetchResultMeta, Initiator, Priority, RequestReference, ResourceKind};
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -89,9 +89,23 @@ impl Display for Modifiers {
 #[derive(Debug)]
 pub enum IoCommand {
     /// Perform a fetch of the given request
-    Fetch { req: FetchRequest, tx: oneshot::Sender<anyhow::Result<FetchHandle>> },
+    Fetch {
+        zone_id: ZoneId,
+        req: FetchRequest,
+        handle: FetchHandle,
+        reply_tx: oneshot::Sender<FetchResult>
+    },
     /// Return a decision on a pending request
-    Decision { token: DecisionToken, action: Action },
+    Decision {
+        zone_id: ZoneId,
+        token: DecisionToken,
+        action: Action
+    },
+    /// Ask IO to shut down a specific zone; replies when fully stopped.
+    ShutdownZone {
+        zone_id: ZoneId,
+        reply_tx: oneshot::Sender<()>,
+    },
 }
 
 /// Commands that can be sent to a specific tab

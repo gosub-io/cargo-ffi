@@ -8,7 +8,7 @@ use crate::engine::types::{IoChannel, PeekBuf, RequestId};
 use crate::events::IoCommand;
 use crate::html::{parse_main_document_stream, DummyDocument, ResourceHint};
 use crate::net::SharedBody;
-use crate::net::types::{FetchRequest, FetchResultMeta, Initiator};
+use crate::net::types::{FetchHandle, FetchRequest, FetchResultMeta, Initiator};
 
 #[async_trait]
 pub trait HtmlPipeline {
@@ -46,7 +46,7 @@ impl HtmlPipeline for HtmlPipelineImpl {
         request: FetchRequest,
         meta: FetchResultMeta,
         peek_buf: PeekBuf,
-        shared: Arc<SharedBody>
+        shared: Arc<SharedBody>,
     ) -> anyhow::Result<DummyDocument> {
 
         let cfg = crate::html::DummyHtml5Config::default();
@@ -65,11 +65,13 @@ impl HtmlPipeline for HtmlPipelineImpl {
                 streaming: true,
                 auto_decode: false,
                 max_bytes: None,
-                // cancel: request.cancel.clone(), // Copy the cancel token from the request to the new request
-                // reply: None,    // How do we handle replies for discovered resources?
             };
 
-            self.io_tx.send(IoCommand::Fetch(request)).unwrap();
+            self.io_tx.send(IoCommand::Fetch {
+                zone_id: fetch_handle.zone_id,
+                req: request,
+                handle: fetch_handle.handle,
+                reply_tx: fetch_handle.reply_tx }).unwrap();
         };
 
         let res = parse_main_document_stream(

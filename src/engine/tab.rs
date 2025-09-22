@@ -5,7 +5,6 @@ mod tab;
 mod worker;
 mod sink;
 mod state;
-mod nav;
 
 pub use handle::TabHandle;
 pub use tab::*;

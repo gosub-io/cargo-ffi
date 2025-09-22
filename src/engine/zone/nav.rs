@@ -46,10 +46,43 @@ impl NavInflightMap {
         wants_stream: bool,
         fetch_inflight: &FetchInflightMap,
     ) -> (tokio::sync::oneshot::Receiver<FetchResult>, FetchHandle) {
-        // Create or start the fetch
+
+        if let Some(existing) = self.map.get(&nav_key) {
+            // If there's already an in-flight navigation for this key, join it
+            let (handle, rx, _new) = fetch_inflight.join_or_start(&req, wants_stream);
+            return (rx, handle);
+        }
+
+        // Create a new fetch
         let (handle, rx, _new) = fetch_inflight.join_or_start(&req, wants_stream);
 
         // Insert or update the entry
+        self.map.insert(
+            nav_key,
+            NavInflightEntry {
+                key: nav_key,
+                fetch: handle.clone(),
+            },
+        );
+        (rx, handle)
+    }
+
+    /// Restarts a navigation by cancelling any existing one and starting a new fetch.
+    pub fn restart_navigation(
+        &mut self,
+        nav_key: NavKey,
+        req: FetchRequest,
+        wants_stream: bool,
+        fetch_inflight: &FetchInflightMap,
+    ) -> (tokio::sync::oneshot::Receiver<FetchResult>, FetchHandle) {
+        // Cancel existing navigation if it exists
+        if let Some(old) = self.map.remove(&nav_key) {
+            old.fetch.cancel.cancel();
+        }
+        // Start a new navigation
+        let (handle, rx, _new) = fetch_inflight.join_or_start(&req, wants_stream);
+
+        // Insert the new entry
         self.map.insert(
             nav_key,
             NavInflightEntry {
@@ -66,6 +99,10 @@ impl NavInflightMap {
             // child cancel: drops this subscriber; fetch may continue
             e.fetch.cancel.cancel();
         }
+        self.map.remove(nav_key);
+    }
+
+    pub fn complete_navigation(&mut self, nav_key: &NavKey) {
         self.map.remove(nav_key);
     }
 }

@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicU64;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use bytes::Bytes;
@@ -77,7 +78,7 @@ struct State {
     /// Active subscribers
     subs: HashMap<u64, mpsc::Sender<Result<Bytes, NetError>>>,
     /// Monotic id for subscribers
-    next_id: u64,
+    next_id: AtomicU64,
     /// Limit on how many subscribers per queue are allowed
     max_queue: usize,
     /// If true, any additional push() is ignored. The stream is closed.
@@ -95,7 +96,7 @@ impl SharedBody {
         Self {
             inner: Arc::new(Mutex::new(State {
                 subs: HashMap::new(),
-                next_id: 1,
+                next_id: AtomicU64::new(1),
                 max_queue,
                 closed: false,
             }))
@@ -194,8 +195,7 @@ impl SharedBody {
             }
 
             let (tx, rx) = mpsc::channel(max_queue);
-            let id = st.next_id;
-            st.next_id += 1;
+            let id = st.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             st.subs.insert(id, tx);
             (Some(rx), Some(id))
         };
