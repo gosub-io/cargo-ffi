@@ -19,6 +19,7 @@ pub struct DecisionToken(u64);
 /// Rendezvous hub mapping `DecisionToken` to `oneshot::Sender<Action>`.
 pub struct DecisionHub {
     waiters: dashmap::DashMap<DecisionToken, oneshot::Sender<Action>>,
+    #[allow(unused)]
     counter: AtomicU64,
 }
 
@@ -39,6 +40,7 @@ impl DecisionHub {
     /// The returned `DecisionToken` should be propagated to the UA so it can call
     /// [`fulfill`](Self::fulfill) with the final `Action`.
     #[inline]
+    #[allow(unused)]
     pub fn register(&self) -> (DecisionToken, oneshot::Receiver<Action>) {
         let token = DecisionToken(
             self.counter

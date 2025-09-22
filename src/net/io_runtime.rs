@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 
 /// Handle to the I/O runtime thread and its submission channel.
 pub struct IoHandle {
@@ -34,16 +35,27 @@ impl IoHandle {
         Ok(())
     }
 
+
+    #[instrument(
+        name = "io.shutdown",
+        level = "debug",
+        skip(self),
+    )]
     pub async fn shutdown(self) {
+        log::trace!("signal: global shutdown -> I/O thread");
         // Signal global shutdown to the IO thread
         let _ = self.shutdown_tx.send(true);
 
+        log::trace!("signal: closing submit channel");
         // Drop the submit channel so the IO loop sees EOF on rx_submit
         drop(self.tx_submit.clone());
 
         // Wait for the IO thread to exit
+        log::trace!("await: I/O thread join");
         match self.join_handle.await {
-            Ok(()) => {}
+            Ok(()) => {
+                log::debug!("I/O thread has exited cleanly");
+            }
             Err(e) if e.is_cancelled() => {
                 log::warn!("I/O driver task was cancelled during shutdown");
             }
@@ -120,12 +132,23 @@ impl IoRouter {
         f
     }
 
+
+    #[instrument(
+        name = "zone.shutdown",
+        level = "debug",
+        skip(self),
+        fields(zone_id = %zone_id)
+    )]
     pub async fn shutdown_zone(&self, zone_id: ZoneId) -> bool {
+        log::trace!("removing zone fetcher");
         if let Some((_, entry)) = self.zones.remove(&zone_id) {
             // Shutdown the fetcher
+            log::trace!("signal: shutdown to zone fetcher");
             let _ = entry.shutdown_tx.send(true);
             // Wait for it to finish
+            log::trace!("await: zone fetcher join");
             let _ = entry.join.await;
+
             true
         } else {
             false
@@ -133,16 +156,23 @@ impl IoRouter {
     }
 
     /// Shutdown the IO thread
+    #[instrument(
+        name = "io.shutdown",
+        level = "debug",
+        skip(self),
+    )]
     pub async fn shutdown_all(self) {
         let mut tasks = Vec::new();
-        for kv in self.zones.iter() {
-            let zone_id = *kv.key();
+
+        let keys: Vec<_> = self.zones.iter().map(|kv| *kv.key()).collect();
+        for zone_id in keys {
             if let Some((_, entry)) = self.zones.remove(&zone_id) {
                 let _ = entry.shutdown_tx.send(true);
                 tasks.push(entry.join);
             }
         }
 
+        log::trace!("await: all zone fetcher joins");
         for j in tasks {
             let _ = j.await;
         }
@@ -213,6 +243,7 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
                     }
                 }
                 _ = shutdown_rx.changed() => {
+                    log::trace!("I/O thread received global shutdown signal");
                     if *shutdown_rx.borrow() {
                         break;
                     }
@@ -221,6 +252,7 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
         }
 
         // global shutdown: stop all zones cleanly
+        log::trace!("I/O thread shutting down all zone fetchers");
         router.shutdown_all().await;
     });
 

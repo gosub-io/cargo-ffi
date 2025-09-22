@@ -317,7 +317,6 @@ impl TabWorker {
             TabCommand::CancelNavigation => {
                 if let Some(load) = self.load.take() {
                     log::warn!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
-                    println!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
                     load.cancel.cancel();
                 }
                 ControlFlow::Continue
@@ -350,10 +349,10 @@ impl TabWorker {
 
     /// Send an engine event upwards to the UA
     fn send_event(&self, evt: EngineEvent) {
-        match self.zone_context.event_tx.send(evt) {
+        match self.zone_context.event_tx.send(evt.clone()) {
             Ok(_) => {}
             Err(e) => {
-                log::error!("Error sending event: {}", e);
+                log::error!("Error sending event: {}: {:?}", e, evt);
             }
         }
     }
@@ -389,10 +388,8 @@ impl TabWorker {
         });
 
         {
-            println!("Tab[{:?}] Starting navigation to {} : {}", self.tab_id, nav_id, url);
             let mut guard = self.zone_context.request_reference_map.write().unwrap();
             guard.insert(RequestReference::Navigation(nav_id), self.tab_id);
-            println!("Writing in RRM: {} {}", nav_id, self.tab_id);
         }
 
         self.sink.set_nav(nav_id);
@@ -469,7 +466,6 @@ impl TabWorker {
 
             let fetch_result: FetchResult = tokio::select! {
                 _ = parent_cancel_clone.cancelled() => {
-                    println!("Tab[{:?}] Navigation cancelled before fetch complete", tab_id);
                     handle.cancel.cancel();
                     let _ = tx_done.send(NavigationResult::Err {
                         nav_id,
@@ -516,25 +512,7 @@ impl TabWorker {
                         final_url: doc.final_url.clone(),
                         title: doc.title.clone(),
                     });
-
-                    // event_tx.send(EngineEvent::Navigation {
-                    //     tab_id,
-                    //     event: NavigationEvent::Finished {
-                    //         nav_id,
-                    //         url: doc.final_url.clone(),
-                    //     },
-                    // }).ok();
-                    //
-                    // println!("Tab[{:?}] RoutedOutcome::MainDocument", tab_id);
-                    // println!("{}", doc.final_url);
-                    // println!("{}", doc.title.unwrap());
-                    // println!("{}", doc.raw_html);
-
-                    // return NavigationResult::Ok {
-                    //     nav_id,
-                    //     final_url: doc.final_url.clone(),
-                    //     title: doc.title.clone(),
-                    // };
+                    return;
                 }
                 Ok(RoutedOutcome::ViewerRendered(_doc)) => {
                     println!("Tab[{:?}] RoutedOutcome::ViewerRendered", tab_id);
@@ -594,17 +572,15 @@ impl TabWorker {
                     });
                 }
                 Ok(RoutedOutcome::Cancelled) => {
-                    println!("Tab[{:?}] RoutedOutcome::Cancelled", tab_id);
                     let _ = tx_done.send(NavigationResult::Err {
                         nav_id,
                         error: NavigationError::Cancelled("Navigation cancelled".into()),
                     });
                     return;
                 }
-                Err(_) => {
-                    // let err = format!("Routing error: {}", e.to_string());
-                    // println!("Tab[{:?}] {}", tab_id, err.clone());
-                    // let _ = tx_done.send(NavigationResult::Err{nav_id, error: NavigationError::NetworkError(err) });
+                Err(e) => {
+                    let err = format!("Routing error: {}", e.to_string());
+                    let _ = tx_done.send(NavigationResult::Err{nav_id, error: NavigationError::NetworkError(err) });
                     return;
                 }
             }
@@ -618,8 +594,6 @@ impl TabWorker {
 
     /// Do a draw tick. This will be called based on the FPS that is requested
     async fn tick_draw(&mut self) -> anyhow::Result<()> {
-        //        println!("tick_draw()");
-
         self.sink.inc_frame();
 
         let now = std::time::Instant::now();
@@ -630,7 +604,6 @@ impl TabWorker {
         if elapsed.as_secs_f32() > 0.0 {
             let fps = 1.0 / elapsed.as_secs_f32();
             self.sink.set_fps(fps);
-            //            println!("TickDraw: FPS: {:.2}", fps);
         };
 
         Ok(())
@@ -736,10 +709,6 @@ impl TabWorker {
                 "**** Cancelling active navigation for tab {:?} nav {:?}",
                 self.tab_id,
                 active.nav_id
-            );
-            println!(
-                "**** Cancelling active navigation for tab {:?} nav {:?}",
-                self.tab_id, active.nav_id
             );
             active.cancel.cancel();
         }

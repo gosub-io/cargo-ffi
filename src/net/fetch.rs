@@ -7,7 +7,6 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use http::header::CONTENT_LENGTH;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::timeout;
 use tokio_util::io::StreamReader;
@@ -56,22 +55,13 @@ pub async fn fetch_response_top(
     )
     .await?;
 
-    let hdrs = resp.headers().clone();
-    for (h, v) in hdrs.iter() {
-        println!("{}: {}", h.as_str(), v.to_str().unwrap());
-    }
-    let raw_len = hdrs
-        .get(CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok());
-
     // Response is received, setup our meta structure
     let mut meta = FetchResultMeta {
         final_url: resp.url().clone(),
         status: resp.status().as_u16(),
         status_text: resp.status().canonical_reason().unwrap_or("").to_string(),
         headers: resp.headers().clone(),
-        content_length: raw_len,
+        content_length: resp.content_length(),      // More often than not, this is None
         content_type: resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)

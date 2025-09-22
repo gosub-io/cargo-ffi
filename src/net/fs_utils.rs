@@ -19,6 +19,7 @@ pub fn temp_path_for(dest: &Path) -> io::Result<NamedTempFile> {
 /// Create a temp staging file in the system temp dir for OpenExternal flows
 /// Tries to derive a friendly name from the URL path
 /// Example: `https://example.com/a/b/video.mp4` -> `/tmp/video.mp4.tmp-AB12cd`
+#[allow(unused)]
 pub fn stage_temp_path_for(url: &Url) -> io::Result<NamedTempFile> {
     let base_name = url
         .path_segments()
@@ -38,6 +39,7 @@ pub fn stage_temp_path_for(url: &Url) -> io::Result<NamedTempFile> {
         .tempfile()
 }
 
+#[allow(unused)]
 fn sanitize_filename(s: &str) -> String {
     let mut result: String = s
         .chars()

@@ -32,6 +32,7 @@ pub enum RoutedOutcome {
 }
 
 /// Convert a RequestDestination to a ResourceKind
+#[allow(unused)]
 pub fn resource_kind_from_dest(dest: RequestDestination) -> ResourceKind {
     match dest {
         RequestDestination::MainDocument => ResourceKind::Document,
@@ -223,6 +224,7 @@ pub async fn route_response_for(
 }
 
 /// Fetch a subresource and route it based on its destination and the UA policy.
+#[allow(unused)]
 pub async fn fetch_and_route_subresource(
     zone_id: ZoneId,
     parent_handle: &FetchHandle,

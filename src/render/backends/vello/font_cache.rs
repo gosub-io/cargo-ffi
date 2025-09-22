@@ -44,7 +44,6 @@ impl FontCache {
     }
 
     pub fn insert(&mut self, name: &str, resolved_name: &str, font: Font) {
-        //println!("Caching font {} as {}", name, resolved_name);
         self.fonts.insert(name.to_string(), font);
         self.resolved_names
             .insert(name.to_string(), resolved_name.to_string());

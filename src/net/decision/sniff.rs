@@ -50,6 +50,7 @@ impl ResponseClass {
     }
 }
 
+#[allow(unused)]
 pub fn sniff_class(peek_buf: PeekBuf) -> ResponseClass {
     let mime_type = detect(peek_buf.as_slice());
     dbg!(&mime_type.mime());

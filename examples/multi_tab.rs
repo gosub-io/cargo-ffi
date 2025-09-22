@@ -8,7 +8,7 @@ use gosub_engine::{
     EngineConfig, EngineError, GosubEngine,
 };
 
-use gosub_engine::events::{LoadEvent, NavigationEvent, ResourceEvent};
+use gosub_engine::events::{NavigationEvent, ResourceEvent};
 use gosub_engine::tab::{TabDefaults, TabId};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use once_cell::sync::Lazy;
@@ -42,7 +42,7 @@ impl Ui {
             Entry::Occupied(e) => e.get().clone(),
             Entry::Vacant(v) => {
                 let pb = self.mp.add(ProgressBar::new_spinner());
-                pb.enable_steady_tick(std::time::Duration::from_millis(120));
+                pb.enable_steady_tick(Duration::from_millis(120));
                 pb.set_style(
                     ProgressStyle::with_template("[{prefix:.dim}] {wide_msg}")
                         .unwrap()
@@ -197,37 +197,29 @@ async fn main() -> Result<(), EngineError> {
 
     let mut seen_intervals = 0usize;
     let mut seen_frames = 0usize;
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tokio::select! {
-                    Ok(ev) = event_rx.recv() => {
-                        // println!("Received event: {:?}", ev);
-
-                        // Just count the frames we see for now
-                        if matches!(ev, EngineEvent::Redraw { .. }) {
-                            seen_frames += 1;
-        //                    println!("Total frames seen so far: {seen_frames}");
-                        }
-                        handle_event(ev);
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-        //                println!("Received Ctrl-C, shutting down...");
-                        break;
-                    }
-                    _ = interval.tick() => {
-        //                println!("Ticking the UA interval");
-
-                        seen_intervals += 1;
-                        if seen_intervals >= 1000 {
-        //                    println!("Seen {seen_intervals} intervals, exiting main loop");
-                            break;
-                        }
-                    }
+            Ok(ev) = event_rx.recv() => {
+                // Just count the frames we see for now
+                if matches!(ev, EngineEvent::Redraw { .. }) {
+                    seen_frames += 1;
                 }
+                handle_event(ev);
+            }
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
+            _ = interval.tick() => {
+                seen_intervals += 1;
+                if seen_intervals >= 1000 {
+                    break;
+                }
+            }
+        }
     }
 
-    //    println!("Shutting down engine...");
     engine.shutdown().await?;
 
     // Wait for the engine task to finish
@@ -246,30 +238,30 @@ fn handle_event(ev: EngineEvent) {
         EngineEvent::TabCreated { tab_id, .. } => {
             UI.lock().update(tab_id, "created");
         }
-        EngineEvent::Load { tab_id, event } => {
-            let mut ui = UI.lock();
-            match event {
-                LoadEvent::Started { url, .. } => ui.update(tab_id, format!("load: [STAR] {:20}", url)),
-                LoadEvent::Progress {
-                    url,
-                    finished,
-                    bytes_received,
-                    ttfb,
-                    ..
-                } => ui.update(
-                    tab_id,
-                    format!(
-                        "load: [DOWN] {:20} TTFB: {ttfb} FIN: {finished} RX: {bytes_received}",
-                        url
-                    ),
-                ),
-                LoadEvent::Finished { url, bytes, .. } => ui.update(tab_id, format!("load: [FINI] {:20} {bytes}", url)),
-                LoadEvent::Failed { url, error, .. } => ui.update(tab_id, format!("load: [FAIL] {:20} {error}", url)),
-                LoadEvent::Cancelled { url, reason, .. } => {
-                    ui.update(tab_id, format!("load: [CNCL] {:20} {reason}", url))
-                }
-            }
-        }
+        // EngineEvent::Load { tab_id, event } => {
+        //     let mut ui = UI.lock();
+        //     match event {
+        //         LoadEvent::Started { url, .. } => ui.update(tab_id, format!("load: [STAR] {:20}", url)),
+        //         LoadEvent::Progress {
+        //             url,
+        //             finished,
+        //             bytes_received,
+        //             ttfb,
+        //             ..
+        //         } => ui.update(
+        //             tab_id,
+        //             format!(
+        //                 "load: [DOWN] {:20} TTFB: {ttfb} FIN: {finished} RX: {bytes_received}",
+        //                 url
+        //             ),
+        //         ),
+        //         LoadEvent::Finished { url, bytes, .. } => ui.update(tab_id, format!("load: [FINI] {:20} {bytes}", url)),
+        //         LoadEvent::Failed { url, error, .. } => ui.update(tab_id, format!("load: [FAIL] {:20} {error}", url)),
+        //         LoadEvent::Cancelled { url, reason, .. } => {
+        //             ui.update(tab_id, format!("load: [CNCL] {:20} {reason}", url))
+        //         }
+        //     }
+        // }
         EngineEvent::Navigation { tab_id, event } => {
             let mut ui = UI.lock();
             match event {
@@ -298,6 +290,9 @@ fn handle_event(ev: EngineEvent) {
                 }
                 NavigationEvent::FailedUrl { url, error, .. } => {
                     ui.update(tab_id, format!("nav: failed: {} {}", url, error));
+                }
+                NavigationEvent::DecisionRequired { nav_id, meta, decision_token } => {
+                    println!("nav: decision required: {} {:?} {:?}", nav_id, meta, decision_token);
                 }
             }
         }

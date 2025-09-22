@@ -67,9 +67,6 @@ impl HtmlPipelineImpl {
         let child_tasks_for_closure = child_tasks.clone();
 
         let mut on_discover = |hint: ResourceHint| {
-            // For now, we do nothing when discovering resources
-            println!("Discovered a resource hint: {:?}", hint);
-
             // Create a request for the discovered resource
             let sub_req = FetchRequest {
                 req_id: RequestId::new(),
@@ -126,7 +123,6 @@ impl HtmlPipelineImpl {
 
         if was_cancelled || res.is_err() {
             for h in child_handles.lock().unwrap().drain(..) {
-                log::trace!("Cancelling child handle for URL: {}", h.key.url);
                 h.cancel.cancel();
             }
 

@@ -43,6 +43,8 @@ log = "0.4.27"
 lazy_static = "1.5.0"
 pollster = { version = "0.4.0" }
 env_logger = "0.11.8"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-log = "0.1"
 
 r2d2 = { version = "0.8", optional = true }
 r2d2_sqlite = { version = "0.24", optional = true }
@@ -95,7 +97,6 @@ regex = "1.11.1"
 mimetype-detector = "0.2.2"
 image = "0.25.8"
 async-trait = "0.1.89"
-logger = "0.4.0"
 
 [features]
 default = ["sqlite_cookie_store", "parley_layout"]

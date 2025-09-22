@@ -71,7 +71,7 @@ impl Default for DummyHtml5Config {
     }
 }
 
-/// Main entry point: read stream, synthesize a doc, and report discovered subresources.
+/// Main entry point: read stream, synthesize a doc, and report discovered sub resources.
 ///
 /// - `base_url`: used to resolve relative URLs.
 /// - `reader`: the response body stream (already after UA has chosen Render).
@@ -250,7 +250,7 @@ mod tests {
 
     fn reader_from_str(s: &str) -> impl AsyncRead + Unpin + Send + 'static {
         // One-chunk stream -> AsyncRead
-        let it = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(s.to_owned()))]);
+        let it = stream::iter(vec![Ok::<Bytes, io::Error>(Bytes::from(s.to_owned()))]);
         StreamReader::new(it)
     }
 
@@ -307,7 +307,7 @@ mod tests {
 
         // Make a stream that hangs so we can cancel before read completes.
         use futures::stream::pending;
-        let pending_stream = pending::<Result<Bytes, std::io::Error>>();
+        let pending_stream = pending::<Result<Bytes, io::Error>>();
         let reader = StreamReader::new(pending_stream);
 
         let cancel = CancellationToken::new();

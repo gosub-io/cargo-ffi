@@ -15,10 +15,34 @@ use http::header;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn init_json_tracing() {
+    use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
+
+    let _ = tracing_log::LogTracer::init();
+
+    log::set_max_level(log::LevelFilter::Trace);
+
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info,gosub_engine=trace,gosub=trace"))
+        .unwrap();
+
+    let fmt_layer = fmt::layer()
+        // .json()
+        .with_target(true)
+        .with_level(true)
+        .with_thread_ids(true);
+
+    let subscriber = Registry::default().with(filter).with(fmt_layer);
+    let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
 #[tokio::main]
 async fn main() -> Result<(), EngineError> {
     // Allow debugging with tokio-console
-    console_subscriber::init();
+    // console_subscriber::init();
+    init_json_tracing();
+
+    log::info!("Starting gosub engine...");
 
     // Configure the engine through the engine config builder. This will set up the main runtime
     // configuration of the engine. It's possible for some values to be changed at runtime, but
@@ -151,7 +175,6 @@ async fn main() -> Result<(), EngineError> {
         }
     }
 
-    println!("Shutting down engine...");
     engine.shutdown().await?;
 
     // Wait for the engine task to finish

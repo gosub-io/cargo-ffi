@@ -89,7 +89,6 @@ impl FetchInflightEntry {
     fn dec_sub_and_maybe_cancel(&self) {
         // If this was the last subscriber, cancel the parent fetch
         if self.subs.fetch_sub(1, Ordering::AcqRel) == 1 {
-            println!("Last subscriber gone, cancelling parent fetch");
             self.parent_cancel.cancel();
         }
     }
@@ -329,12 +328,12 @@ impl Fetcher {
     }
 
     /// Runs the fetcher, processing requests from the priority queues
-    pub async fn run(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    pub async fn run(&self, mut shutdown_tx: tokio::sync::watch::Receiver<bool>) {
         let mut lane_counter: u8 = 0;
 
         loop {
             // Check for shutdown
-            if *shutdown.borrow() {
+            if *shutdown_tx.borrow() {
                 break;
             }
 
@@ -356,7 +355,7 @@ impl Fetcher {
             else {
                 tokio::select! {
                     _ = self.wake.notified() => {},
-                    _ = shutdown.changed() => {},
+                    _ = shutdown_tx.changed() => {},
                 }
                 continue;
             };
@@ -433,7 +432,6 @@ impl Fetcher {
             }
 
             let observer: Arc<dyn NetObserver + Send + Sync> = {
-                println!("RFM: Reading for {}", req.reference);
                 let guard = self.request_reference_map.read().unwrap();
                 match guard.get(&req.reference) {
                     Some(tab_id) => Arc::new(EngineEventEmitter::new(
@@ -462,7 +460,7 @@ impl Fetcher {
             let inflight = self.inflight_map.clone();
             let key_for_remove = key_str.clone();
             let inflight_entry2 = inflight_entry.clone();
-            let mut shutdown_child = shutdown.clone();
+            let mut shutdown_child = shutdown_tx.clone();
             let req_ref_map_clone = self.request_reference_map.clone();
             let req_for_task = req.clone();
             let cancel_parent = inflight_entry2.parent_cancel.clone();
@@ -524,7 +522,6 @@ impl Fetcher {
                 inflight_entry2.waiter.finish(fr).await;
 
                 // Cleanup
-                println!("Fetch task done, cleaning up inflight entry for key {}", key_for_remove);
                 inflight_entry2.done.cancel();
                 inflight.remove(&key_for_remove);
 
@@ -535,7 +532,6 @@ impl Fetcher {
     }
 
     pub async fn fulfill(&self, token: DecisionToken, action: Action) {
-        println!("Fulfilling decision token {:?} with {:?}", token, action);
         self.decision_hub.fulfill(token, action);
     }
 }

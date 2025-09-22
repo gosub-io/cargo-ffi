@@ -32,8 +32,11 @@ use anyhow::Result;
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use tracing::instrument;
 use crate::net::req_ref_tracker::RequestReferenceMap;
 
 pub struct GosubEngine {
@@ -183,7 +186,7 @@ impl GosubEngine {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     EngineCommand::Shutdown { reply } => {
-                        // println!("Engine received shutdown command. Shutting down main engine::run() loop");
+                        log::trace!("Engine received shutdown command. Shutting down main engine::run() loop");
                         let _ = reply.send(Ok(()));
                         break;
                     }
@@ -192,61 +195,39 @@ impl GosubEngine {
                     }
                 }
             }
-            //            println!("run() loop has exited")
         })
     }
 
-    /// Shuts down the engine (will not take of zones and tabs at the moment)
+    /// Shuts down the engine
+    ///
+    #[instrument(
+        name = "engine.shutdown",
+        level = "debug",
+        skip(self),
+    )]
     pub async fn shutdown(&mut self) -> Result<(), EngineError> {
         if !self.running {
             return Err(EngineError::NotRunning);
         }
 
         // Shutdown I/O thread
-        //        println!("Shutting down I/O thread");
-        if let Some(io_handle) = self.io_handle.take() {
-            io_handle.shutdown().await
+        log::trace!("signal: shutting down I/O thread");
+        if let Some(io) = self.io_handle.take() {
+            if let Err(e) = timeout(Duration::from_secs(10), io.shutdown()).await {
+                log::warn!("I/O shutdown timed out: {e}");
+            }
+        } else {
+            log::debug!("I/O handle already gone");
         }
 
         // Send shutdown command to the run loop
+        log::trace!("signal: sending shutdown to run loop");
         let (tx, rx) = tokio::sync::oneshot::channel();
         let _ = self.cmd_tx.try_send(EngineCommand::Shutdown { reply: tx });
 
         // Wait for confirmation that the run loop has exited
         let _ = rx.await.map_err(|e| EngineError::Internal(e.into()))?;
-
-        // // Tabs should be closed first, then zones
-        // let tab_cmds: Vec<_> = {
-        //     // snapshot without holding locks across awaits
-        //     let zones_guard = self.zones.read().map_err(|_| EngineError::Poisoned)?;
-        //     zones_guard
-        //         .values()
-        //         .flat_map(|zone| zone.tabs_snapshot_handles()) // -> Vec<(TabId, mpsc::Sender<TabCommand>, Option<JoinHandle<()>>)>
-        //         .collect()
-        // };
-        //
-        // for (_tab_id, tx, _jh) in &tab_cmds {
-        //     let _ = tx.send(crate::events::TabCommand::CloseTab).await;
-        // }
-        //
-        // let mut joins = JoinSet::new();
-        // for (_id, _tx, maybe_jh) in tab_cmds {
-        //     if let Some(jh) = maybe_jh {
-        //         joins.spawn(async move {
-        //             let _ = jh.await;
-        //         });
-        //     }
-        // }
-        //
-        // // Wait for a few seconds for tabs to close
-        // let _ = timeout(Duration::from_secs(2), async {
-        //     while let Some(_res) = joins.join_next().await {}
-        // }).await;
-        //
-        // // Flush any outstanding cookies, storage etc.
-        // self.flush_persistence();
-
-        // self.context.event_tx.send(EngineEvent::EngineShutdown { reason: reason.into() }).map_err(|_| EngineError::Internal)?;
+        log::trace!("engine shutdown complete");
 
         Ok(())
     }
