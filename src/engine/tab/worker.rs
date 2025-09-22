@@ -16,14 +16,15 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::net::{route_response_for, RequestDestination, RoutedOutcome};
+use crate::net::{route_response_for, FetchInflightMap, RequestDestination, RoutedOutcome};
 use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, Priority, RequestReference, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
-use crate::tab::state::{InflightLoad, TabActivityMode, TabRuntime, TabState};
+use crate::tab::state::{TabActivityMode, TabRuntime, TabState};
 use tokio::time::Duration;
 use crate::engine::errors::NavigationError;
 use crate::engine::pipeline::Hooks;
 use crate::engine::types::{NavigationId, RequestId};
+use crate::tab::nav::{NavInflightMap};
 use crate::util::spawn_named;
 
 
@@ -31,9 +32,6 @@ use crate::util::spawn_named;
 pub enum NavigationResult {
     Err{ nav_id: NavigationId, error: NavigationError },
 }
-
-
-
 
 pub struct TabWorker {
     /// ID of the tab
@@ -97,6 +95,9 @@ pub struct TabWorker {
 
     /// Keeps track of the tab worker runtime data
     pub(crate) runtime: TabRuntime,
+
+    nav_inflight_map: NavInflightMap,
+    fetch_inflight_map: Arc<FetchInflightMap>,
 }
 
 
@@ -134,6 +135,8 @@ impl TabWorker {
             desired_viewport: Default::default(),
             dirty_after_inflight: false,
             runtime: TabRuntime::default(),
+            nav_inflight_map: NavInflightMap::default(),
+            fetch_inflight_map: zone_context.fetch_inflight_map.clone(),
         }
     }
 
@@ -349,6 +352,55 @@ impl TabWorker {
 
     /// Navigate to a new URL, cancelling any in-flight navigation.
     fn navigate_to(&mut self, url: impl Into<String>, _ignore_cache: bool) {
+        self.cancel_current_nav();
+
+        let nav_id = NavigationId::new();
+        let cancel = CancellationToken::new();
+        self.active_nav = Some(ActiveNav { nav_id, cancel: cancel.clone() });
+
+        let url = parse_url(url.into());
+
+        self.bind_storage_for(&url);
+
+        let req = FetchRequest {
+            reference: RequestReference::Navigation(nav_id),
+            req_id: RequestId::new(),
+            key_data: FetchKeyData {
+                url: url.clone().into(),
+                method: Method::GET,
+                headers: Default::default(),
+            },
+            priority: Priority::High,
+            kind: ResourceKind::Document,
+            initiator: Initiator::Navigation,
+            streaming: true,
+            auto_decode: true,
+            max_bytes: None,
+        };
+
+        let (handle, top_rx, _joined) = self.fetch_inflight_map.join_or_start(&req, true);
+
+        self.nav_inflight_map.replace_for_tab(
+            self.tab_id,
+            NavInflightEntry {
+                nav_id,
+                cancel: cancel.clone(),
+                top_rx,
+                state: NavState::PendingTop,
+            },
+        );
+
+
+
+        NavInflight::start_navigation(
+            &mut self.runtime,
+            self.tab_id,
+            url,
+            self.zone_context.clone(),
+            self.services.clone(),
+            self.sink.clone(),
+        );
+
         // Cancel any in-flight load
         if let Some(load) = self.runtime.load.take() {
             log::warn!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
@@ -422,6 +474,8 @@ impl TabWorker {
         let mut guard = self.zone_context.request_reference_map.write().unwrap();
         guard.insert(RequestReference::Navigation(nav_id), tab_id);
 
+        let io_tx_clone = io_tx.clone();
+
         // Spawn the actual fetcher into a seperate task
         tokio::spawn(async move {
             let _enter = span.enter();
@@ -440,13 +494,14 @@ impl TabWorker {
                 kind: ResourceKind::Document,
                 initiator: Initiator::Navigation,
                 streaming: true,
-                reply: Some(tx_fetch),
+                // reply: Some(Arc::new(tx_fetch)),
                 auto_decode: true,
                 max_bytes: None,
-                cancel: cancel_child.clone(),
+                // cancel: cancel_child.clone(),
             };
 
-            if io_tx.send(IoCommand::Fetch(req)).is_err() {
+            let req_handle = submit_to_io(req, io_tx_clone).await;
+            if req_handle.is_err() {
                 // Couldn't send the request to the I/O thread
                 let _ = tx_done.send(NavigationResult::Err{
                     nav_id,
@@ -485,14 +540,15 @@ impl TabWorker {
                 allow_download_without_user_activation: false,
             };
 
-            let mut hooks = Hooks::new();
+            let mut hooks = Hooks::new(io_tx_clone.clone());
 
             let outcome = route_response_for(
                 RequestDestination::MainDocument,
+                req.clone(),
                 fetch_result.clone(),
                 &ua_policy,
                 &mut hooks,
-                cancel_child.clone()
+                // cancel_child.clone()
             ).await;
 
             match outcome {
@@ -564,7 +620,7 @@ impl TabWorker {
             }
         });
 
-        self.runtime.load = Some(InflightLoad { nav_id, cancel: cancel.clone(), rx: rx_done });
+        self.runtime.load = Some(NavInflight { nav_id, cancel: cancel.clone(), rx: rx_done });
     }
 
     /// Do a draw tick. This will be called based on the FPS that is requested

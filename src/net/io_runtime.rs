@@ -1,12 +1,13 @@
 use crate::net::fetcher::{Fetcher, FetcherConfig};
-use crate::net::types::{FetchRequest};
 use crate::util::spawn_named;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use crate::engine::EngineContext;
 use crate::engine::types::IoChannel;
 use crate::events::IoCommand;
+use crate::net::types::{FetchHandle, FetchRequest};
 
 /// IoHandle is the handle that controls the IO thread.
 pub struct IoHandle {
@@ -19,12 +20,15 @@ pub struct IoHandle {
 }
 
 impl IoHandle {
-    // Even though we COULD send directly from the IoHandle, it's more likely that we
-    // send commands through a copy of the tx_submit that we send in the EngineContext to zones and
-    // later tabs.
-    pub fn submit(&self, req: FetchRequest) -> Result<(), ()> {
-        self.tx_submit.send(IoCommand::Fetch(req)).map_err(|_| ())
-    }
+    // // Even though we COULD send directly from the IoHandle, it's more likely that we
+    // // send commands through a copy of the tx_submit that we send in the EngineContext to zones and
+    // // later tabs.
+    // pub fn submit(&self, req: FetchRequest) -> Result<(), ()> {
+    //     submit_request_to_io()
+    //     self.tx_submit.send(IoCommand::Fetch(req)).map_err(|_| ())
+    // }
+
+
 
     /// Shutdown the IO thread
     pub async fn shutdown(mut self) {
@@ -54,6 +58,20 @@ impl IoHandle {
     }
 }
 
+pub async fn submit_to_io(request: FetchRequest, io_tx: IoChannel) -> anyhow::Result<FetchHandle> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let cancel = CancellationToken::new();
+
+
+    io_tx.send(IoCommand::Fetch(request.clone(), tx)).unwrap();
+
+    FetchHandle {
+        req_id: request.req_id,
+        cancel,
+        reply_channel: rx,
+    }
+}
+
 /// Spawns the IO thread and runs a single fetcher on top. If needed, we can expand this system to
 /// run multiple fetchers on different OS threads for instance, but most likely the fetching itself
 /// isn't the biggest bottleneck.
@@ -61,7 +79,7 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
     let (tx_submit, mut rx_submit) = mpsc::unbounded_channel::<IoCommand>();
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
-    let io_tx = tx_submit.clone();
+    // let io_tx = tx_submit.clone();
 
     let join_handle = spawn_named("I/O Thread", async move {
         let fetcher = Arc::new(Fetcher::new(cfg, engine_ctx.event_tx.clone(), engine_ctx.request_reference_map.clone()));
@@ -78,7 +96,7 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
             tokio::select! {
                 maybe_req = rx_submit.recv() => {
                     match maybe_req {
-                        Some(IoCommand::Fetch(req)) => fetcher.submit(req).await,
+                        Some(IoCommand::Fetch(req, handle)) => fetcher.submit(req, handle).await,
                         Some(IoCommand::Decision { token,action }) => fetcher.fullfill(token, action).await,
                         None => {
                             // All producers have dropped. Signal shutdown

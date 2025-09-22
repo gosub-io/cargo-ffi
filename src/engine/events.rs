@@ -28,7 +28,7 @@ use tokio::sync::oneshot;
 use url::Url;
 use crate::engine::types::{NavigationId, RequestId, Action};
 use crate::net::DecisionToken;
-use crate::net::types::{FetchRequest, FetchResultMeta, Initiator, Priority, RequestReference, ResourceKind};
+use crate::net::types::{FetchHandle, FetchRequest, FetchResultMeta, Initiator, Priority, RequestReference, ResourceKind};
 
 /// Represents a mouse button that can be pressed or released
 #[derive(Debug, Clone, PartialEq)]
@@ -89,7 +89,7 @@ impl Display for Modifiers {
 #[derive(Debug)]
 pub enum IoCommand {
     /// Perform a fetch of the given request
-    Fetch(FetchRequest),
+    Fetch { req: FetchRequest, tx: oneshot::Sender<anyhow::Result<FetchHandle>> },
     /// Return a decision on a pending request
     Decision { token: DecisionToken, action: Action },
 }

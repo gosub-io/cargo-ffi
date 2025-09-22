@@ -1,18 +1,6 @@
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::NavigationId;
 use crate::render::Viewport;
-use crate::tab::worker::NavigationResult;
-
-/// Represents an in-flight network load operation. It allows for easy cancellation in case
-/// the load is no longer needed (e.g., user navigated away).
-#[allow(unused)]
-pub(crate) struct InflightLoad {
-    pub nav_id: NavigationId,
-    pub cancel: CancellationToken,
-    pub rx: tokio::sync::oneshot::Receiver<NavigationResult>,
-}
 
 /// State for the tab task driving a single tab.
 pub(crate) struct TabRuntime {
@@ -22,8 +10,8 @@ pub(crate) struct TabRuntime {
     pub fps: u32,
     /// Interval timer for driving ticks
     pub interval: tokio::time::Interval,
-    /// Current in-flight load operation, if any
-    pub load: Option<InflightLoad>,
+    // /// Current in-flight load operation, if any
+    // pub load: Option<NavInflight>,
     /// Currently loading URL (if any)
     pub loaded_url: Option<Url>,
     // /// Current viewport size
@@ -42,7 +30,7 @@ impl Default for TabRuntime {
             drawing_enabled: false,
             fps,
             interval: tokio::time::interval(Duration::from_secs_f64(1.0 / fps as f64)),
-            load: None,
+            // load: None,
             loaded_url: None,
             // viewport: Viewport::default(),
             dirty: false,

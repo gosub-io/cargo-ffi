@@ -3,18 +3,16 @@ use bytes::Bytes;
 use anyhow::anyhow;
 use http::Method;
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 use crate::engine::pipeline::css::DummyStylesheet;
 use crate::engine::pipeline::font::DummyFont;
 use crate::engine::pipeline::js::DummyJsDocument;
 use crate::engine::pipeline::Hooks;
 use crate::engine::types::{IoChannel, PeekBuf, RequestId};
 use crate::engine::UaPolicy;
-use crate::events::IoCommand;
 use crate::html::{DummyDocument, ResourceHint};
 use crate::net::decision::types::BlockReason;
 use crate::net::{decide_handling, stream_to_bytes, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
-use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, RequestReference, ResourceKind};
+use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, ResourceKind};
 
 pub enum RoutedOutcome {
     MainDocument(DummyDocument),
@@ -76,10 +74,10 @@ impl BodyContent {
 /// Route a fetch result based on its destination and the UA policy.
 pub async fn route_response_for(
     dest: RequestDestination,
+    request: FetchRequest,
     fetch_result: FetchResult,
     policy: &UaPolicy,
     hooks: &mut Hooks,
-    cancel_token: CancellationToken,
 ) -> anyhow::Result<RoutedOutcome> {
 
     // Fetch the meta data, peek buffer and content (type)
@@ -107,10 +105,10 @@ pub async fn route_response_for(
                 RenderTarget::HtmlParser => {
                     let doc = match body_content {
                         BodyContent::Stream { shared } => {
-                            hooks.html.parse_stream(cancel_token, meta, peek_buf, shared).await?
+                            hooks.html.parse_stream(request, meta, peek_buf, shared).await?
                         }
                         BodyContent::Buffered { body } => {
-                            hooks.html.parse_bytes(cancel_token, meta, body.as_ref()).await?
+                            hooks.html.parse_bytes(request, meta, body.as_ref()).await?
                         }
                     };
                     Ok(RoutedOutcome::MainDocument(doc))
@@ -203,10 +201,9 @@ pub async fn route_response_for(
 
 /// Fetch a subresource and route it based on its destination and the UA policy.
 async fn fetch_and_route_subresource(
-    req_reference: RequestReference,
+    request: FetchRequest,
     hint: ResourceHint,
     io_tx: IoChannel,
-    cancel: CancellationToken,
     policy: &UaPolicy,
     hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
@@ -214,7 +211,7 @@ async fn fetch_and_route_subresource(
 
     let req = FetchRequest {
         req_id: RequestId::new(),
-        reference: req_reference,
+        reference: request.reference,
         key_data: FetchKeyData {
             url: hint.url,
             method: Method::GET,
@@ -224,17 +221,15 @@ async fn fetch_and_route_subresource(
         kind: resource_kind_from_dest(hint.dest),
         initiator: Initiator::Parser,
         streaming: true,
-        reply: Some(tx),
         auto_decode: true,
         max_bytes: None,
-        cancel: cancel.clone(),
     };
-    io_tx.send(IoCommand::Fetch(req)).ok();
+    let req_handle = submit_to_io(req, tx).await;
 
     let fetch_result = match rx.await.map_err(|_| anyhow!("Failed to receive fetch result")) {
         Ok(fr) => fr,
         Err(e) => return Err(anyhow!("Fetch failed: {}", e)),
     };
 
-    route_response_for(hint.dest, fetch_result, policy, hooks, cancel).await
+    route_response_for(hint.dest, request, fetch_result, policy, hooks).await
 }

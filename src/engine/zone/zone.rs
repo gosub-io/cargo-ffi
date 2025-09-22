@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 use crate::engine::types::{EventChannel, IoChannel};
+use crate::net::FetchInflightMap;
 use crate::net::types::RequestReferenceMap;
 use crate::util::spawn_named;
 
@@ -97,7 +98,9 @@ pub struct ZoneContext {
     /// Channel to communicate to the network I/O thread
     pub(crate) io_tx: IoChannel,
     /// Map of request references to tab IDs, used to route network events back to the right tab
-    pub(crate) request_reference_map: Arc<RwLock<RequestReferenceMap>>
+    pub(crate) request_reference_map: Arc<RwLock<RequestReferenceMap>>,
+    /// Keeps track of all in-flight fetches so we can deduplicate them
+    pub(crate) fetch_inflight_map: Arc<FetchInflightMap>,
 }
 
 // Things that are shared upwards to the engine
@@ -212,6 +215,7 @@ impl Zone {
                 event_tx,
                 io_tx,
                 request_reference_map,
+                fetch_inflight_map: Arc::new(FetchInflightMap::new()),
             }),
             id: zone_id,
             tabs: HashMap::new(),

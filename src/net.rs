@@ -32,3 +32,5 @@ pub use utils::stream_to_bytes;
 
 pub use router::route_response_for;
 pub use router::RoutedOutcome;
+
+pub use fetcher::FetchInflightMap;

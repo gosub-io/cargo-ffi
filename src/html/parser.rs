@@ -6,15 +6,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::net::RequestDestination;
-use crate::net::types::Priority;
-
-/// What kind of resource we discovered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ResourceKind {
-    Stylesheet,
-    Script,
-    Image,
-}
+use crate::net::types::{Priority, ResourceKind};
 
 /// A hint to the engine/IO layer that a subresource should be fetched.
 #[derive(Debug, Clone)]
@@ -213,7 +205,7 @@ fn discover_resources(html: &str, base: &Url) -> Vec<ResourceHint> {
             if let Ok(u) = resolve(base, unquote(m.as_str())) {
                 out.push(ResourceHint {
                     url: u,
-                    kind: ResourceKind::Script,
+                    kind: ResourceKind::Script { blocking: false },
                     rel: None,
                     from_attr: "src",
                     dest: RequestDestination::Script,

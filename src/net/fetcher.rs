@@ -5,7 +5,7 @@
 use crate::net::events::NetObserver;
 use crate::net::fetch::{fetch_response_complete, fetch_response_top, ResponseTop};
 use crate::net::shared_body::{ReaderOptions, SharedBody};
-use crate::net::types::{FetchRequest, FetchResult, NetError, Priority, RequestReferenceMap};
+use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResult, NetError, Priority, RequestReferenceMap};
 use crate::net::utils::{short_url, Waiter};
 use crate::util::spawn_named;
 use bytes::Bytes;
@@ -13,14 +13,18 @@ use dashmap::{DashMap, Entry};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 use std::sync::RwLock;
-use tokio::sync::{Notify, Semaphore};
+use std::time::Instant;
+use tokio::sync::{oneshot, Notify, Semaphore};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 use crate::Action;
-use crate::engine::types::EventChannel;
+use crate::engine::types::{EventChannel, PeekBuf, RequestId};
 use crate::net::decision_hub::DecisionHub;
 use crate::net::DecisionToken;
 use crate::net::emitter::engine_event_emitter::EngineEventEmitter;
 use crate::net::emitter::null_emitter::NullEmitter;
+use crate::net::pump::{spawn_pump, PumpCfg, PumpTargets};
 
 /// How many shared consumers can listen for a resource
 const SHARED_MAX_CAPACITY: usize = 32;
@@ -58,91 +62,103 @@ impl Default for FetcherConfig {
     }
 }
 
-/// RAII guard that ensures an in-flight coalescing entry is removed from the map.
-///
-/// # Why
-/// When the **leader** task inserts an entry into `inflight` (to coalesce
-/// identical requests), that entry **must** be removed even if the task exits
-/// early (e.g., cancellation, early return, or panic). If it isn’t removed,
-/// future requests may keep coalescing onto a “dead” entry and never make
-/// progress.
-///
-/// `InflightGuard` holds a clone of the `DashMap` and the key. On `Drop` it
-/// removes the entry **exactly once**. You can also remove eagerly via
-/// [`remove`](Self::remove), which consumes the guard and disables the
-/// drop-time removal.
-///
-/// # Semantics
-/// - **Idempotent:** dropping after `remove()` is a no-op.
-/// - **Panic-safe:** removal also runs during unwinding.
-/// - **Non-owning of the value:** the guard only removes by key; it doesn’t
-///   keep or access the mapped value.
-///
-/// # Example
-/// ```rust,ignore,no_run
-/// let guard = InflightGuard::new(inflight.clone(), key.clone());
-/// // ... acquire permits, do the fetch ...
-/// // Option A: explicit cleanup
-/// guard.remove(); // consumes the guard
-/// // Option B: rely on Drop (automatic cleanup at scope end)
-/// ```
-struct InflightGuard {
-    map: Arc<DashMap<String, Arc<Inflight>>>,
-    key: String,
-    removed: bool,
-}
-
-impl InflightGuard {
-    /// Create a new guard for `key` stored in `map`.
-    ///
-    /// This **does not** insert anything; it only arranges for the key to be
-    /// removed when the guard is dropped (or when [`remove`](Self::remove) is called).
-    #[inline]
-    fn new(map: Arc<DashMap<String, Arc<Inflight>>>, key: String) -> Self {
-        Self {
-            map,
-            key,
-            removed: false
-        }
-    }
-
-
-    /// Eagerly remove the in-flight entry and consume the guard.
-    ///
-    /// After this call, dropping the returned value (which no longer exists)
-    /// will do nothing.
-    #[inline]
-    fn remove(mut self) {
-        let _ = self.map.remove(&self.key);
-        self.removed = true;
-    }
-}
-
-impl Drop for InflightGuard {
-    #[inline]
-    fn drop(&mut self) {
-        if !self.removed {
-            let _ = self.map.remove(&self.key);
-        }
-    }
-}
-
 /// Represents an in-flight request, including its associated waiter and streaming preference.
-struct Inflight {
+struct FetchInflightEntry {
+    /// Cancellation token for aborting the request
+    parent_cancel: CancellationToken,
     /// Waiter for managing requests
     waiter: Arc<Waiter>,
-    /// True when streaming is required
-    wants_streaming: AtomicBool,
+    // /// True when streaming is required
+    // wants_streaming: AtomicBool,
+    // shared_body: Option<SharedBody>,
+    // peek_buf: Option<PeekBuf>,
 }
 
-impl Inflight {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            waiter: Waiter::new_arc(),
-            wants_streaming: AtomicBool::new(false),
-        })
+pub struct FetchInflightMap {
+    map: Arc<DashMap<FetchKeyData, Arc<FetchInflightEntry>>>,
+    client: Arc<reqwest::Client>,
+    observer: Arc<dyn NetObserver + Send + Sync>,
+    cfg: FetcherConfig,
+}
+
+impl FetchInflightMap {
+    pub fn new(
+        client: Arc<reqwest::Client>,
+        observer: Arc<dyn NetObserver + Send + Sync>,
+        cfg: FetcherConfig,
+    ) -> Self {
+        Self {
+            map: Arc::new(DashMap::new()),
+            client,
+            observer,
+            cfg,
+        }
+    }
+
+    /// Join an existing inflight by key, or start the fetch task once.
+    ///
+    /// Returns `(handle, rx, was_new)`:
+    /// - `handle`: per-caller child cancel token + req_id
+    /// - `rx`: one-shot receiver for the final `FetchResult`
+    /// - `was_new`: true if we spawned the fetch task
+    pub fn join_or_start(
+        &self,
+        req: &FetchRequest,
+        wants_stream: bool
+    ) -> (FetchHandle, tokio::sync::oneshot::Receiver<FetchResult>, bool) {
+        match self.map.entry(req.key_data.clone()) {
+            Entry::Occupied(e) => {
+                // Key already exists, join as waiter
+                let entry = e.get().clone();
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                entry.waiter.register(tx, wants_stream);
+
+                let handle = FetchHandle {
+                    req_id: RequestId::new(),
+                    key: req.key_data.clone(),
+                    cancel: entry.parent_cancel.child_token(),
+                };
+                (handle, rx, false)
+            }
+            Entry::Vacant(v) => {
+                let entry = Arc::new(FetchInflightEntry{
+                    parent_cancel: CancellationToken::new(),
+                    waiter: Arc::new(Waiter::new()),
+                });
+
+                let (tx, rx) = oneshot::channel();
+                entry.waiter.register(tx, wants_stream);
+
+                v.insert(entry.clone());
+
+                let key = req.key_data.clone();
+                let map = self.map.clone();
+
+                spawn_fetch_task(
+                    req.clone(),
+                    entry.clone(),
+                    self.client.clone(),
+                    self.observer.clone(),
+                    self.cfg.clone(),
+                    {
+                        move || { map.remove(&key); }
+                    }
+                );
+
+                let handle = FetchHandle {
+                    req_id: RequestId::new(),
+                    key: req.key_data.clone(),
+                    cancel: entry.parent_cancel.child_token(),
+                };
+
+                (handle, rx, true)
+            }
+        }
     }
 }
+
+
 
 /// The `Fetcher` struct manages the scheduling and execution of HTTP requests.
 /// It supports prioritization, coalescing of identical requests, and streaming or buffered responses.
@@ -167,7 +183,7 @@ pub struct Fetcher {
     q_idle: tokio::sync::Mutex<VecDeque<FetchRequest>>,
 
     /// Map for managing inflight requests and their associated waiters
-    inflight: Arc<DashMap<String, Arc<Inflight>>>,
+    inflight: Arc<DashMap<String, Arc<FetchInflightMap>>>,
 
     /// Notifier to wake up the fetcher when a new request is submitted
     wake: Notify,
@@ -268,7 +284,7 @@ impl Fetcher {
     }
 
     /// Submit a fetch request to the appropriate priority lane.
-    pub async fn submit(&self, req: FetchRequest) {
+    pub async fn submit(&self, req: FetchRequest, req_handle: FetchHandle) {
         log::debug!("Submitting fetch request: {:?}", req);
         let mut lane = match req.priority {
             Priority::High => self.q_high.lock().await,
@@ -301,7 +317,7 @@ impl Fetcher {
             };
 
             // If none, wait for notification of new requests, or shutdown
-            let Some(mut req) = next else {
+            let Some(req) = next else {
                 tokio::select! {
                     _ = self.wake.notified() => {},
                     _ = shutdown.changed() => {},
@@ -331,14 +347,14 @@ impl Fetcher {
             let (inflight_entry, is_leader) = match self.inflight.entry(key_str.clone()) {
                 Entry::Occupied(entry) => (entry.get().clone(), false),
                 Entry::Vacant(v) => {
-                    let arc = Inflight::new();
+                    let arc = FetchInflightMap::new();
                     v.insert(arc.clone());
                     (arc, true)
                 }
             };
 
             // Register this waiter to the shared Inflight.waiter
-            if let Some(tx) = req.reply.take() {
+            if let Some(tx) = req_handle.reply.clone() {
                 inflight_entry.waiter.register(tx, req.streaming).await;
             }
 
@@ -387,6 +403,7 @@ impl Fetcher {
             let inflight_guard = InflightGuard::new(inflight.clone(), key_str2.clone());
 
             let request_reference_map_clone = self.request_reference_map.clone();
+            let req = req.clone();
 
             let title = format!("Fetcher: {}", short_url(&req.key_data.url, 80));
             let _ = spawn_named(&title, async move {
@@ -469,7 +486,7 @@ async fn perform_streaming(
     let ResponseTop { meta, peek_buf, reader} = fetch_response_top(
         Arc::new(client.clone()),
         req.key_data.url.clone(),
-        req.cancel.clone(),
+        req_handle.cancel.clone(),
         observer.clone(),
     )
     .await?;
@@ -477,7 +494,7 @@ async fn perform_streaming(
     let opts = ReaderOptions {
         capacity: SHARED_MAX_CAPACITY,
         buf_size: 16 * 1024,
-        cancel: Some(req.cancel.clone()),
+        cancel: Some(req_handle.cancel.clone()),
         idle_timeout: Some(cfg.read_idle_timeout),
         total_timeout: cfg.total_body_timeout,
         max_size: None,
@@ -505,7 +522,7 @@ async fn perform_buffered(
     let (meta, body) = fetch_response_complete(
         Arc::new(client.clone()),
         req.key_data.url.clone(),
-        req.cancel.clone(),
+        req_handle.cancel.clone(),
         observer,
         req.max_bytes,
         cfg.read_idle_timeout,
@@ -516,5 +533,67 @@ async fn perform_buffered(
     Ok(FetchResult::Buffered {
         meta,
         body: Bytes::from(body),
+    })
+}
+
+
+pub fn spawn_fetch_task(
+    req: FetchRequest,
+    entry: Arc<FetchInflightEntry>,
+    client: Arc<reqwest::Client>,
+    observer: Arc<dyn NetObserver + Send + Sync>,
+    cfg: FetcherConfig,
+    on_finish: impl FnOnce() + Send + 'static,
+) -> JoinHandle<()> {
+    let url = req.key_data.url.clone();
+    let cancel_parent = entry.parent_cancel.clone();
+
+    spawn_named(&format!("Fetch: {}", short_url(&url, 80)), async move {
+        // Make sure we always do a cleanup
+        struct Cleanup<F: FnOnce()>(Option<F>);
+        impl<F: FnOnce()> Drop for Cleanup<F> {
+            fn drop(&mut self) {
+                if let Some(f) = self.0.take() {
+                    f();
+                }
+            }
+        }
+        let _cleanup = Cleanup(Some(on_finish));
+
+        let top = match fetch_response_top(
+            client.clone(),
+            url.clone(),
+            cancel_parent.clone(),
+            observer.clone(),
+        ).await {
+            Ok(top) => top,
+            Err(e) => {
+                let _ = entry.waiter.finish(FetchResult::Error(e)).await;
+                return;
+            }
+        };
+        let ResponseTop { meta, peek_buf, mut reader } = top;
+
+
+        let shared = Arc::new(SharedBody::new(SHARED_MAX_CAPACITY));
+
+        let pump_cfg = PumpCfg {
+            idle: cfg.read_idle_timeout,
+            total_deadline: cfg.total_body_timeout.map(|d| Instant::now() + d),
+        };
+
+        let _pump = spawn_pump(
+            reader,
+            PumpTargets { shared: Some(shared.clone()), file_dest: None, peek_buf: peek_buf.clone() },
+            pump_cfg,
+            cancel_parent.clone(),
+            observer.clone(),
+            url.clone(),
+        );
+
+        let res = FetchResult::Stream { meta, peek_buf, shared };
+        let _ = entry.waiter.finish(res).await;
+
+        // cleanup will be called here
     })
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use bytes::Bytes;
 use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -85,8 +86,6 @@ pub struct FetchResultMeta {
     pub content_length: Option<u64>,
     /// Content-Type header (if any)
     pub content_type: Option<String>,
-    // /// First bytes of the response body, for MIME sniffing etc
-    // pub peek_buf: PeekBuf,
     /// True if the response has a body (e.g. HEAD requests do not)
     pub has_body: bool,
 }
@@ -131,14 +130,22 @@ pub enum ResourceKind {
 
 /// A fetch key data is a key that is used to find out if two requests want to fetch the same resource.
 /// If this is true, the requests are bundled so only once the resource will be fetched.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchKeyData {
     /// URL fetched
     pub url: Url,
-    /// HTTP method used (GET, POST etc)
+    /// HTTP method used (GET, POST etc.)
     pub method: Method,
     /// HTTP headers
     pub headers: HeaderMap,
+}
+
+impl Hash for FetchKeyData {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Headermap cannot be hashed directly, so we generate the key and hash that
+        let key = self.generate();
+        key.hash(state);
+    }
 }
 
 impl Display for FetchKeyData {
@@ -208,11 +215,11 @@ type DocumentId = u64;
 type PrefetchId = u64;
 type TaskId = u64;
 
-/// Request references indicate what initiated the request without the net functionality knowning
+/// Request references, indicate what initiated the request without the net functionality known
 /// about its caller. This way, we can let the net module still emit events based on the request
 /// reference. For instance, a request from a navigation (with a navigation_id) can emit at a
-/// low level events to a tab, without the system knowning what a tab is. This leaves the engine
-/// independent of higher level functionaliy.
+/// low level events to a tab, without the system known what a tab is. This leaves the engine
+/// independent of higher level functionality.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum RequestReference {
     /// Main doc for a tab
@@ -262,8 +269,30 @@ impl RequestReferenceMap {
     }
 }
 
+
+#[derive(Clone)]
+pub struct FetchHandle {
+    pub req_id: RequestId,
+    pub key: FetchKeyData,
+    /// Cancellation token
+    pub cancel: CancellationToken,
+    // // Reply channel
+    // pub reply_channel: tokio::sync::oneshot::Sender<FetchResult>,
+}
+
+impl Debug for FetchHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FetchHandle")
+            .field("req_id", &self.req_id)
+            .field("key", &self.key)
+            .field("cancel", &self.cancel)
+            .finish()
+    }
+}
+
+
 /// A fetch request defines what needs to be fetched, how and where to send the result to
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FetchRequest {
     /// Reference to what initiated this request (navigation, document, prefetch, background task)
     pub reference: RequestReference,
@@ -283,10 +312,6 @@ pub struct FetchRequest {
     pub auto_decode: bool,
     /// Maximum amount of (buffered) bytes we can fetch
     pub max_bytes: Option<usize>,
-    /// Cancellation token
-    pub cancel: CancellationToken,
-    // Reply channel
-    pub reply: Option<tokio::sync::oneshot::Sender<FetchResult>>,
 }
 
 /// FetchResult defines the resource response. Either a stream or buffered response are possible
