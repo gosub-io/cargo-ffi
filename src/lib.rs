@@ -109,7 +109,6 @@ pub mod html;
 
 #[cfg(feature = "python")]
 mod python;
-mod python;
 
 pub use engine::{EngineError, GosubEngine};
 

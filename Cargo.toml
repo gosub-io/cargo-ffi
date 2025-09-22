@@ -92,7 +92,7 @@ futures-core = "0.3.31"
 mime = "0.3.17"
 chrono = "0.4.42"
 regex = "1.11.1"
-pyo3 = { version = "0.26.0", optional = true }
+pyo3 = { version = "0.26.0", optional = true, features = ["abi3-py313"] }
 
 [features]
 default = ["sqlite_cookie_store", "parley_layout"]

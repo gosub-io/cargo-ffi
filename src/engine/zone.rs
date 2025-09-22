@@ -24,7 +24,7 @@ pub use zone::ZoneId;
 pub use zone::ZoneServices;
 pub use zone::ZoneSink;
 
-pub use config::ZoneConfig;
+pub use config::{ZoneConfig, ZoneConfigBuilder};
 
 // Internal type, not exposed publicly.
 pub(crate) use zone::Zone;
