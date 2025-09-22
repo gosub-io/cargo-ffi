@@ -11,21 +11,32 @@ use url::Url;
 /// A hint to the engine/IO layer that a subresource should be fetched.
 #[derive(Debug, Clone)]
 pub struct ResourceHint {
+    /// Absolute URL of the resource to fetch.
     pub url: Url,
+    /// The destination type (affects request headers, etc).
     pub dest: RequestDestination,
+    /// The kind of resource (affects priority, etc).
     pub kind: ResourceKind,
+    /// The `rel` attribute value if applicable.
     pub rel: Option<String>,     // e.g. "stylesheet"
+    /// The attribute we discovered this from.
     pub from_attr: &'static str, // e.g. "href" or "src
+    /// The referrer URL if applicable.
     pub referrer: Option<Url>,
+    /// Whether this is a cross-origin request.
     pub cross_origin: bool,
+    /// The integrity attribute value if applicable.
     pub integrity: Option<String>,
+    /// Suggested fetch priority.
     pub priority: Priority,
 }
 
 /// The "document" we "parsed".
 #[derive(Debug, Clone)]
 pub struct DummyDocument {
+    /// The final URL of the document (after redirects).
     pub final_url: Url,
+    /// The document title, if any.
     pub title: Option<String>,
     /// Whole HTML as UTF-8 (best-effort).
     pub raw_html: String,
@@ -93,13 +104,18 @@ where
     let mut tmp = [0u8; 16 * 1024];
 
     loop {
+        // Check cancellation before each read.
         if cancel.is_cancelled() {
             return Err(DocumentError::Cancelled);
         }
+
+        // Read a chunk
         let n = reader.read(&mut tmp).await?;
         if n == 0 {
+            // Eof encountered
             break;
         }
+
         let remaining = cfg.max_bytes.saturating_sub(buf.len()).min(n);
         if remaining > 0 {
             buf.extend_from_slice(&tmp[..remaining]);

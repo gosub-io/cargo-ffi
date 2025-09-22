@@ -50,6 +50,7 @@ impl BodyStream {
     pub fn from_bytes(bytes: Bytes) -> Self {
         let len = bytes.len() as u64;
         let reader = Box::pin(BytesAsyncReader { data: bytes, pos: 0 });
+
         Self {
             inner: reader,
             len: Some(len),
@@ -235,8 +236,6 @@ pub struct FetchHandle {
     pub key: FetchKeyData,
     /// Cancellation token
     pub cancel: CancellationToken,
-    // /// Reply channel
-    // pub reply: Arc<tokio::sync::oneshot::Sender<FetchResult>>,
 }
 
 impl Debug for FetchHandle {
@@ -283,7 +282,7 @@ pub enum FetchResult {
     },
     /// Buffered response body
     Buffered { meta: FetchResultMeta, body: Bytes },
-    /// Network error
+    /// Network error occurred
     Error(NetError),
 }
 
@@ -293,6 +292,7 @@ impl FetchResult {
         matches!(self, FetchResult::Error(_))
     }
 
+    // Return the metadata if available
     pub fn meta(&self) -> Option<&FetchResultMeta> {
         match self {
             FetchResult::Stream { meta, .. } => Some(meta),
@@ -315,28 +315,6 @@ impl Debug for FetchResult {
                 .field("body_len", &body.len())
                 .finish(),
             FetchResult::Error(e) => f.debug_tuple("FetchResult::Error").field(e).finish(),
-            // FetchResult::DownloadStarted { meta, dest, handle } => {
-            //     f.debug_struct("FetchResult::DownloadStarted")
-            //         .field("meta", meta)
-            //         .field("dest", dest)
-            //         .field("handle", handle)
-            //         .finish()
-            // }
-            // FetchResult::OpenExternal { meta, staged_path } => {
-            //     f.debug_struct("FetchResult::OpenExternal")
-            //         .field("meta", meta)
-            //         .field("staged_path", staged_path)
-            //         .finish()
-            // }
-            // FetchResult::Cancelled => {
-            //     f.debug_struct("FetchResult::Cancelled").finish()
-            // }
-            // FetchResult::Document { meta, doc } => {
-            //     f.debug_struct("FetchResult::Document")
-            //         .field("meta", meta)
-            //         .field("doc_title", &doc.title)
-            //         .finish()
-            // }
         }
     }
 }

@@ -14,7 +14,8 @@ use url::Url;
 // resource only once.
 #[derive(Default)]
 pub struct Waiter {
-    listeners: Mutex<Vec<(bool, oneshot::Sender<FetchResult>)>>,
+    /// List of listeners (oneshot senders) waiting for the result.
+    listeners: Mutex<Vec<(oneshot::Sender<FetchResult>, bool)>>,
 }
 
 impl Waiter {
@@ -31,7 +32,7 @@ impl Waiter {
 
     /// Register a consumer for this waiter. We need to know if the consumer is streaming or not.
     pub async fn register(&self, tx: oneshot::Sender<FetchResult>, wants_streaming: bool) {
-        self.listeners.lock().await.push((wants_streaming, tx))
+        self.listeners.lock().await.push((tx, wants_streaming))
     }
 
     /// Process the fetch result with the listeners.
@@ -40,18 +41,21 @@ impl Waiter {
 
         match result {
             FetchResult::Buffered { meta, body } => {
+                // Buffered results can be sent to all listeners as-is
                 let res = FetchResult::Buffered {
                     meta: meta.clone(),
                     body: body.clone(),
                 };
-                for (_, tx) in ls.drain(..) {
+                for (tx, _) in ls.drain(..) {
                     let _ = tx.send(res.clone());
                 }
             }
             FetchResult::Stream { meta, peek_buf, shared } => {
+                // Streamed results need to be fanned out to streaming listeners, but buffered listeners
+                // need to have the stream read to the end and buffered first.
                 let mut streaming_ls = Vec::new();
                 let mut buffered_ls = Vec::new();
-                while let Some((wants_stream, tx)) = ls.pop() {
+                while let Some((tx, wants_stream)) = ls.pop() {
                     if wants_stream {
                         streaming_ls.push(tx);
                     } else {
@@ -71,6 +75,7 @@ impl Waiter {
 
                 // Send the stream as buffered to all the buffered listeners
                 if !buffered_ls.is_empty() {
+                    // This will read the stream to the end, so it might take some time.
                     match stream_to_bytes(peek_buf, shared).await {
                         Ok(b) => {
                             let res = FetchResult::Buffered {
@@ -92,24 +97,16 @@ impl Waiter {
             }
             FetchResult::Error(e) => {
                 let res = FetchResult::Error(e.clone());
-                for (_, tx) in ls.drain(..) {
+                for (tx, _) in ls.drain(..) {
                     let _ = tx.send(res.clone());
                 }
-            } // FetchResult::DownloadStarted { .. } => {}
-              // FetchResult::OpenExternal { .. } => {}
-              // FetchResult::Cancelled => {}
-              // FetchResult::Document { meta, doc } => {
-              //     let res = FetchResult::Document { meta: meta.clone(), doc: doc.clone() };
-              //     for (_, tx) in ls.drain(..) {
-              //         let _ = tx.send(res.clone());
-              //     }
-              // }
+            }
         }
     }
 }
 
-/// Convert a streaming body a buffered fetchresult by reading it to the end.
-/// This could be more efficient with allocations probably.
+/// Convert a streaming body a buffered fetch-result by reading it to the end.
+/// This could be more efficient with allocations, probably.
 pub async fn stream_to_bytes(peek_buf: PeekBuf, shared: Arc<SharedBody>) -> anyhow::Result<Bytes> {
     // Allocate for at least peek buffer, plus some additional to start the streaming
     let mut out = Vec::with_capacity(peek_buf.len() + 8192);
@@ -180,7 +177,7 @@ mod tests {
 
     fn dummy_meta() -> FetchResultMeta {
         FetchResultMeta {
-            final_url: Url::parse("http://example.org/").unwrap(),
+            final_url: Url::parse("https://example.org/").unwrap(),
             status: 200,
             status_text: "OK".into(),
             headers: http::HeaderMap::new(),

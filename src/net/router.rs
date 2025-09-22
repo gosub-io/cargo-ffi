@@ -2,32 +2,41 @@ use crate::engine::pipeline::css::DummyStylesheet;
 use crate::engine::pipeline::font::DummyFont;
 use crate::engine::pipeline::js::DummyJsDocument;
 use crate::engine::pipeline::Hooks;
-use crate::engine::types::{IoChannel, PeekBuf, RequestId};
+use crate::engine::types::PeekBuf;
 use crate::engine::UaPolicy;
-use crate::html::{DummyDocument, ResourceHint};
+use crate::html::DummyDocument;
 use crate::net::decision::types::BlockReason;
-use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResult, Initiator, ResourceKind};
+use crate::net::types::{FetchHandle, FetchRequest, FetchResult, ResourceKind};
 use crate::net::{
-    decide_handling, stream_to_bytes, submit_to_io, HandlingDecision, RenderTarget, RequestDestination, SharedBody,
+    decide_handling, stream_to_bytes, HandlingDecision, RenderTarget, RequestDestination, SharedBody,
 };
-use crate::zone::ZoneId;
 use anyhow::anyhow;
 use bytes::Bytes;
-use http::Method;
 use std::sync::Arc;
 
+/// The outcome of routing a fetch result.
 pub enum RoutedOutcome {
+    /// The main document has been parsed and is ready.
     MainDocument(DummyDocument),
+    /// The resource has been rendered in a viewer (text, image, pdf, etc.).
     ViewerRendered(Bytes),
+    /// A download has been started (path to file).
     DownloadStarted(std::path::PathBuf),
+    /// A download has finished (path to file).
     DownloadFinished(std::path::PathBuf),
 
+    /// A stylesheet has been loaded and parsed.
     CssLoaded(DummyStylesheet),
+    /// A script has been loaded and executed.
     ScriptExecuted(DummyJsDocument),
+    /// An image has been decoded.
     ImageDecoded(image::DynamicImage),
+    /// A font has been loaded.
     FontLoaded(DummyFont),
 
+    /// The request was blocked (with reason).
     Blocked(BlockReason),
+    /// The request was cancelled (e.g., navigation away).
     Cancelled,
 }
 
@@ -61,7 +70,7 @@ enum BodyContent {
 }
 
 impl BodyContent {
-    // Convert to bytses, collecting the stream if necessary. Will take the peek buffer into account (if needed)
+    // Convert to bytes, collecting the stream if necessary. Will take the peek buffer into account (if needed)
     async fn to_bytes(self, peek_buf: PeekBuf) -> anyhow::Result<Bytes> {
         match self {
             BodyContent::Stream { shared } => {
@@ -82,7 +91,7 @@ pub async fn route_response_for(
     policy: &UaPolicy,
     hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
-    // Fetch the meta data, peek buffer and content (type)
+    // Fetch the metadata, peek buffer and content (type)
     let (meta, body_content, peek_buf) = match fetch_result {
         FetchResult::Stream { meta, peek_buf, shared } => (meta, BodyContent::Stream { shared }, peek_buf),
         FetchResult::Buffered { meta, body } => {
@@ -120,23 +129,6 @@ pub async fn route_response_for(
                         }
                     };
                     Ok(RoutedOutcome::MainDocument(doc))
-                    // Render through the HTML parser
-                    // if let Some(reader) = shared {
-                    //     let doc = crate::engine::tab::worker::parse_main_document_stream(
-                    //         req.tab_id, req.nav_id, meta.final_url.clone(), reader, req.cancel.clone(),
-                    //         DummyHtml5Config::default(),
-                    //         |evt| { let _ = event_tx.send(evt); },
-                    //         |fetch_req| { let _ = io_tx.send(fetch_req); },
-                    //     ).await.unwrap_or(Document("".to_string()));
-                    //     NavigationResult::Document { meta, doc }
-                    // } else {
-                    //     let bytes = body.as_ref().map(|b| b.as_ref()).unwrap_or(&peek);
-                    //     let doc = crate::engine::tab::worker::parse_main_document_bytes(
-                    //         req.tab_id, req.nav_id, meta.final_url.clone(), bytes,
-                    //         ignore_cache, event_tx.clone()
-                    //     ).await.unwrap_or(Document("".to_string()));
-                    //     NavigationResult::Document { meta, doc }
-                    // }
                 }
                 RenderTarget::CssParser => Ok(RoutedOutcome::ViewerRendered(
                     body_content.to_bytes(peek_buf).await?,
@@ -161,11 +153,6 @@ pub async fn route_response_for(
                 )),
             }
         }
-        // (RequestDestination::MainDocument, HandlingDecision::Render(_)) => {
-        //     // Render a non text viewer or html parser
-        //     // hooks.viewer.render_top_level(outcome.class, meta, top).await?;
-        //     Ok(RoutedOutcome::ViewerRendered(fetch_result.to_bytes().await?))
-        // }
         (RequestDestination::MainDocument, HandlingDecision::Download { .. }, _) => {
             // Download resource if it's a main document
             // let dest = hooks.download.resolve_or_prompt(path, &meta, &outcome).await?;
@@ -221,50 +208,4 @@ pub async fn route_response_for(
             Ok(RoutedOutcome::Blocked(BlockReason::Policy))
         }
     }
-}
-
-/// Fetch a subresource and route it based on its destination and the UA policy.
-#[allow(unused)]
-pub async fn fetch_and_route_subresource(
-    zone_id: ZoneId,
-    parent_handle: &FetchHandle,
-    parent_request: &FetchRequest,
-    hint: ResourceHint,
-    io_tx: IoChannel,
-    policy: &UaPolicy,
-    hooks: &mut Hooks,
-) -> anyhow::Result<RoutedOutcome> {
-    let sub_req = FetchRequest {
-        req_id: RequestId::new(),
-        reference: parent_request.reference,
-        key_data: FetchKeyData {
-            url: hint.url,
-            method: Method::GET,
-            headers: Default::default(),
-        },
-        priority: hint.priority,
-        kind: resource_kind_from_dest(hint.dest),
-        initiator: Initiator::Parser,
-        streaming: true,
-        auto_decode: true,
-        max_bytes: None,
-    };
-
-    let (handle, rx) = submit_to_io(zone_id, sub_req, io_tx, Some(parent_handle.cancel.clone()))
-        .await
-        .map_err(|e| anyhow!("Failed to submit fetch to IO thread: {}", e))?;
-
-    let fetch_result: FetchResult = rx
-        .await
-        .map_err(|e| anyhow!("Failed to receive fetch result: {}", e))?;
-
-    route_response_for(
-        hint.dest,
-        handle,
-        parent_request.clone(),
-        fetch_result,
-        policy,
-        hooks,
-    )
-    .await
 }
