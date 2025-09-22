@@ -11,7 +11,7 @@ use crate::engine::UaPolicy;
 use crate::html::{DummyDocument, ResourceHint};
 use crate::net::decision::types::BlockReason;
 use crate::net::{decide_handling, stream_to_bytes, submit_to_io, HandlingDecision, RenderTarget, RequestDestination, SharedBody};
-use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, ResourceKind};
+use crate::net::types::{FetchHandle, FetchKeyData, FetchRequest, FetchResult, Initiator, ResourceKind};
 use crate::zone::ZoneId;
 
 pub enum RoutedOutcome {
@@ -74,6 +74,7 @@ impl BodyContent {
 /// Route a fetch result based on its destination and the UA policy.
 pub async fn route_response_for(
     dest: RequestDestination,
+    handle: FetchHandle,
     request: FetchRequest,
     fetch_result: FetchResult,
     policy: &UaPolicy,
@@ -105,10 +106,10 @@ pub async fn route_response_for(
                 RenderTarget::HtmlParser => {
                     let doc = match body_content {
                         BodyContent::Stream { shared } => {
-                            hooks.html.parse_stream(request, meta, peek_buf, shared).await?
+                            hooks.html.parse_stream(request, handle, meta, peek_buf, shared).await?
                         }
                         BodyContent::Buffered { body } => {
-                            hooks.html.parse_bytes(request, meta, body.as_ref()).await?
+                            hooks.html.parse_bytes(request, handle, meta, body.as_ref()).await?
                         }
                     };
                     Ok(RoutedOutcome::MainDocument(doc))
@@ -204,13 +205,13 @@ pub async fn route_response_for(
 /// Fetch a subresource and route it based on its destination and the UA policy.
 pub async fn fetch_and_route_subresource(
     zone_id: ZoneId,
+    parent_handle: &FetchHandle,
     parent_request: &FetchRequest,
     hint: ResourceHint,
     io_tx: IoChannel,
     policy: &UaPolicy,
     hooks: &mut Hooks,
 ) -> anyhow::Result<RoutedOutcome> {
-    // let (tx, rx) = oneshot::channel();
 
     let sub_req = FetchRequest {
         req_id: RequestId::new(),
@@ -228,11 +229,11 @@ pub async fn fetch_and_route_subresource(
         max_bytes: None,
     };
 
-    let (_handle, rx) = submit_to_io(zone_id, sub_req, io_tx).await
+    let (handle, rx) = submit_to_io(zone_id, sub_req, io_tx, Some(parent_handle.cancel.clone())).await
         .map_err(|e| anyhow!("Failed to submit fetch to IO thread: {}", e))?;
 
     let fetch_result: FetchResult = rx.await
         .map_err(|e| anyhow!("Failed to receive fetch result: {}", e))?;
 
-    route_response_for(hint.dest, parent_request.clone(), fetch_result, policy, hooks).await
+    route_response_for(hint.dest, handle, parent_request.clone(), fetch_result, policy, hooks).await
 }

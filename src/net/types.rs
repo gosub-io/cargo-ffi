@@ -90,6 +90,20 @@ pub struct FetchResultMeta {
     pub has_body: bool,
 }
 
+impl Default for FetchResultMeta {
+    fn default() -> Self {
+        Self {
+            final_url: Url::parse("about:blank").unwrap(),
+            status: 0,
+            status_text: "".into(),
+            headers: HeaderMap::new(),
+            content_length: None,
+            content_type: None,
+            has_body: true,
+        }
+    }
+}
+
 /// Priority of the scheduled request. Documents usually have high priority, while images have low.
 /// Currently, the scheduler uses a round-robin system to load resources
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]

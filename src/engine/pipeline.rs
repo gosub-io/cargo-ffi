@@ -8,6 +8,7 @@ use crate::engine::pipeline::image::{ImagePipeline, ImagePipelineImpl};
 use crate::engine::pipeline::js::{JsPipeline, JsPipelineImpl};
 use crate::engine::pipeline::font::{FontPipeline, FontPipelineImpl};
 use crate::engine::types::IoChannel;
+use crate::zone::ZoneId;
 
 pub mod html;
 pub mod css;
@@ -29,9 +30,9 @@ pub struct Hooks {
 }
 
 impl Hooks {
-    pub fn new(io_tx: IoChannel) -> Self {
+    pub fn new(zone_id: ZoneId, io_tx: IoChannel) -> Self {
         Self {
-            html: Box::new(HtmlPipelineImpl::new(io_tx)),
+            html: Box::new(HtmlPipelineImpl::new(zone_id, io_tx)),
             css: Box::new(CssPipelineImpl {}),
             js: Box::new(JsPipelineImpl {}),
             images: Box::new(ImagePipelineImpl {}),

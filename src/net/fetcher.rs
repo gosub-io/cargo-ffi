@@ -63,7 +63,7 @@ impl Default for FetcherConfig {
 }
 
 /// Represents an in-flight request, including its associated waiter and streaming preference.
-struct FetchInflightEntry {
+pub struct FetchInflightEntry {
     /// Cancellation token for aborting the request
     parent_cancel: CancellationToken,
     /// Waiter for managing requests

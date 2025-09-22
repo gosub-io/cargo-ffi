@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-use crate::net::{route_response_for, FetchInflightMap, RequestDestination, RoutedOutcome};
+use crate::net::{route_response_for, submit_to_io, RequestDestination, RoutedOutcome};
 use crate::net::types::{FetchKeyData, FetchRequest, FetchResult, Initiator, NetError, Priority, RequestReference, ResourceKind};
 use crate::tab::services::EffectiveTabServices;
 use crate::tab::state::{TabActivityMode, TabRuntime, TabState};
@@ -29,7 +29,8 @@ use crate::util::spawn_named;
 
 #[derive(Debug)]
 pub enum NavigationResult {
-    Err{ nav_id: NavigationId, error: NavigationError },
+    Ok { nav_id: NavigationId, final_url: Url, title: Option<String> },
+    Err { nav_id: NavigationId, error: NavigationError },
 }
 
 // Current active navigation
@@ -37,6 +38,12 @@ struct ActiveNav {
     pub nav_id: NavigationId,
     pub cancel: CancellationToken,
     pub url: Url,
+}
+
+struct NavJoin {
+    // nav_id: NavigationId,
+    cancel: CancellationToken,
+    rx: oneshot::Receiver<NavigationResult>,
 }
 
 pub struct TabWorker {
@@ -102,8 +109,7 @@ pub struct TabWorker {
     /// Keeps track of the tab worker runtime data
     pub(crate) runtime: TabRuntime,
 
-    // nav_inflight_map: NavInflightMap,
-    fetch_inflight_map: Arc<FetchInflightMap>,
+    load: Option<NavJoin>,
 
     /// Current active navigation (if any)
     active_nav: Option<ActiveNav>,
@@ -144,8 +150,7 @@ impl TabWorker {
             desired_viewport: Default::default(),
             dirty_after_inflight: false,
             runtime: TabRuntime::default(),
-            nav_inflight_map: NavInflightMap::default(),
-            fetch_inflight_map: zone_context.fetch_inflight_map.clone(),
+            load: None,
             active_nav: None,
         }
     }
@@ -181,15 +186,11 @@ impl TabWorker {
                 // In-flight load completion
                 result = async {
                     // Wait until the self.runtime.load.rx channel (if any) resolves
-                    let load = self.runtime.load.take().expect("select! branch is guarded by is_some()");
+                    let load = self.load.take().expect("select! branch is guarded by is_some()");
                     load.rx.await
-                }, if self.runtime.load.is_some() => {
+                }, if self.load.is_some() => {
                     match result {
-                        Ok(res) => {
-                            if let Some(loaded_url) = self.runtime.loaded_url.take() {
-                                self.on_load_result(loaded_url, res);
-                            }
-                        },
+                        Ok(res) => self.on_nav_result(res),
                         Err(e) => {
                             log::error!("Tab {:?} load receive error: {}", self.tab_id, e);
                         }
@@ -210,79 +211,37 @@ impl TabWorker {
         self.services.storage.drop_tab(self.zone_id, self.tab_id);
     }
 
-    fn on_load_result(&mut self, url: Url, result: NavigationResult) {
-        let Some(current) = self.runtime.load.as_ref() else {
-            return;
-        };
-        let current_nav = current.nav_id;
+    fn on_nav_result(&mut self, res: NavigationResult) {
+        match res {
+            NavigationResult::Ok { nav_id, final_url, title } => {
+                self.current_url = Some(final_url.clone());
+                if let Some(t) = title { self.title = t; }
+                self.is_loading = false;
+                self.is_error = false;
+                self.state = TabState::Idle;
+                self.runtime.dirty = true;
 
-        println!("----------------------------------------------------------------------\n");
-        println!("We just called on_load_result for tab {:?} nav {:?} url {}", self.tab_id, current_nav, url);
-        dbg!(&result);
-        println!("----------------------------------------------------------------------\n");
+                self.send_event(EngineEvent::Navigation {
+                    tab_id: self.tab_id,
+                    event: NavigationEvent::Finished { nav_id, url: final_url },
+                });
+            }
+            NavigationResult::Err { nav_id, error } => {
+                self.is_loading = false;
+                self.is_error = true;
+                self.state = TabState::Failed(error.to_string());
+                self.runtime.dirty = true;
 
-        // match res {
-        //     Ok((completed_nav, Ok(resp))) => {
-        //         if completed_nav != current_nav {
-        //             return
-        //         }
-        //
-        //         // Store any cookies found in the response into the cookie jar
-        //         self.services.cookie_jar.write().store_response_cookies(&resp.meta.final_url, &resp.meta.headers);
-        //
-        //         self.current_url = Some(resp.meta.final_url.clone());
-        //         self.pending_url = None;
-        //         self.is_loading = false;
-        //         self.is_error = false;
-        //         self.state = TabState::Loaded;
-        //         self.runtime.dirty = true;
-        //         self.runtime.load = None;
-        //
-        //         self.sink.set_current_url(resp.meta.final_url.clone());
-        //
-        //         // Set the document into the browsing context
-        //         if let Resource::Html(doc) = resp.resource {
-        //             self.context.set_raw_html(doc.raw_html.as_str())
-        //         }
-        //         // self.context.set_raw_html(String::from_utf8_lossy(resp.body.as_slice()).as_ref());
-        //
-        //         self.send_event(EngineEvent::Navigation {
-        //             tab_id: self.tab_id,
-        //             event: NavigationEvent::Finished {
-        //                 nav_id: completed_nav,
-        //                 url: resp.meta.final_url.clone(),
-        //             }
-        //         });
-        //     }
-        //     Ok((completed_nav, Err(e))) => {
-        //         if completed_nav != current_nav {
-        //             return;
-        //         }
-        //
-        //         self.state = TabState::Failed(format!("Tab {:?} error: {}", self.tab_id, e));
-        //         self.is_loading = false;
-        //         self.is_error = true;
-        //         self.runtime.dirty = true;
-        //         self.runtime.load = None;
-        //
-        //         self.send_event(EngineEvent::Navigation {
-        //             tab_id: self.tab_id,
-        //             event: NavigationEvent::Failed {
-        //                 nav_id: Some(completed_nav),
-        //                 url: url.clone(),
-        //                 error: Arc::new(anyhow!(e.to_string()).into()),
-        //             },
-        //         });
-        //     }
-        //     Err(_) => {
-        //         self.runtime.load = None;
-        //
-        //         self.send_event(EngineEvent::Navigation {
-        //             tab_id: self.tab_id,
-        //             event: NavigationEvent::Cancelled { nav_id: current_nav, url: url.clone(), reason: CancelReason::ExplicitCancel },
-        //         });
-        //     }
-        // }
+                let url = self.active_nav.as_ref().map(|a| a.url.clone())
+                    .or_else(|| self.pending_url.clone())
+                    .unwrap_or_else(|| Url::parse("about:blank").unwrap());
+
+                self.send_event(EngineEvent::Navigation {
+                    tab_id: self.tab_id,
+                    event: NavigationEvent::Failed { nav_id: Some(nav_id), url, error: Arc::new(error.into()) },
+                });
+            }
+        }
     }
 
     fn handle_tab_command(&mut self, cmd: TabCommand) -> ControlFlow {
@@ -327,7 +286,7 @@ impl TabWorker {
                 ControlFlow::Continue
             }
             TabCommand::CancelNavigation => {
-                if let Some(load) = self.runtime.load.take() {
+                if let Some(load) = self.load.take() {
                     log::warn!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
                     load.cancel.cancel();
                 }
@@ -336,6 +295,7 @@ impl TabWorker {
             TabCommand::SubmitDecision { decision_token, action, .. } => {
                 // Proxy the submit decision to the I/O thread
                 let _ = self.zone_context.io_tx.send(IoCommand::Decision {
+                    zone_id: self.zone_id,
                     token: decision_token,
                     action
                 });
@@ -362,6 +322,7 @@ impl TabWorker {
 
     /// Navigate to a new URL, cancelling any in-flight navigation.
     fn navigate_to(&mut self, url: impl Into<String>, _ignore_cache: bool) {
+        // Cancel any previous running navigation in this tab
         self.cancel_current_nav();
 
         let url = match self.parse_url(url.into()) {
@@ -369,21 +330,48 @@ impl TabWorker {
             Err(_) => return,
         };
 
+        if let Err(e) = self.bind_storage_for(url.clone()) {
+            self.send_event(EngineEvent::Navigation {
+                tab_id: self.tab_id,
+                event: NavigationEvent::Failed {
+                    nav_id: None,
+                    url: url.clone(),
+                    error: Arc::new(e),
+                },
+            });
+            return;
+        }
+
         let nav_id = NavigationId::new();
-        let cancel = CancellationToken::new();
+        let parent_cancel = CancellationToken::new();
         self.active_nav = Some(ActiveNav {
             nav_id,
-            cancel: cancel.clone(),
-            url,
+            cancel: parent_cancel.clone(),
+            url: url.clone(),
         });
 
-        self.bind_storage_for(&url);
+        {
+            let mut guard = self.zone_context.request_reference_map.write().unwrap();
+            guard.insert(RequestReference::Navigation(nav_id), self.tab_id);
+        }
+
+        self.sink.set_nav(nav_id);
+        self.pending_url = Some(url.clone());
+        self.is_loading = true;
+        self.is_error = false;
+        self.state = TabState::Loading;
+        self.runtime.dirty = true;
+
+        self.send_event(EngineEvent::Navigation {
+            tab_id: self.tab_id,
+            event: NavigationEvent::Started { nav_id, url: url.clone() }
+        });
 
         let req = FetchRequest {
             reference: RequestReference::Navigation(nav_id),
             req_id: RequestId::new(),
             key_data: FetchKeyData {
-                url: url.clone().into(),
+                url: url.clone(),
                 method: Method::GET,
                 headers: Default::default(),
             },
@@ -395,147 +383,62 @@ impl TabWorker {
             max_bytes: None,
         };
 
-        let (handle, top_rx, _joined) = self.fetch_inflight_map.join_or_start(&req, true);
-
-        self.nav_inflight_map.replace_for_tab(
-            self.tab_id,
-            NavInflightEntry {
-                nav_id,
-                cancel: cancel.clone(),
-                top_rx,
-                state: NavState::PendingTop,
-            },
-        );
-
-
-
-        NavInflight::start_navigation(
-            &mut self.runtime,
-            self.tab_id,
-            url,
-            self.zone_context.clone(),
-            self.services.clone(),
-            self.sink.clone(),
-        );
-
-        // Cancel any in-flight load
-        if let Some(load) = self.runtime.load.take() {
-            log::warn!("**** Cancelling in-flight load for tab {:?}", self.tab_id);
-            load.cancel.cancel();
-        }
-
-
-        // Prepare storage for the URL
-        if let Err(e) = self.prepare_storage_for(&real_url) {
-            self.send_event(EngineEvent::Navigation {
-                tab_id: self.tab_id,
-                event: NavigationEvent::Failed {
-                    nav_id: None,
-                    url: real_url.clone(),
-                    error: Arc::new(e),
-                },
-            });
-            return;
-        }
-
-        // Create new navigation ID for this navigation request
-        let nav_id = NavigationId::new();
-        self.sink.set_nav(nav_id);
-
-        self.pending_url = Some(real_url.clone());
-        self.is_loading = true;
-        self.is_error = false;
-        self.state = TabState::Loading;
-        self.runtime.dirty = true;
-
-        self.send_event(EngineEvent::Navigation {
-            tab_id: self.tab_id,
-            event: NavigationEvent::Started { nav_id, url: real_url.clone() }
-        });
-
-
-        // Setup cancellation, the response channel and spawn the load task
-        let cancel = CancellationToken::new();
-        let cancel_child = cancel.child_token();
         let (tx_done, rx_done) = oneshot::channel::<NavigationResult>();
 
         let tab_id = self.tab_id;
-        let event_tx = self.zone_context.event_tx.clone();
+        let zone_id = self.zone_id;
         let io_tx = self.zone_context.io_tx.clone();
-        let request_url = real_url.clone();
+        let event_tx = self.zone_context.event_tx.clone();
 
         let span = tracing::info_span!(
             "tab_nav",
             tab_id=%tab_id,
             nav_id=%nav_id.0,
-            scheme=%request_url.scheme(),
-            host=%request_url.host_str().unwrap_or(""),
-            path=%request_url.path(),
+            scheme=%url.scheme(),
+            host=%url.host_str().unwrap_or(""),
+            path=%url.path(),
         );
 
-        // Connect the request reference to the tab id. This will allow the request to track which tab
-        // it belongs to when emitting events to the UA.
-        let mut guard = self.zone_context.request_reference_map.write().unwrap();
-        guard.insert(RequestReference::Navigation(nav_id), tab_id);
-
-        let io_tx_clone = io_tx.clone();
+        let parent_cancel_clone = parent_cancel.clone();
 
         // Spawn the actual fetcher into a seperate task
         tokio::spawn(async move {
             let _enter = span.enter();
 
-            // Submit a streaming fetch request
-            let (tx_fetch, rx_fetch) = oneshot::channel::<FetchResult>();
-            let req = FetchRequest {
-                reference: RequestReference::Navigation(nav_id),
-                req_id: RequestId::new(),
-                key_data: FetchKeyData {
-                    url: request_url.clone(),
-                    method: Method::GET,
-                    headers: Default::default(),
-                },
-                priority: Priority::High,
-                kind: ResourceKind::Document,
-                initiator: Initiator::Navigation,
-                streaming: true,
-                // reply: Some(Arc::new(tx_fetch)),
-                auto_decode: true,
-                max_bytes: None,
-                // cancel: cancel_child.clone(),
-            };
+            let submit = submit_to_io(zone_id, req.clone(), io_tx.clone(), Some(parent_cancel_clone.clone())).await;
 
-            let req_handle = submit_to_io(req, io_tx_clone).await;
-            if req_handle.is_err() {
-                // Couldn't send the request to the I/O thread
-                let _ = tx_done.send(NavigationResult::Err{
-                    nav_id,
-                    error: NavigationError::NetworkError("I/O channel closed".into())
-                });
-                return;
-            }
-
-            // Wait for fetch to complete or cancellation
-            let fetch_result = select! {
-                _ = cancel_child.cancelled() => {
-                    let _ = tx_done.send(NavigationResult::Err{
+            let (handle, rx) = match submit {
+                Ok(ok) => ok,
+                Err(_) => {
+                    let _ = tx_done.send(NavigationResult::Err {
                         nav_id,
-                        error: NavigationError::Cancelled("Navigation cancelled".into())
+                        error: NavigationError::NetworkError("I/O channel closed".into())
                     });
                     return;
                 }
-                r = rx_fetch => match r {
+            };
+
+            let fetch_result: FetchResult = tokio::select! {
+                _ = parent_cancel_clone.cancelled() => {
+                    handle.cancel.cancel();
+                    let _ = tx_done.send(NavigationResult::Err {
+                        nav_id,
+                        error: NavigationError::Cancelled("Response channel closed".into())
+                    });
+                    return;
+                }
+                r = rx => match r {
                     Ok(r) => r,
                     Err(_) => {
-                        let _ = tx_done.send(NavigationResult::Err{
+                        let _ = tx_done.send(NavigationResult::Err {
                             nav_id,
-                            error: NavigationError::NetworkError("Response channel closed".into())
+                            error: NavigationError::Cancelled("Response channel closed".into())
                         });
                         return;
                     }
                 }
             };
 
-            // This should be fed by the UA
             let ua_policy = UaPolicy {
                 enable_sniffing: false,
                 enable_sniffing_navigation_upgrade: false,
@@ -544,23 +447,43 @@ impl TabWorker {
                 allow_download_without_user_activation: false,
             };
 
-            let mut hooks = Hooks::new(io_tx_clone.clone());
+            let mut hooks = Hooks::new(zone_id, io_tx.clone());
 
             let outcome = route_response_for(
                 RequestDestination::MainDocument,
+                handle,
                 req.clone(),
                 fetch_result.clone(),
                 &ua_policy,
                 &mut hooks,
-                // cancel_child.clone()
             ).await;
 
             match outcome {
-                Ok(RoutedOutcome::MainDocument(_doc)) => {
-                    println!("Tab[{:?}] RoutedOutcome::MainDocument", tab_id);
-                    println!("{}", _doc.final_url);
-                    println!("{}", _doc.title.unwrap());
-                    println!("{}", _doc.raw_html);
+                Ok(RoutedOutcome::MainDocument(doc)) => {
+                    let _ = tx_done.send(NavigationResult::Ok {
+                        nav_id,
+                        final_url: doc.final_url.clone(),
+                        title: doc.title.clone(),
+                    });
+
+                    // event_tx.send(EngineEvent::Navigation {
+                    //     tab_id,
+                    //     event: NavigationEvent::Finished {
+                    //         nav_id,
+                    //         url: doc.final_url.clone(),
+                    //     },
+                    // }).ok();
+                    //
+                    // println!("Tab[{:?}] RoutedOutcome::MainDocument", tab_id);
+                    // println!("{}", doc.final_url);
+                    // println!("{}", doc.title.unwrap());
+                    // println!("{}", doc.raw_html);
+
+                    // return NavigationResult::Ok {
+                    //     nav_id,
+                    //     final_url: doc.final_url.clone(),
+                    //     title: doc.title.clone(),
+                    // };
                 },
                 Ok(RoutedOutcome::ViewerRendered(_doc)) => {
                     println!("Tab[{:?}] RoutedOutcome::ViewerRendered", tab_id);
@@ -598,7 +521,7 @@ impl TabWorker {
 
                     let final_url = match fetch_result.meta() {
                         Some(meta) => meta.final_url.clone(),
-                        None => request_url.clone(),
+                        None => url.clone(),
                     };
 
                     _ = event_tx.send(EngineEvent::Navigation {
@@ -624,7 +547,10 @@ impl TabWorker {
             }
         });
 
-        self.runtime.load = Some(NavInflight { nav_id, cancel: cancel.clone(), rx: rx_done });
+        self.load = Some(NavJoin {
+            cancel: parent_cancel.clone(),
+            rx: rx_done
+        });
     }
 
     /// Do a draw tick. This will be called based on the FPS that is requested

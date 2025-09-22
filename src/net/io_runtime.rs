@@ -76,18 +76,17 @@ pub struct IoRouter {
     cfg: FetcherConfig,
     /// Shared engine context for event broadcasting and request tracking
     engine_ctx: Arc<EngineContext>,
-    // Send "true" when we want to shut down the IO thread including ALL zone fetchers
-    io_shutdown_rx: watch::Receiver<bool>,
+    // // Send "true" when we want to shut down the IO thread including ALL zone fetchers
+    // io_shutdown_rx: watch::Receiver<bool>,
 }
 
 impl IoRouter {
 
-    pub fn new(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>, io_shutdown_rx: watch::Receiver<bool>) -> Self {
+    pub fn new(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Self {
         Self {
             zones: DashMap::new(),
             cfg,
             engine_ctx,
-            io_shutdown_rx,
         }
     }
 
@@ -151,13 +150,20 @@ impl IoRouter {
 pub async fn submit_to_io(
     zone_id: ZoneId,
     req: FetchRequest,
-    io_tx: IoChannel
+    io_tx: IoChannel,
+    parent_cancel: Option<CancellationToken>,
 ) -> anyhow::Result<(FetchHandle, oneshot::Receiver<FetchResult>)> {
     let (reply_tx, reply_rx) = oneshot::channel::<FetchResult>();
+
+    let cancel = match parent_cancel {
+        Some(parent) => parent.child_token(),
+        None => CancellationToken::new(),
+    };
+
     let handle = FetchHandle {
         req_id: req.req_id,
         key: req.key_data.clone(),
-        cancel: CancellationToken::new(),
+        cancel: cancel.clone(),
     };
 
     io_tx.send(IoCommand::Fetch{
@@ -178,7 +184,7 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
     let join_handle = spawn_named("I/O Thread", async move {
-        let router = IoRouter::new(cfg, engine_ctx, shutdown_rx.clone());
+        let router = IoRouter::new(cfg, engine_ctx);
 
         loop {
             tokio::select! {

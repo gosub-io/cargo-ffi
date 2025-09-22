@@ -10,10 +10,6 @@ pub(crate) struct TabRuntime {
     pub fps: u32,
     /// Interval timer for driving ticks
     pub interval: tokio::time::Interval,
-    // /// Current in-flight load operation, if any
-    // pub load: Option<NavInflight>,
-    /// Currently loading URL (if any)
-    pub loaded_url: Option<Url>,
     // /// Current viewport size
     // pub viewport: Viewport,
     /// Has something changed that requires a redraw
@@ -30,9 +26,6 @@ impl Default for TabRuntime {
             drawing_enabled: false,
             fps,
             interval: tokio::time::interval(Duration::from_secs_f64(1.0 / fps as f64)),
-            // load: None,
-            loaded_url: None,
-            // viewport: Viewport::default(),
             dirty: false,
             last_tick_draw: std::time::Instant::now(),
         }
