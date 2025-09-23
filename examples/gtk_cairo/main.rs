@@ -23,11 +23,23 @@ use url::Url;
 use uuid::uuid;
 use gosub_engine::events::TabCommand;
 use gosub_engine::tab::{TabDefaults, TabHandle, TabId};
+use once_cell::sync::Lazy;
+use tokio::runtime::{Builder, Runtime};
 
 mod compositor;
 mod tiling;
 
 const DEFAULT_MAIN_ZONE: uuid::Uuid = uuid!("95d9c701-5f1b-43ea-ba7e-bc509ee8aa54");
+
+// Global Tokio runtime for the whole GTK app
+static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
+    Builder::new_multi_thread()
+        .enable_io()
+        .enable_time()
+        .thread_name("gosub-rt")
+        .build()
+        .expect("init tokio runtime")
+});
 
 // fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
 //     eng.get_tab(tab_id)
@@ -44,10 +56,14 @@ fn main() {
         .build();
 
     app.connect_activate(move |app| {
+
+        // Enter Tokio so any internal tokio::spawn/time/io in engine works
+        let _rt_guard = TOKIO_RT.enter();
+
         // Start the engine
         let backend = gosub_engine::render::backends::cairo::CairoBackend::new();
         let mut engine = GosubEngine::new(None, Box::new(backend));
-        let engine_join_handle = engine.start().expect("engine start failed");
+        let _engine_join_handle = engine.start().expect("engine start failed");
         let mut event_rx = engine.subscribe_events();
 
         // Setup zone
@@ -77,25 +93,22 @@ fn main() {
 
         let tabs: Rc<RefCell<HashMap<TabId, TabHandle>>> = Rc::new(RefCell::new(HashMap::new()));
 
-        // Start with a single tab
-        let tab = zone.borrow_mut().create_tab(TabDefaults {
-            url: None,
-            title: Some("New Tab".to_string()),
-            viewport: Some(Viewport::new(0, 0, 800, 600)),
-        }, None)?;
-        tabs.borrow_mut().insert(tab.id, tab);
+        let tab = TOKIO_RT.block_on(async {
+            zone.borrow_mut().create_tab(TabDefaults {
+                url: None,
+                title: Some("New Tab".to_string()),
+                viewport: Some(Viewport::new(0, 0, 800, 600)),
+            }, None).await
+        }).expect("create_tab failed");
+        let tab_id = tab.tab_id;
+        tabs.borrow_mut().insert(tab_id, tab);
 
-        let active_tab: Rc<RefCell<TabId>> = Rc::new(RefCell::new(
-            *tabs.borrow().keys().next().expect("tab_id").clone()
-        ));
-
+        // Active tab id + last size (single source of truth)
+        let active_tab: Rc<RefCell<TabId>> = Rc::new(RefCell::new(tab_id));
         let last_size: Rc<RefCell<(i32, i32)>> = Rc::new(RefCell::new((800, 600)));
 
-        let tab0 = tabs.get(&tab.id).unwrap();
-
-        let root: LayoutHandle = Rc::new(RefCell::new(LayoutNode::Leaf(tab0)));
-        let active_tab = Rc::new(RefCell::new(tab0));
-        let last_size = Rc::new(RefCell::new((800i32, 600i32)));
+        // Tiling tree stores TabId, not TabHandle
+        let root: LayoutHandle = Rc::new(RefCell::new(LayoutNode::Leaf(*active_tab.borrow())));
 
         let address_entry = Entry::new();
         address_entry.set_placeholder_text(Some("Enter URL for active pane..."));
@@ -222,27 +235,41 @@ fn main() {
 
         let zone_for_split = zone.clone();
         let tabs_for_split = tabs.clone();
-        btn_split_col.connect_clicked(clone!(@strong root_split, @strong last_size_split, @strong drawing_split, @strong active_split => move |_| {
+        btn_split_col.connect_clicked(clone!(
+            @strong root_split,
+            @strong last_size_split,
+            @strong drawing_split,
+            @strong active_split,
+            @strong zone_for_split,
+            @strong tabs_for_split
+            => move |_| {
             // Open a new tab sized like the active pane
             let (w, h) = *last_size_split.borrow();
-            let new_tab = zone_for_split.borrow_mut().create_tab(TabDefaults {
-                url: None,
-                title: Some("New Tab".to_string()),
-                viewport: Some(Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)),
-            }, None).expect("create_tab failed");
-            tabs_for_split.borrow_mut().insert(new_tab.id, new_tab);
+
+
+            let new_tab = TOKIO_RT.block_on(async {
+                zone_for_split.borrow_mut().create_tab(TabDefaults {
+                    url: None,
+                    title: Some("New Tab".to_string()),
+                    viewport: Some(Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)),
+                }, None).await
+            })
+            .expect("create_tab failed");
+
+            let new_id = new_tab.tab_id;
+            tabs_for_split.borrow_mut().insert(new_id, new_tab);
 
             let target = *active_split.borrow();
-            split_leaf_into_cols(&root_split, target, vec![new_tab]);
+            split_leaf_into_cols(&root_split, target, vec![new_id]);
             // Send resizes to all leaves after split
             let mut pairs = Vec::new();
             compute_layout(&root_split.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
+            let tabs_ref = tabs_for_split.borrow();
             for (tab_id, r) in pairs {
-                tabs.get(&tab_id).map(|t| {
-                    let mut tab = t.lock().unwrap();
-                    tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
-                });
+                if let Some(tab) = tabs_ref.get(&tab_id) {
+                    _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                }
             }
 
             drawing_split.queue_draw();
@@ -256,23 +283,29 @@ fn main() {
         let tabs_for_split = tabs.clone();
         btn_split_row.connect_clicked(clone!(@strong root_split2, @strong last_size_split2, @strong drawing_split2, @strong active_split2 => move |_| {
             let (w, h) = *last_size_split2.borrow();
-            let new_tab = zone_for_split.borrow_mut().create_tab(TabDefaults {
-                url: None,
-                title: Some("New Tab".to_string()),
-                viewport: Some(Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)),
-            }, None).expect("create_tab failed");
-            tabs_for_split.borrow_mut().insert(new_tab.id, new_tab);
+
+            let new_tab = TOKIO_RT.block_on(async {
+                zone_for_split.borrow_mut().create_tab(TabDefaults {
+                    url: None,
+                    title: Some("New Tab".to_string()),
+                    viewport: Some(Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)),
+                }, None).await
+            })
+            .expect("create_tab failed");
+
+            let tab_id = new_tab.tab_id;
+            tabs_for_split.borrow_mut().insert(new_tab.tab_id, new_tab);
 
             let target = *active_split2.borrow();
-            split_leaf_into_rows(&root_split2, target, vec![new_tab]);
+            split_leaf_into_rows(&root_split2, target, vec![tab_id]);
             let mut pairs = Vec::new();
             compute_layout(&root_split2.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
+            let tabs_ref = tabs_for_split.borrow();
             for (tab_id, r) in pairs {
-                tabs.get(&tab_id).map(|t| {
-                    let mut tab = t.lock().unwrap();
-                    tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
-                });
+                if let Some(tab) = tabs_ref.get(&tab_id) {
+                    _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                }
             }
 
             drawing_split2.queue_draw();
@@ -282,6 +315,7 @@ fn main() {
         let last_size_close = last_size.clone();
         let drawing_close = drawing_area.clone();
         let active_close = active_tab.clone();
+        let tabs_for_close = tabs.clone();
         btn_close.connect_clicked(clone!(@strong root_close, @strong last_size_close, @strong drawing_close, @strong active_close => move |_| {
             let target = *active_close.borrow();
             if close_leaf(&root_close, target) {
@@ -293,12 +327,13 @@ fn main() {
                 let mut pairs = Vec::new();
                 compute_layout(&root_close.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
+                let tabs_ref = tabs_for_close.borrow();
                 for (tab_id, r) in pairs {
-                    tabs.get(&tab_id).map(|t| {
-                        let mut tab = t.lock().unwrap();
-                        tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
-                    });
+                    if let Some(tab) = tabs_ref.get(&tab_id) {
+                        _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                    }
                 }
+
                 drawing_close.queue_draw();
             }
         }));
@@ -316,56 +351,90 @@ fn main() {
 
             // Iterate all the tabs and draw their surfaces
             for (tab_id, r) in &pairs {
-                let mut binding = compositor_draw.borrow_mut();
-                if let Some(handle) = binding.frame_for_mut(*tab_id) {
-                    match handle {
-                    ExternalHandle::CpuPixelsOwned { width, height, stride, pixels, .. } => {
-                        let w = *width as i32;
-                        let h = *height as i32;
-                        let st = *stride as i32;
+                {
+                    let mut binding = compositor_draw.borrow_mut();
+                    if let Some(handle) = binding.frame_for_mut(*tab_id) {
+                        match handle {
+                            ExternalHandle::CpuPixelsPtr { width, height, stride, pixel_buf } => {
+                                let w = *width as i32;
+                                let h = *height as i32;
+                                let st = *stride as i32;
 
-                        let ptr = pixels.as_mut_ptr();
-                        let _len = pixels.len();
+                                // SAFETY: `ptr` must remain valid & mutable for `len` bytes during this paint.
+                                let surface = unsafe {
+                                    gtk4::cairo::ImageSurface::create_for_data_unsafe(
+                                        pixel_buf.as_ptr(),
+                                        gtk4::cairo::Format::ARgb32,
+                                        w,
+                                        h,
+                                        st,
+                                    ).expect("cairo surface over ptr")
+                                };
 
-                        let surface = unsafe {
-                            gtk4::cairo::ImageSurface::create_for_data_unsafe(
-                                ptr,
-                                gtk4::cairo::Format::ARgb32,
-                                w,
-                                h,
-                                st,
-                            ).expect("cairo surface over pixels")
-                        };
-                        surface.flush();
+                                surface.flush();
 
-                        cr.save().unwrap();
-                        cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
-                        cr.clip();
-                        cr.translate(r.x as f64, r.y as f64);
+                                cr.save().unwrap();
+                                cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+                                cr.clip();
+                                cr.translate(r.x as f64, r.y as f64);
 
-                        // Fit the frame into tile rect (simple scale-to-fill)
-                        let sw = *width as f64;
-                        let sh = *height as f64;
-                        if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
-                            cr.scale(r.w as f64 / sw, r.h as f64 / sh);
+                                let sw = *width as f64;
+                                let sh = *height as f64;
+                                if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
+                                    cr.scale(r.w as f64 / sw, r.h as f64 / sh);
+                                }
+                                cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+                                cr.paint().unwrap();
+                                cr.restore().unwrap();
+                                // `surface` drops here while `data` still points to valid pixels
+                            }
+                            ExternalHandle::CpuPixelsOwned { width, height, stride, pixels, .. } => {
+                                let w = *width as i32;
+                                let h = *height as i32;
+                                let st = *stride as i32;
+
+                                // Safe: create a surface over a &mut [u8]. Lifetime is tied to `surface`,
+                                // which we drop before `pixels` goes out of scope in this arm.
+                                // Use the unsafe pointer-based API to avoid `'static` borrow requirements.
+                                let surface = unsafe {
+                                    gtk4::cairo::ImageSurface::create_for_data_unsafe(
+                                        pixels.as_mut_ptr(),
+                                        gtk4::cairo::Format::ARgb32,
+                                        w, h, st
+                                    ).expect("cairo surface over Vec<u8> ptr")
+                                };
+
+                                surface.flush();
+
+                                cr.save().unwrap();
+                                cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+                                cr.clip();
+                                cr.translate(r.x as f64, r.y as f64);
+
+                                // Fit the frame into tile rect (simple scale-to-fill)
+                                let sw = *width as f64;
+                                let sh = *height as f64;
+                                if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
+                                    cr.scale(r.w as f64 / sw, r.h as f64 / sh);
+                                }
+
+                                // If you need HiDPI: cr.scale(1.0/scale_factor, 1.0/scale_factor) before painting
+                                cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+                                cr.paint().unwrap();
+                                cr.restore().unwrap();
+                            },
+                            _ => {
+                                eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
+                            }
                         }
-
-                        // If you need HiDPI: cr.scale(1.0/scale_factor, 1.0/scale_factor) before painting
-                        cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
-                        cr.paint().unwrap();
+                    } else {
+                        // draw placeholder
+                        cr.save().unwrap();
+                        cr.set_source_rgb(0.25, 0.25, 0.30);
+                        cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
+                        cr.fill().unwrap();
                         cr.restore().unwrap();
-                    },
-                    _ => {
-                        eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
                     }
-                }
-                } else {
-                    // draw placeholder
-                    cr.save().unwrap();
-                    cr.set_source_rgb(0.25, 0.25, 0.30);
-                    cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
-                    cr.fill().unwrap();
-                    cr.restore().unwrap();
                 }
             }
 
@@ -385,16 +454,15 @@ fn main() {
         // Resize pane
         let root_resize = root.clone();
         let last_size_resize = last_size.clone();
-        drawing_area.connect_resize(clone!(@strong root_resize, @strong last_size_resize => move |_area, w, h| {
+        let tabs_for_resize = tabs.clone();
+        drawing_area.connect_resize(clone!(@strong root_resize, @strong last_size_resize, @strong tabs_for_resize => move |_area, w, h| {
             *last_size_resize.borrow_mut() = (w, h);
             let mut pairs = Vec::new();
             compute_layout(&root_resize.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
-            let tabs_for_resize = tabs.clone();
             for (tab_id, r) in pairs {
-                if let Some(t) = tabs_for_resize.borrow().get(&tab_id) {
-                    let mut tab = t.lock().unwrap();
-                    tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                if let Some(tab) = tabs_for_resize.borrow().get(&tab_id) {
+                    _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
                 }
             }
         }));
@@ -426,9 +494,8 @@ fn main() {
             }
             let Ok(url) = Url::parse(&s) else { return; };
 
-            if let Some(handle) = tabs_for_nav.borrow().get(&*active_for_nav.borrow()) {
-                let mut tab = handle.lock().unwrap();
-                tab.send(TabCommand::Navigate { url: url.to_string() });
+            if let Some(tab) = tabs_for_nav.borrow().get(&*active_for_nav.borrow()) {
+                _ = tab.send(TabCommand::Navigate { url: url.to_string() });
             }
             draw_entry.queue_draw();
         }));
@@ -538,22 +605,26 @@ fn main() {
         // }));
 
 
-        // Event loop: redraw on any tab event (you might want to filter some out)
-        let drawing_for_events = drawing_area.clone();
-        glib::MainContext::default().spawn_local(async move {
+        // This will spawn a task in the GTK and in the tokio. If something is received in
+        // tokio, it will send a message to the GTK thread, which will then request a redraw.
+        use tokio::sync::mpsc;
+        let (tx_ui, mut rx_ui) = mpsc::unbounded_channel::<()>();
 
-            // If `event_rx` implements `Stream`, great; otherwise loop on `recv()`.
-            loop {
-                // Replace with your actual receive call; example:
-                if let Ok(_ev) = event_rx.recv().await {
-                    // optionally inspect _ev and only redraw affected rect
-                    drawing_for_events.queue_draw();
+        TOKIO_RT.spawn({
+            let mut event_rx_tokio = event_rx;
+            async move {
+                while event_rx_tokio.recv().await.is_ok() {
+                    let _ = tx_ui.send(());
                 }
-                // yield back to GTK frequently
-                glib::timeout_future_seconds(0).await;
             }
         });
-
+        // In GTK thread: on ping, request redraw
+        let drawing_for_events = drawing_area.clone();
+        glib::spawn_future_local(async move {
+            while let Some(()) = rx_ui.recv().await {
+                drawing_for_events.queue_draw();
+            }
+        });
     });
 
     app.run();

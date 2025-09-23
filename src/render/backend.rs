@@ -20,7 +20,7 @@
 use crate::engine::BrowsingContext;
 use crate::render::Viewport;
 use std::any::Any;
-use std::sync::Arc;
+use std::ptr::NonNull;
 
 /// A surface rect has the same properties as a viewport, but a surface rect
 /// is usually computed with DevicePixelRatio.
@@ -95,6 +95,11 @@ pub enum GpuPixelFormat {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct WgpuTextureId(pub u64);
 
+
+/// Safety: `ExternalHandle` can be sent between threads, but not shared.
+unsafe impl Send for ExternalHandle {}
+unsafe impl Sync for ExternalHandle {}
+
 /// Handle that the host/browser can use to composite a surface.
 ///
 /// Ownership and synchronization rules are backend-specific.
@@ -120,23 +125,24 @@ pub enum ExternalHandle {
         /// Stride in bytes. This is the number of bytes per row of pixels.
         stride: u32,
         /// Raw pixel data in RGBA8 format.
-        pixels: Arc<Box<[u8]>>,
+        pixels: Vec<u8>,
         /// Pixel format of the image.
         format: PixelFormat,
     },
 
-    // /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
-    // /// Valid for at least `height * stride` bytes until the next `render()` call on this surface.
-    // CpuPixelsPtr {
-    //     /// Width of the image in pixels.
-    //     width: u32,
-    //     /// Height of the image in pixels.
-    //     height: u32,
-    //     /// Stride in bytes. This is the number of bytes per row of pixels.
-    //     stride: u32,
-    //     /// Raw pixel data pointer in RGBA8 format.
-    //     ptr: NonNull<[u8]>,
-    // },
+    /// CPU pixels as a borrowed pointer. UNSAFE: caller must respect lifetime/size/stride.
+    /// Valid for at least `height * stride` bytes until the next `render()` call on this surface.
+    CpuPixelsPtr {
+        /// Width of the image in pixels.
+        width: u32,
+        /// Height of the image in pixels.
+        height: u32,
+        /// Stride in bytes. This is the number of bytes per row of pixels.
+        stride: u32,
+        /// Raw pixel data pointer in RGBA8 format.
+        pixel_buf: NonNull<u8>,       // This is not SEND + SYNC, we override this above
+    },
+
     /// GL / GLES texture. `target` is usually GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES.
     /// Optional `frame_id` helps hosts avoid sampling stale frames.
     GlTexture {
