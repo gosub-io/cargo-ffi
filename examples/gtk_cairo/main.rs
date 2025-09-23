@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use url::Url;
 use uuid::uuid;
-use gosub_engine::events::TabCommand;
+use gosub_engine::events::{EngineEvent, NavigationEvent, ResourceEvent, TabCommand};
 use gosub_engine::tab::{TabDefaults, TabHandle, TabId};
 use once_cell::sync::Lazy;
 use tokio::runtime::{Builder, Runtime};
@@ -30,6 +30,14 @@ mod compositor;
 mod tiling;
 
 const DEFAULT_MAIN_ZONE: uuid::Uuid = uuid!("95d9c701-5f1b-43ea-ba7e-bc509ee8aa54");
+
+
+#[derive(Debug, Clone)]
+enum UiMsg {
+    EngineEvent(EngineEvent),
+    #[allow(unused)]
+    Redraw,
+}
 
 // Global Tokio runtime for the whole GTK app
 static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
@@ -51,9 +59,25 @@ static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
 // }
 
 fn main() {
+    // let mut builder = env_logger::Builder::new();
+    // builder.filter_level(log::LevelFilter::Trace).target(env_logger::Target::Stderr).init();
+    // log::set_max_level(log::LevelFilter::Trace);
+
+
     let app = Application::builder()
         .application_id("io.gosub.engine")
         .build();
+
+    //
+    //  let rt = Builder::new_multi_thread()
+    //         .worker_threads(num_cpus::get())
+    //         .enable_io()
+    //         .enable_time()
+    //         .thread_name("gosub-rt")
+    //         .build()
+    //         .expect("init tokio runtime");
+    // let _ = rt.enter();
+
 
     app.connect_activate(move |app| {
 
@@ -64,7 +88,7 @@ fn main() {
         let backend = gosub_engine::render::backends::cairo::CairoBackend::new();
         let mut engine = GosubEngine::new(None, Box::new(backend));
         let _engine_join_handle = engine.start().expect("engine start failed");
-        let mut event_rx = engine.subscribe_events();
+        let event_rx = engine.subscribe_events();
 
         // Setup zone
         let zone_cfg = ZoneConfig::builder()
@@ -102,10 +126,12 @@ fn main() {
         }).expect("create_tab failed");
         let tab_id = tab.tab_id;
         tabs.borrow_mut().insert(tab_id, tab);
+        log::trace!("Created initial tab {:?}", tab_id);
 
         // Active tab id + last size (single source of truth)
         let active_tab: Rc<RefCell<TabId>> = Rc::new(RefCell::new(tab_id));
         let last_size: Rc<RefCell<(i32, i32)>> = Rc::new(RefCell::new((800, 600)));
+        log::trace!("Active tab id: {:?}", *active_tab.borrow());
 
         // Tiling tree stores TabId, not TabHandle
         let root: LayoutHandle = Rc::new(RefCell::new(LayoutNode::Leaf(*active_tab.borrow())));
@@ -248,13 +274,13 @@ fn main() {
 
 
             let new_tab = TOKIO_RT.block_on(async {
+                log::trace!("Created new tab");
                 zone_for_split.borrow_mut().create_tab(TabDefaults {
                     url: None,
                     title: Some("New Tab".to_string()),
                     viewport: Some(Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)),
                 }, None).await
-            })
-            .expect("create_tab failed");
+            }).expect("create_tab failed");
 
             let new_id = new_tab.tab_id;
             tabs_for_split.borrow_mut().insert(new_id, new_tab);
@@ -268,7 +294,11 @@ fn main() {
             let tabs_ref = tabs_for_split.borrow();
             for (tab_id, r) in pairs {
                 if let Some(tab) = tabs_ref.get(&tab_id) {
-                    _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                    let tab = tab.clone();
+                    let r = r.clone();
+                    TOKIO_RT.spawn(async move {
+                        let _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 }).await;
+                    });
                 }
             }
 
@@ -285,6 +315,7 @@ fn main() {
             let (w, h) = *last_size_split2.borrow();
 
             let new_tab = TOKIO_RT.block_on(async {
+                log::trace!("Created new tab");
                 zone_for_split.borrow_mut().create_tab(TabDefaults {
                     url: None,
                     title: Some("New Tab".to_string()),
@@ -304,7 +335,11 @@ fn main() {
             let tabs_ref = tabs_for_split.borrow();
             for (tab_id, r) in pairs {
                 if let Some(tab) = tabs_ref.get(&tab_id) {
-                    _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                    let tab = tab.clone();
+                    let r = r.clone();
+                    TOKIO_RT.spawn(async move {
+                        let _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 }).await;
+                    });
                 }
             }
 
@@ -317,6 +352,8 @@ fn main() {
         let active_close = active_tab.clone();
         let tabs_for_close = tabs.clone();
         btn_close.connect_clicked(clone!(@strong root_close, @strong last_size_close, @strong drawing_close, @strong active_close => move |_| {
+            log::trace!("Closing tab {:?}", *active_close.borrow());
+
             let target = *active_close.borrow();
             if close_leaf(&root_close, target) {
                 // Pick a new active from remaining leaves
@@ -330,7 +367,11 @@ fn main() {
                 let tabs_ref = tabs_for_close.borrow();
                 for (tab_id, r) in pairs {
                     if let Some(tab) = tabs_ref.get(&tab_id) {
-                        _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                        let tab = tab.clone();
+                        let r = r.clone();
+                        TOKIO_RT.spawn(async move {
+                            let _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 }).await;
+                        });
                     }
                 }
 
@@ -462,7 +503,11 @@ fn main() {
 
             for (tab_id, r) in pairs {
                 if let Some(tab) = tabs_for_resize.borrow().get(&tab_id) {
-                    _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                    let tab = tab.clone();
+                    let r = r.clone();
+                    TOKIO_RT.spawn(async move {
+                        let _ = tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 }).await;
+                    });
                 }
             }
         }));
@@ -484,18 +529,28 @@ fn main() {
 
         // Address entry: navigate active tab
         let tabs_for_nav = tabs.clone();
-        let active_for_nav = active_tab.clone();
+        let active_tab_for_nav = active_tab.clone();
         let draw_entry = drawing_area.clone();
         address_entry.connect_activate(clone!(@strong draw_entry => move |entry| {
+            log::trace!("navigate new tab");
+
             let mut s = entry.text().to_string();
             if !(s.starts_with("http://") || s.starts_with("https://")) {
                 s = format!("https://{s}");
                 entry.set_text(&s);
             }
+            log::trace!("s: {}", s);
             let Ok(url) = Url::parse(&s) else { return; };
 
-            if let Some(tab) = tabs_for_nav.borrow().get(&*active_for_nav.borrow()) {
-                _ = tab.send(TabCommand::Navigate { url: url.to_string() });
+            log::trace!("parse() success");
+            if let Some(tab) = tabs_for_nav.borrow().get(&*active_tab_for_nav.borrow()) {
+                log::trace!("sending navigate message");
+                let tab = tab.clone();
+                let url = url.clone();
+                TOKIO_RT.spawn(async move {
+                    let _ = tab.send(TabCommand::Navigate { url: url.to_string() }).await;
+                    let _ = tab.send(TabCommand::ResumeDrawing { fps: 1 }).await;
+                });
             }
             draw_entry.queue_draw();
         }));
@@ -608,24 +663,225 @@ fn main() {
         // This will spawn a task in the GTK and in the tokio. If something is received in
         // tokio, it will send a message to the GTK thread, which will then request a redraw.
         use tokio::sync::mpsc;
-        let (tx_ui, mut rx_ui) = mpsc::unbounded_channel::<()>();
+        let (ui_tx, mut ui_rx) = mpsc::unbounded_channel::<UiMsg>();
 
+        // let mut event_rx_tokio = event_rx.clone();
         TOKIO_RT.spawn({
-            let mut event_rx_tokio = event_rx;
+            log::trace!("Spawning event_rx task");
+            let ui_tx = ui_tx.clone();
+            let mut rx = event_rx;
             async move {
-                while event_rx_tokio.recv().await.is_ok() {
-                    let _ = tx_ui.send(());
+                while let Ok(evt) = rx.recv().await {
+                    log::trace!("Forwarding Engineevent to GTK thread: {:?}", evt);
+                    let _ = ui_tx.send(UiMsg::EngineEvent(evt));
                 }
+                log::trace!("event_rx task exiting");
             }
         });
         // In GTK thread: on ping, request redraw
         let drawing_for_events = drawing_area.clone();
         glib::spawn_future_local(async move {
-            while let Some(()) = rx_ui.recv().await {
-                drawing_for_events.queue_draw();
+            while let Some(msg) = ui_rx.recv().await {
+                log::trace!("Received UI message: {:?}", msg);
+                match msg {
+                    UiMsg::EngineEvent(evt) => {
+                        if matches!(evt, EngineEvent::Redraw { .. }) {
+                            drawing_for_events.queue_draw();
+                            continue;
+                        }
+
+                        handle_event(evt);
+                    }
+                    UiMsg::Redraw => {
+                        // Request a redraw
+                        drawing_for_events.queue_draw();
+                    }
+                }
             }
         });
     });
 
     app.run();
+}
+
+
+fn handle_event(evt: EngineEvent) -> bool {
+    match evt {
+        EngineEvent::EngineStarted => {
+            println!("Engine started");
+            true
+        }
+        EngineEvent::BackendChanged { .. } => {
+            println!("Backend changed");
+            true
+        }
+        EngineEvent::Warning { message } => {
+            println!("Engine Warning: {message}");
+            true
+        }
+        EngineEvent::EngineShutdown { reason } => {
+            println!("Engine shutdown: {reason}");
+            true
+        }
+        EngineEvent::ZoneCreated { zone_id } => {
+            println!("Zone created: {:?}", zone_id);
+            true
+        }
+        EngineEvent::ZoneClosed { zone_id } => {
+            println!("Zone closed: {:?}", zone_id);
+            true
+        }
+        EngineEvent::Redraw { tab_id, .. } => {
+            println!("Redraw requested for tab {:?}", tab_id);
+            true
+        }
+        EngineEvent::FrameComplete { .. } => {
+            println!("FrameComplete");
+            true
+        }
+        EngineEvent::TitleChanged { .. } => {
+            println!("TitleChanged");
+            true
+        }
+        EngineEvent::FavIconChanged { .. } => {
+            println!("FavIconChanged");
+            true
+        }
+        EngineEvent::LocationChanged { .. } => {
+            println!("LocationChanged");
+            true
+        }
+        EngineEvent::TabResized { tab_id, viewport } => {
+            println!("Tab {:?} resized to {:?}", tab_id, viewport);
+            true
+        }
+        EngineEvent::Navigation { tab_id, event } => {
+            match event {
+                NavigationEvent::Started { nav_id, url } => {
+                    println!("Tab {:?} navigation started: {} ({:?})", tab_id, url, nav_id);
+                    true
+                }
+                NavigationEvent::Committed { nav_id, url } => {
+                    println!("Tab {:?} navigation committed: {} ({:?})", tab_id, url, nav_id);
+                    true
+                }
+                NavigationEvent::Finished { nav_id, url } => {
+                    println!("Tab {:?} navigation finished: {} ({:?})", tab_id, url, nav_id);
+                    true
+                }
+                NavigationEvent::Failed { nav_id, url, error } => {
+                    println!("Tab {:?} navigation failed: {} ({:?}): {}", tab_id, url, nav_id, error);
+                    true
+                }
+                NavigationEvent::Progress { nav_id, received_bytes, expected_length, elapsed } => {
+                    if let Some(total) = expected_length {
+                        println!("Tab {:?} navigation progress: {:?}: {}/{} bytes in {:?}", tab_id, nav_id, received_bytes, total, elapsed);
+                    } else {
+                        println!("Tab {:?} navigation progress: {:?}: {} bytes in {:?}", tab_id, nav_id, received_bytes, elapsed);
+                    }
+                    true
+                }
+                NavigationEvent::FailedUrl { nav_id, url, error } => {
+                    println!("Tab {:?} navigation failed URL: {} ({:?}): {}", tab_id, url, nav_id, error);
+                    true
+                }
+                NavigationEvent::Cancelled { nav_id, url, reason } => {
+                    println!("Tab {:?} navigation cancelled: {} ({:?}): {}", tab_id, url, nav_id, reason);
+                    true
+                }
+                NavigationEvent::DecisionRequired { nav_id, meta, decision_token } => {
+                    println!("Tab {:?} navigation decision required: {:?}, meta: {:?} ({:?})", tab_id, nav_id, meta, decision_token);
+                    true
+                }
+            }
+        }
+        EngineEvent::Resource { tab_id, event } => {
+            match event {
+                ResourceEvent::Queued { request_id, reference, url, kind, initiator, priority } => {
+                    println!("Tab {:?}\n    rid: {:?}\n    reference: {:?}\n    url: {:?}\n    kind: {:?}\n    initiator: {:?}\n    priority: {:?}", tab_id, request_id, reference, url, kind, initiator, priority);
+                    true
+                }
+                ResourceEvent::Started { request_id, reference, url, kind, initiator } => {
+                    println!("Tab {:?} resource started\n    rid: {:?}\n    reference: {:?}\n    url: {:?}\n    kind: {:?}\n    initiator: {:?}", tab_id, request_id, reference, url, kind, initiator);
+                    true
+                }
+                ResourceEvent::Redirected { request_id, reference, from, to, status } => {
+                    println!("Tab {:?} resource redirected\n    rid: {:?}\n    reference: {:?}\n    from: {:?}\n    to: {:?}\n    status: {:?}", tab_id, request_id, reference, from, to, status);
+                    true
+                }
+                ResourceEvent::Progress { request_id, reference, received_bytes, expected_length, elapsed } => {
+                    if let Some(total) = expected_length {
+                        println!("Tab {:?} resource progress: {:?} {:?}: {}/{} bytes in {:?}", tab_id, request_id, reference, received_bytes, total, elapsed);
+                    } else {
+                        println!("Tab {:?} resource progress: {:?} {:?}: {} bytes in {:?}", tab_id, request_id, reference, received_bytes, elapsed);
+                    }
+                    true
+                }
+                ResourceEvent::Finished { request_id, reference, url, received_bytes, elapsed } => {
+                    println!("Tab {:?} resource finished\n    rid: {:?}\n    reference: {:?}\n    url: {:?}\n    received_bytes: {}\n    elapsed: {:?}", tab_id, request_id, reference, url, received_bytes, elapsed);
+                    true
+                }
+                ResourceEvent::Failed { request_id, reference, url, error } => {
+                    println!("Tab {:?} resource failed\n    rid: {:?}\n    reference: {:?}\n    url: {:?}\n    error: {:?}", tab_id, request_id, reference, url, error);
+                    true
+                }
+                ResourceEvent::Cancelled { request_id, reference, url, reason } => {
+                    println!("Tab {:?} resource cancelled\n    rid: {:?}\n    reference: {:?}\n    url: {:?}\n    reason: {:?}", tab_id, request_id, reference, url, reason);
+                    true
+                }
+                ResourceEvent::Headers { request_id, reference, url, status, content_length, content_type, headers } => {
+                    println!("Tab {:?} resource headers\n    rid: {:?}\n    reference: {:?}\n    url: {:?}\n    status: {:?}\n    content_length: {:?}\n    content_type: {:?}\n    headers: {:?}", tab_id, request_id, reference, url, status, content_length, content_type, headers);
+                    true
+                }
+            }
+        }
+        EngineEvent::ConnectionEstablished { .. } => {
+            println!("ConnectionEstablished");
+            true
+        }
+        EngineEvent::TabCreated { .. } => {
+            println!("TabCreated");
+            true
+        }
+        EngineEvent::TabClosed { .. } => {
+            println!("TabClosed");
+            true
+        }
+        EngineEvent::TabTitleChanged { .. } => {
+            println!("TabTitleChanged");
+            true
+        }
+        EngineEvent::CookieAdded { .. } => {
+            println!("CookieAdded");
+            true
+        }
+        EngineEvent::StorageChanged { .. } => {
+            println!("StorageChanged");
+            true
+        }
+        EngineEvent::MediaStarted { .. } => {
+            println!("MediaStarted");
+            true
+        }
+        EngineEvent::MediaPaused { .. } => {
+            println!("MediaPaused");
+            true
+        }
+        EngineEvent::ScriptResult { .. } => {
+            println!("ScriptResult");
+            true
+        }
+        EngineEvent::NetworkError { .. } => {
+            println!("NetworkError");
+            true
+        }
+        EngineEvent::JavaScriptError { .. } => {
+            println!("JavaScriptError");
+            true
+        }
+        EngineEvent::TabCrashed { .. } => {
+            println!("TabCrashed");
+            true
+        }
+    }
 }

@@ -243,10 +243,12 @@ pub fn spawn_io_thread(cfg: FetcherConfig, engine_ctx: Arc<EngineContext>) -> Io
                     }
                 }
                 _ = shutdown_rx.changed() => {
-                    log::trace!("I/O thread received global shutdown signal");
                     if *shutdown_rx.borrow() {
+                        log::trace!("I/O thread received global shutdown signal");
                         break;
                     }
+                    // log::error!("I/O thread spurious wakeup on shutdown signal");
+                    // break;
                 }
             }
         }
