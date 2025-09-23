@@ -108,7 +108,7 @@ mod store;
 
 pub use cookies::Cookie;
 pub use cookies::CookieJarHandle;
-pub(crate) use cookies::CookieStoreHandle;
+pub use cookies::CookieStoreHandle;
 
 pub use cookie_jar::CookieJar;
 pub use cookie_jar::DefaultCookieJar;

@@ -9,13 +9,20 @@ use tokio::io::{AsyncReadExt, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
 use url::Url;
 
+struct WaiterEntry {
+    /// Listener for this entry.
+    tx: oneshot::Sender<FetchResult>,
+    /// Whether the listener wants a streaming response (true) or buffered (false).
+    wants_streaming: bool,
+}
+
 // Simple waiter for coalescing responses. If a fetcher detects we are requesting the same resources
 // that is already queued, we add them to the waiter for that request, so the request will fetch the
 // resource only once.
 #[derive(Default)]
 pub struct Waiter {
     /// List of listeners (oneshot senders) waiting for the result.
-    listeners: Mutex<Vec<(oneshot::Sender<FetchResult>, bool)>>,
+    listeners: Mutex<Vec<WaiterEntry>>,
 }
 
 impl Waiter {
@@ -32,7 +39,7 @@ impl Waiter {
 
     /// Register a consumer for this waiter. We need to know if the consumer is streaming or not.
     pub async fn register(&self, tx: oneshot::Sender<FetchResult>, wants_streaming: bool) {
-        self.listeners.lock().await.push((tx, wants_streaming))
+        self.listeners.lock().await.push(WaiterEntry {tx, wants_streaming})
     }
 
     /// Process the fetch result with the listeners.
@@ -46,8 +53,8 @@ impl Waiter {
                     meta: meta.clone(),
                     body: body.clone(),
                 };
-                for (tx, _) in ls.drain(..) {
-                    let _ = tx.send(res.clone());
+                for entry in ls.drain(..) {
+                    let _ = entry.tx.send(res.clone());
                 }
             }
             FetchResult::Stream { meta, peek_buf, shared } => {
@@ -55,11 +62,11 @@ impl Waiter {
                 // need to have the stream read to the end and buffered first.
                 let mut streaming_ls = Vec::new();
                 let mut buffered_ls = Vec::new();
-                while let Some((tx, wants_stream)) = ls.pop() {
-                    if wants_stream {
-                        streaming_ls.push(tx);
+                while let Some(entry) = ls.pop() {
+                    if entry.wants_streaming {
+                        streaming_ls.push(entry.tx);
                     } else {
-                        buffered_ls.push(tx);
+                        buffered_ls.push(entry.tx);
                     }
                 }
 
@@ -97,8 +104,8 @@ impl Waiter {
             }
             FetchResult::Error(e) => {
                 let res = FetchResult::Error(e.clone());
-                for (tx, _) in ls.drain(..) {
-                    let _ = tx.send(res.clone());
+                for entry in ls.drain(..) {
+                    let _ = entry.tx.send(res.clone());
                 }
             }
         }

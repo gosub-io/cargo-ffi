@@ -20,6 +20,7 @@
 use crate::engine::BrowsingContext;
 use crate::render::Viewport;
 use std::any::Any;
+use std::sync::Arc;
 
 /// A surface rect has the same properties as a viewport, but a surface rect
 /// is usually computed with DevicePixelRatio.
@@ -119,7 +120,7 @@ pub enum ExternalHandle {
         /// Stride in bytes. This is the number of bytes per row of pixels.
         stride: u32,
         /// Raw pixel data in RGBA8 format.
-        pixels: Vec<u8>,
+        pixels: Arc<Box<[u8]>>,
         /// Pixel format of the image.
         format: PixelFormat,
     },
@@ -257,8 +258,8 @@ pub trait RenderBackend: Send + Sync {
     /// Generate a small RGBA8 snapshot of the surface, suitable for thumbnails or previews.
     fn snapshot(&mut self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
 
-    /// Returns an external handle for the surface, if supported.
-    fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;
+    // /// Returns an external handle for the surface, if supported.
+    // fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;
 }
 
 /// Interface for compositors to receive frames from backends.

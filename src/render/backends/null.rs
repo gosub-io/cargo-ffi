@@ -1,6 +1,6 @@
 use crate::engine::BrowsingContext;
 use crate::render::backend::{
-    ErasedSurface, ExternalHandle, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
+    ErasedSurface, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
 };
 use anyhow::{anyhow, Result};
 use std::any::Any;
@@ -50,15 +50,15 @@ impl RenderBackend for NullBackend {
         ))
     }
 
-    fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle> {
-        let s = surface.as_any_mut().downcast_mut::<NullSurface>()?;
-
-        Some(ExternalHandle::NullHandle {
-            width: s.size.width,
-            height: s.size.height,
-            frame_id: s.frame_id,
-        })
-    }
+    // fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle> {
+    //     let s = surface.as_any_mut().downcast_mut::<NullSurface>()?;
+    //
+    //     Some(ExternalHandle::NullHandle {
+    //         width: s.size.width,
+    //         height: s.size.height,
+    //         frame_id: s.frame_id,
+    //     })
+    // }
 }
 
 pub struct NullSurface {

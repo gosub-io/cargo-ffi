@@ -6,61 +6,92 @@ use crate::tiling::{
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::render::backend::ExternalHandle;
 use gosub_engine::render::Viewport;
-use gosub_engine::storage::{InMemorySessionStore, SqliteLocalStore, StorageService};
-use gosub_engine::zone::ZoneId;
-use gosub_engine::{EngineCommand, EngineEvent, GosubEngine};
+use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
+use gosub_engine::zone::{ZoneConfig, ZoneId, ZoneServices};
+use gosub_engine::GosubEngine;
 use gtk4::glib::clone;
 use gtk4::prelude::*;
 use gtk4::GestureClick;
 use gtk4::{
-    glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion,
-    EventControllerScroll, EventControllerScrollFlags, Orientation,
+    glib, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, EventControllerMotion, Orientation,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use url::Url;
+use uuid::uuid;
+use gosub_engine::events::TabCommand;
+use gosub_engine::tab::{TabDefaults, TabHandle, TabId};
 
 mod compositor;
 mod tiling;
 
-const DEFAULT_MAIN_ZONE: &str = "95d9c701-5f1b-43ea-ba7e-bc509ee8aa54";
+const DEFAULT_MAIN_ZONE: uuid::Uuid = uuid!("95d9c701-5f1b-43ea-ba7e-bc509ee8aa54");
 
-fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
-    eng.get_tab(tab_id)
-        .unwrap()
-        .lock()
-        .unwrap()
-        .current_url
-        .clone()
-}
+// fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
+//     eng.get_tab(tab_id)
+//         .unwrap()
+//         .lock()
+//         .unwrap()
+//         .current_url
+//         .clone()
+// }
 
 fn main() {
     let app = Application::builder()
         .application_id("io.gosub.engine")
         .build();
 
-    // Persistent cookie store
-    let cookie_store = SqliteCookieStore::new(".gosub-gtk-cookie-store.db".parse().unwrap());
-    let storage = Arc::new(StorageService::new(
-        Arc::new(SqliteLocalStore::new(".gosub-gtk-local-storage.db").unwrap()),
-        Arc::new(InMemorySessionStore::new()),
-    ));
-
     app.connect_activate(move |app| {
+        // Start the engine
         let backend = gosub_engine::render::backends::cairo::CairoBackend::new();
-        let engine = Rc::new(RefCell::new(GosubEngine::new(None, Box::new(backend))));
-        let viewport = Viewport::new(0, 0, 800, 600);
+        let mut engine = GosubEngine::new(None, Box::new(backend));
+        let engine_join_handle = engine.start().expect("engine start failed");
+        let mut event_rx = engine.subscribe_events();
 
-        // Let's create our default zone
-        let zone_id = engine.borrow_mut().zone_builder()
-            .id(ZoneId::from(DEFAULT_MAIN_ZONE))
-            .storage(storage.clone())
-            .cookie_store(cookie_store.clone())
-            .create().expect("zone creation failed");
+        // Setup zone
+        let zone_cfg = ZoneConfig::builder()
+            .do_not_track(true)
+            .accept_languages("fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
+            .build()
+            .expect("ZoneConfig is not valid");
 
-        // Start with 1 tab
-        let tab0 = engine.borrow_mut().open_tab_in_zone(zone_id, viewport).expect("open_tab failed");
+        let sqlite_store = SqliteCookieStore::new(".gosub-gtk-cookie-store.db".into()); // Arc<SqliteCookieStore>
+        let cookie_store: gosub_engine::cookies::CookieStoreHandle = sqlite_store.into();
+
+        let zone_services = ZoneServices {
+            storage: Arc::new(StorageService::new(
+                Arc::new(SqliteLocalStore::new(".gosub-gtk-local-storage.db").unwrap()),
+                Arc::new(InMemorySessionStore::new()),
+            )),
+            cookie_store: Some(cookie_store),
+            cookie_jar: None,
+            partition_policy: PartitionPolicy::None,
+        };
+
+        let zone = Rc::new(RefCell::new(
+            engine.create_zone(zone_cfg, zone_services, Some(ZoneId::from(DEFAULT_MAIN_ZONE)))
+                .expect("create_zone failed")
+        ));
+
+        let tabs: Rc<RefCell<HashMap<TabId, TabHandle>>> = Rc::new(RefCell::new(HashMap::new()));
+
+        // Start with a single tab
+        let tab = zone.borrow_mut().create_tab(TabDefaults {
+            url: None,
+            title: Some("New Tab".to_string()),
+            viewport: Some(Viewport::new(0, 0, 800, 600)),
+        }, None)?;
+        tabs.borrow_mut().insert(tab.id, tab);
+
+        let active_tab: Rc<RefCell<TabId>> = Rc::new(RefCell::new(
+            *tabs.borrow().keys().next().expect("tab_id").clone()
+        ));
+
+        let last_size: Rc<RefCell<(i32, i32)>> = Rc::new(RefCell::new((800, 600)));
+
+        let tab0 = tabs.get(&tab.id).unwrap();
 
         let root: LayoutHandle = Rc::new(RefCell::new(LayoutNode::Leaf(tab0)));
         let active_tab = Rc::new(RefCell::new(tab0));
@@ -94,143 +125,164 @@ fn main() {
         let btn_set_ss = Button::with_label("Set SS");
         let btn_get_ss = Button::with_label("Get SS");
 
+        // let storage_debug = zone_services.storage.clone();
+        // let active_ls_set = active_tab.clone();
+        // btn_set_ls.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ls_set, @strong active_ls_set => move |_| {
+        //     let tab_id = *active_ls_set.borrow();
+        //     let Ok(eng_ref) = eng_ls_set.try_borrow() else { return; };
+        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
+        //         eprintln!("[LS] No current URL for active tab; navigate somewhere first.");
+        //         return;
+        //     };
+        //     let origin = url.origin();
+        //
+        //     // Default partition unless you're testing CHIPS; tweak as needed:
+        //     let pk = gosub_engine::storage::PartitionKey::default();
+        //
+        //     let area = storage_debug.local_for(zone_id, &pk, &origin).unwrap();
+        //     if let Err(e) = area.set_item("foo", "bar") {
+        //         eprintln!("[LS] set_item error: {e}");
+        //     } else {
+        //         println!("[LS] set foo=bar for origin {}", url.origin().ascii_serialization());
+        //     }
+        // }));
 
-        let storage_debug = storage.clone();
-        let eng_ls_set = engine.clone();
-        let active_ls_set = active_tab.clone();
-        btn_set_ls.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ls_set, @strong active_ls_set => move |_| {
-            let tab_id = *active_ls_set.borrow();
-            let Ok(eng_ref) = eng_ls_set.try_borrow() else { return; };
-            let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-                eprintln!("[LS] No current URL for active tab; navigate somewhere first.");
-                return;
-            };
-            let origin = url.origin();
+        // let storage_debug = storage.clone();
+        // let eng_ls_get = engine.clone();
+        // let active_ls_get = active_tab.clone();
+        // btn_get_ls.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ls_get, @strong active_ls_get => move |_| {
+        //     let tab_id = *active_ls_get.borrow();
+        //     let Ok(eng_ref) = eng_ls_get.try_borrow() else { return; };
+        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
+        //         eprintln!("[LS] No current URL.");
+        //         return;
+        //     };
+        //     let origin = url.origin();
+        //     let pk = gosub_engine::storage::PartitionKey::default();
+        //
+        //     let area = storage_debug.local_for(zone_id, &pk, &origin).unwrap();
+        //     match area.get_item("foo") {
+        //         Some(v) => println!("[LS] get foo -> {v}"),
+        //         None    => println!("[LS] key foo not set"),
+        //     }
+        // }));
 
-            // Default partition unless you're testing CHIPS; tweak as needed:
-            let pk = gosub_engine::storage::PartitionKey::default();
+        // // ---------- SessionStorage (per-(zone,tab,origin,partition)) ----------
+        // let storage_debug = storage.clone();
+        // let eng_ss_set = engine.clone();
+        // let active_ss_set = active_tab.clone();
+        //
+        // // Button: Set SessionStorage key=foo, value=bar
+        // // function: btn_set_ss.on_click
+        // btn_set_ss.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ss_set, @strong active_ss_set => move |_| {
+        //     let tab_id = *active_ss_set.borrow();
+        //     let Ok(eng_ref) = eng_ss_set.try_borrow() else { return; };
+        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
+        //         eprintln!("[SS] No current URL.");
+        //         return;
+        //     };
+        //     let origin = url.origin();
+        //     let pk = gosub_engine::storage::PartitionKey::default();
+        //
+        //     let area = storage_debug.session_for(zone_id, tab_id, &pk, &origin);
+        //     if let Err(e) = area.set_item("foo", "bar") {
+        //         eprintln!("[SS] set_item error: {e}");
+        //     } else {
+        //         println!("[SS] set foo=bar for origin {}", url.origin().ascii_serialization());
+        //     }
+        // }));
 
-            let area = storage_debug.local_for(zone_id, &pk, &origin).unwrap();
-            if let Err(e) = area.set_item("foo", "bar") {
-                eprintln!("[LS] set_item error: {e}");
-            } else {
-                println!("[LS] set foo=bar for origin {}", url.origin().ascii_serialization());
-            }
-        }));
-
-        let storage_debug = storage.clone();
-        let eng_ls_get = engine.clone();
-        let active_ls_get = active_tab.clone();
-        btn_get_ls.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ls_get, @strong active_ls_get => move |_| {
-            let tab_id = *active_ls_get.borrow();
-            let Ok(eng_ref) = eng_ls_get.try_borrow() else { return; };
-            let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-                eprintln!("[LS] No current URL.");
-                return;
-            };
-            let origin = url.origin();
-            let pk = gosub_engine::storage::PartitionKey::default();
-
-            let area = storage_debug.local_for(zone_id, &pk, &origin).unwrap();
-            match area.get_item("foo") {
-                Some(v) => println!("[LS] get foo -> {v}"),
-                None    => println!("[LS] key foo not set"),
-            }
-        }));
-
-        // ---------- SessionStorage (per-(zone,tab,origin,partition)) ----------
-        let storage_debug = storage.clone();
-        let eng_ss_set = engine.clone();
-        let active_ss_set = active_tab.clone();
-
-        // Button: Set SessionStorage key=foo, value=bar
-        // function: btn_set_ss.on_click
-        btn_set_ss.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ss_set, @strong active_ss_set => move |_| {
-            let tab_id = *active_ss_set.borrow();
-            let Ok(eng_ref) = eng_ss_set.try_borrow() else { return; };
-            let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-                eprintln!("[SS] No current URL.");
-                return;
-            };
-            let origin = url.origin();
-            let pk = gosub_engine::storage::PartitionKey::default();
-
-            let area = storage_debug.session_for(zone_id, tab_id, &pk, &origin);
-            if let Err(e) = area.set_item("foo", "bar") {
-                eprintln!("[SS] set_item error: {e}");
-            } else {
-                println!("[SS] set foo=bar for origin {}", url.origin().ascii_serialization());
-            }
-        }));
-
-        let storage_debug = storage.clone();
-        let eng_ss_get = engine.clone();
-        let active_ss_get = active_tab.clone();
-        btn_get_ss.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ss_get, @strong active_ss_get => move |_| {
-            let tab_id = *active_ss_get.borrow();
-            let Ok(eng_ref) = eng_ss_get.try_borrow() else { return; };
-            let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-                eprintln!("[SS] No current URL.");
-                return;
-            };
-            let origin = url.origin();
-            let pk = gosub_engine::storage::PartitionKey::default();
-
-            let area = storage_debug.session_for(zone_id, tab_id, &pk, &origin);
-            match area.get_item("foo") {
-                Some(v) => println!("[SS] get foo -> {v}"),
-                None    => println!("[SS] key foo not set"),
-            }
-        }));
-
+        // let storage_debug = storage.clone();
+        // let eng_ss_get = engine.clone();
+        // let active_ss_get = active_tab.clone();
+        // btn_get_ss.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ss_get, @strong active_ss_get => move |_| {
+        //     let tab_id = *active_ss_get.borrow();
+        //     let Ok(eng_ref) = eng_ss_get.try_borrow() else { return; };
+        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
+        //         eprintln!("[SS] No current URL.");
+        //         return;
+        //     };
+        //     let origin = url.origin();
+        //     let pk = gosub_engine::storage::PartitionKey::default();
+        //
+        //     let area = storage_debug.session_for(zone_id, tab_id, &pk, &origin);
+        //     match area.get_item("foo") {
+        //         Some(v) => println!("[SS] get foo -> {v}"),
+        //         None    => println!("[SS] key foo not set"),
+        //     }
+        // }));
 
         // -----------------------------
         // Split handlers
         // -----------------------------
-        let eng_split = engine.clone();
         let root_split = root.clone();
         let last_size_split = last_size.clone();
         let drawing_split = drawing_area.clone();
         let active_split = active_tab.clone();
-        btn_split_col.connect_clicked(clone!(@strong eng_split, @strong root_split, @strong last_size_split, @strong drawing_split, @strong active_split => move |_| {
+
+        let zone_for_split = zone.clone();
+        let tabs_for_split = tabs.clone();
+        btn_split_col.connect_clicked(clone!(@strong root_split, @strong last_size_split, @strong drawing_split, @strong active_split => move |_| {
             // Open a new tab sized like the active pane
             let (w, h) = *last_size_split.borrow();
-            let new_tab = eng_split.borrow_mut().open_tab_in_zone(zone_id, Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)).expect("open_tab failed");
+            let new_tab = zone_for_split.borrow_mut().create_tab(TabDefaults {
+                url: None,
+                title: Some("New Tab".to_string()),
+                viewport: Some(Viewport::new(0, 0, (w/2).max(1) as u32, h as u32)),
+            }, None).expect("create_tab failed");
+            tabs_for_split.borrow_mut().insert(new_tab.id, new_tab);
 
             let target = *active_split.borrow();
             split_leaf_into_cols(&root_split, target, vec![new_tab]);
             // Send resizes to all leaves after split
             let mut pairs = Vec::new();
             compute_layout(&root_split.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
-            let mut eng = eng_split.borrow_mut();
-            for (tab_id, r) in pairs { let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
+
+            for (tab_id, r) in pairs {
+                tabs.get(&tab_id).map(|t| {
+                    let mut tab = t.lock().unwrap();
+                    tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                });
+            }
+
             drawing_split.queue_draw();
         }));
 
-        let eng_split2 = engine.clone();
         let root_split2 = root.clone();
         let last_size_split2 = last_size.clone();
         let drawing_split2 = drawing_area.clone();
         let active_split2 = active_tab.clone();
-        btn_split_row.connect_clicked(clone!(@strong eng_split2, @strong root_split2, @strong last_size_split2, @strong drawing_split2, @strong active_split2 => move |_| {
+        let zone_for_split = zone.clone();
+        let tabs_for_split = tabs.clone();
+        btn_split_row.connect_clicked(clone!(@strong root_split2, @strong last_size_split2, @strong drawing_split2, @strong active_split2 => move |_| {
             let (w, h) = *last_size_split2.borrow();
-            let new_tab = eng_split2.borrow_mut().open_tab_in_zone(zone_id, Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)).expect("open_tab failed");
+            let new_tab = zone_for_split.borrow_mut().create_tab(TabDefaults {
+                url: None,
+                title: Some("New Tab".to_string()),
+                viewport: Some(Viewport::new(0, 0, w as u32, (h/2).max(1) as u32)),
+            }, None).expect("create_tab failed");
+            tabs_for_split.borrow_mut().insert(new_tab.id, new_tab);
 
             let target = *active_split2.borrow();
             split_leaf_into_rows(&root_split2, target, vec![new_tab]);
             let mut pairs = Vec::new();
             compute_layout(&root_split2.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
-            let mut eng = eng_split2.borrow_mut();
-            for (tab_id, r) in pairs { let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
+
+            for (tab_id, r) in pairs {
+                tabs.get(&tab_id).map(|t| {
+                    let mut tab = t.lock().unwrap();
+                    tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                });
+            }
+
             drawing_split2.queue_draw();
         }));
 
-        let eng_close = engine.clone();
         let root_close = root.clone();
         let last_size_close = last_size.clone();
         let drawing_close = drawing_area.clone();
         let active_close = active_tab.clone();
-        btn_close.connect_clicked(clone!(@strong eng_close, @strong root_close, @strong last_size_close, @strong drawing_close, @strong active_close => move |_| {
+        btn_close.connect_clicked(clone!(@strong root_close, @strong last_size_close, @strong drawing_close, @strong active_close => move |_| {
             let target = *active_close.borrow();
             if close_leaf(&root_close, target) {
                 // Pick a new active from remaining leaves
@@ -240,8 +292,13 @@ fn main() {
                 let (w, h) = *last_size_close.borrow();
                 let mut pairs = Vec::new();
                 compute_layout(&root_close.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
-                let mut eng = eng_close.borrow_mut();
-                for (tab_id, r) in pairs { let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 }); }
+
+                for (tab_id, r) in pairs {
+                    tabs.get(&tab_id).map(|t| {
+                        let mut tab = t.lock().unwrap();
+                        tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                    });
+                }
                 drawing_close.queue_draw();
             }
         }));
@@ -260,37 +317,25 @@ fn main() {
             // Iterate all the tabs and draw their surfaces
             for (tab_id, r) in &pairs {
                 let mut binding = compositor_draw.borrow_mut();
-                if binding.frame_for_mut(*tab_id).is_none() {
-                    // draw placeholder
-                    cr.save().unwrap();
-                    cr.set_source_rgb(0.25, 0.25, 0.30);
-                    cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
-                    cr.fill().unwrap();
-                    cr.restore().unwrap();
-                    continue;
-                }
-
-                let Some(handle) = binding.frame_for_mut(*tab_id) else {
-                    continue;
-                };
-                match handle {
+                if let Some(handle) = binding.frame_for_mut(*tab_id) {
+                    match handle {
                     ExternalHandle::CpuPixelsOwned { width, height, stride, pixels, .. } => {
-                        // ZERO-COPY: build a surface directly over `pixels` (Vec<u8>)
                         let w = *width as i32;
                         let h = *height as i32;
                         let st = *stride as i32;
 
-                        // SAFETY: `pixels` lives until end of this arm; we drop the surface before `pixels` drops.
-                        let slice_static: &'static mut [u8] = unsafe {
-                            std::mem::transmute::<&mut [u8], &'static mut [u8]>(pixels.as_mut_slice())
+                        let ptr = pixels.as_mut_ptr();
+                        let _len = pixels.len();
+
+                        let surface = unsafe {
+                            gtk4::cairo::ImageSurface::create_for_data_unsafe(
+                                ptr,
+                                gtk4::cairo::Format::ARgb32,
+                                w,
+                                h,
+                                st,
+                            ).expect("cairo surface over pixels")
                         };
-                        let surface = gtk4::cairo::ImageSurface::create_for_data(
-                            slice_static,
-                            gtk4::cairo::Format::ARgb32,
-                            w,
-                            h,
-                            st
-                        ).expect("cairo surface over pixels");
                         surface.flush();
 
                         cr.save().unwrap();
@@ -310,51 +355,17 @@ fn main() {
                         cr.paint().unwrap();
                         cr.restore().unwrap();
                     },
-                    ExternalHandle::CpuPixelsPtr { width, height, stride, ptr } => {
-                        let w = *width as i32;
-                        let h = *height as i32;
-                        let st = *stride as i32;
-
-                        // ZERO-COPY: build a surface over the external buffer
-                        // SAFETY: `ptr` must be valid & mutable for (height * stride) bytes for the duration of paint.
-                        let data: &mut [u8] = unsafe {
-                            std::slice::from_raw_parts_mut(ptr.as_ptr(), (*height as usize) * (*stride as usize))
-                        };
-                        // SAFETY: same reasoning — surface dropped before `data` goes out of scope in this arm.
-                        let slice_static: &'static mut [u8] =
-                            unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(data) };
-
-                        let surface = gtk4::cairo::ImageSurface::create_for_data(
-                            slice_static,
-                            gtk4::cairo::Format::ARgb32,
-                            w,
-                            h,
-                            st
-                        ).expect("cairo surface over ptr");
-                        surface.flush();
-
-                        cr.save().unwrap();
-                        cr.set_source_rgb(0.58, 0.02, 0.40);
-                        cr.paint().unwrap();
-                        cr.restore().unwrap();
-
-                        cr.save().unwrap();
-                        cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
-                        cr.clip();
-                        cr.translate(r.x as f64, r.y as f64);
-
-                        let sw = *width as f64;
-                        let sh = *height as f64;
-                        if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
-                            cr.scale(r.w as f64 / sw, r.h as f64 / sh);
-                        }
-                        cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
-                        cr.paint().unwrap();
-                        cr.restore().unwrap();
-                    },
                     _ => {
                         eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
                     }
+                }
+                } else {
+                    // draw placeholder
+                    cr.save().unwrap();
+                    cr.set_source_rgb(0.25, 0.25, 0.30);
+                    cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
+                    cr.fill().unwrap();
+                    cr.restore().unwrap();
                 }
             }
 
@@ -372,16 +383,19 @@ fn main() {
         });
 
         // Resize pane
-        let eng_resize = engine.clone();
         let root_resize = root.clone();
         let last_size_resize = last_size.clone();
-        drawing_area.connect_resize(clone!(@strong eng_resize, @strong root_resize, @strong last_size_resize => move |_area, w, h| {
+        drawing_area.connect_resize(clone!(@strong root_resize, @strong last_size_resize => move |_area, w, h| {
             *last_size_resize.borrow_mut() = (w, h);
             let mut pairs = Vec::new();
             compute_layout(&root_resize.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
-            let mut eng = eng_resize.borrow_mut();
+
+            let tabs_for_resize = tabs.clone();
             for (tab_id, r) in pairs {
-                let _ = eng.handle_event(tab_id, EngineEvent::Resize{ width: r.w as u32, height: r.h as u32 });
+                if let Some(t) = tabs_for_resize.borrow().get(&tab_id) {
+                    let mut tab = t.lock().unwrap();
+                    tab.send(TabCommand::SetViewport { x:0, y: 0, width: r.w as u32, height: r.h as u32 });
+                }
             }
         }));
 
@@ -401,24 +415,21 @@ fn main() {
         drawing_area.add_controller(click);
 
         // Address entry: navigate active tab
-        let eng_entry = engine.clone();
-        let active_entry = active_tab.clone();
+        let tabs_for_nav = tabs.clone();
+        let active_for_nav = active_tab.clone();
         let draw_entry = drawing_area.clone();
-        address_entry.connect_activate(clone!(@strong eng_entry, @strong active_entry, @strong draw_entry => move |entry| {
-            let composed_url = entry.text();
-
-            // Check if composed_url starts with a scheme like http:// or https://
-            if !composed_url.starts_with("http://") && !composed_url.starts_with("https://") {
-                // If not, prepend https://
-                entry.set_text(&format!("https://{}", composed_url));
+        address_entry.connect_activate(clone!(@strong draw_entry => move |entry| {
+            let mut s = entry.text().to_string();
+            if !(s.starts_with("http://") || s.starts_with("https://")) {
+                s = format!("https://{s}");
+                entry.set_text(&s);
             }
+            let Ok(url) = Url::parse(&s) else { return; };
 
-            let Ok(url) = Url::parse(&entry.text()) else {
-                return;
-            };
-
-            let tab_id = *active_entry.borrow();
-            let _ = eng_entry.borrow_mut().execute_command(tab_id, EngineCommand::Navigate(url));
+            if let Some(handle) = tabs_for_nav.borrow().get(&*active_for_nav.borrow()) {
+                let mut tab = handle.lock().unwrap();
+                tab.send(TabCommand::Navigate { url: url.to_string() });
+            }
             draw_entry.queue_draw();
         }));
 
@@ -432,35 +443,34 @@ fn main() {
         }
         drawing_area.add_controller(motion);
 
-        // Scroll pane
-        let eng_scroll = engine.clone();
-        let root_scroll = root.clone();
-        let last_size_scroll = last_size.clone();
-        let drawing_scroll = drawing_area.clone();
-        let last_pointer_scroll = last_pointer.clone();
-
-        let scroll = EventControllerScroll::new(EventControllerScrollFlags::BOTH_AXES);
-        scroll.connect_scroll(clone!(@strong eng_scroll, @strong root_scroll, @strong last_size_scroll, @strong drawing_scroll, @strong last_pointer_scroll => move |_ctrl, dx, dy| {
-            // Where is the pointer?
-            let (px, py) = *last_pointer_scroll.borrow();
-
-            // Which pane is under the pointer?
-            let (w, h) = *last_size_scroll.borrow();
-            if let Some(tab_id) = find_leaf_at(&root_scroll.borrow(), Rect { x:0, y:0, w, h }, px, py) {
-                let line_h = 20.0_f64;
-                let dx_px = (dx * line_h) as f32;
-                let dy_px = (dy * line_h) as f32;
-
-                // Send to the engine (you implement what Scroll does per tab)
-                let _ = eng_scroll.borrow_mut().handle_event(tab_id, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
-
-                // Ask GTK to redraw
-                drawing_scroll.queue_draw();
-            }
-
-            return glib::Propagation::Proceed;
-        }));
-        drawing_area.add_controller(scroll);
+        // // Scroll pane
+        // let root_scroll = root.clone();
+        // let last_size_scroll = last_size.clone();
+        // let drawing_scroll = drawing_area.clone();
+        // let last_pointer_scroll = last_pointer.clone();
+        //
+        // let scroll = EventControllerScroll::new(EventControllerScrollFlags::BOTH_AXES);
+        // scroll.connect_scroll(clone!(@strong eng_scroll, @strong root_scroll, @strong last_size_scroll, @strong drawing_scroll, @strong last_pointer_scroll => move |_ctrl, dx, dy| {
+        //     // Where is the pointer?
+        //     let (px, py) = *last_pointer_scroll.borrow();
+        //
+        //     // Which pane is under the pointer?
+        //     let (w, h) = *last_size_scroll.borrow();
+        //     if let Some(tab_id) = find_leaf_at(&root_scroll.borrow(), Rect { x:0, y:0, w, h }, px, py) {
+        //         let line_h = 20.0_f64;
+        //         let dx_px = (dx * line_h) as f32;
+        //         let dy_px = (dy * line_h) as f32;
+        //
+        //         // Send to the engine (you implement what Scroll does per tab)
+        //         let _ = eng_scroll.borrow_mut().handle_event(tab_id, EngineEvent::Scroll { dx: dx_px, dy: dy_px });
+        //
+        //         // Ask GTK to redraw
+        //         drawing_scroll.queue_draw();
+        //     }
+        //
+        //     return glib::Propagation::Proceed;
+        // }));
+        // drawing_area.add_controller(scroll);
 
         // Layout boxes
         let toolbar = GtkBox::new(Orientation::Horizontal, 6);
@@ -492,40 +502,58 @@ fn main() {
 
         window.present();
 
-        // FrameClock tick: redraw if any visible tab needs it
-        let fc = drawing_area.frame_clock().unwrap();
-        let eng_fc = engine.clone();
-        let root_fc = root.clone();
-        let drawing_fc = drawing_area.clone();
-        let last_size_fc = last_size.clone();
-        let compositor_fc = compositor.clone();
-        fc.connect_update(clone!(@strong drawing_fc, @strong eng_fc, @strong root_fc => move |_clk| {
-            let mut eng_mut = eng_fc.borrow_mut();
-            let results = eng_mut.tick(&mut *compositor_fc.borrow_mut());
+        // // FrameClock tick: redraw if any visible tab needs it
+        // let fc = drawing_area.frame_clock().unwrap();
+        // let root_fc = root.clone();
+        // let drawing_fc = drawing_area.clone();
+        // let last_size_fc = last_size.clone();
+        // let compositor_fc = compositor.clone();
+        // fc.connect_update(clone!(@strong drawing_fc, @strong eng_fc, @strong root_fc => move |_clk| {
+        //
+        //     // let mut eng_mut = eng_fc.borrow_mut();
+        //     // let results = eng_mut.tick(&mut *compositor_fc.borrow_mut());
+        //     //
+        //     // // If any leaf needs redraw, repaint
+        //     // let (w, h) = *last_size_fc.borrow();
+        //     // let mut pairs = Vec::new();
+        //     // compute_layout(&root_fc.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
+        //     //
+        //     // let mut redraw = false;
+        //     // for (tab_id, _r) in pairs {
+        //     //     if let Some(res) = results.get(&tab_id) {
+        //     //         if res.page_loaded {
+        //     //             println!("Tab {:?} page loaded", tab_id);
+        //     //         }
+        //     //         if res.needs_redraw {
+        //     //             println!("Tab {:?} needs redraw", tab_id);
+        //     //             redraw = true;
+        //     //         }
+        //     //     }
+        //     // }
+        //     //
+        //     // if redraw {
+        //     //     println!("Requesting redraw in frame tick");
+        //     //     drawing_fc.queue_draw();
+        //     // }
+        // }));
 
-            // If any leaf needs redraw, repaint
-            let (w, h) = *last_size_fc.borrow();
-            let mut pairs = Vec::new();
-            compute_layout(&root_fc.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
 
-            let mut redraw = false;
-            for (tab_id, _r) in pairs {
-                if let Some(res) = results.get(&tab_id) {
-                    if res.page_loaded {
-                        println!("Tab {:?} page loaded", tab_id);
-                    }
-                    if res.needs_redraw {
-                        println!("Tab {:?} needs redraw", tab_id);
-                        redraw = true;
-                    }
+        // Event loop: redraw on any tab event (you might want to filter some out)
+        let drawing_for_events = drawing_area.clone();
+        glib::MainContext::default().spawn_local(async move {
+
+            // If `event_rx` implements `Stream`, great; otherwise loop on `recv()`.
+            loop {
+                // Replace with your actual receive call; example:
+                if let Ok(_ev) = event_rx.recv().await {
+                    // optionally inspect _ev and only redraw affected rect
+                    drawing_for_events.queue_draw();
                 }
+                // yield back to GTK frequently
+                glib::timeout_future_seconds(0).await;
             }
+        });
 
-            if redraw {
-                println!("Requesting redraw in frame tick");
-                drawing_fc.queue_draw();
-            }
-        }));
     });
 
     app.run();

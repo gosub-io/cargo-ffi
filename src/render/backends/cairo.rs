@@ -1,6 +1,6 @@
 use crate::engine::BrowsingContext;
 use crate::render::backend::{
-    ErasedSurface, ExternalHandle, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
+    ErasedSurface, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
 };
 use crate::render::DisplayItem;
 use anyhow::{anyhow, Result};
@@ -39,12 +39,10 @@ impl RenderBackend for CairoBackend {
         let vp = ctx.viewport();
         let offset_x = vp.x as f64;
         let offset_y = vp.y as f64;
+        let size = s.size();
 
-        {
-            // Get the cairo context (CR) from the surface.
-            let cr = s.ctx()?;
-
-            let size = s.size();
+        // Get the cairo context (CR) from the surface.
+        s.with_ctx(|cr| {
             cr.rectangle(0.0, 0.0, size.width as f64, size.height as f64);
             cr.clip();
 
@@ -62,7 +60,7 @@ impl RenderBackend for CairoBackend {
                             color.b as f64,
                             color.a as f64,
                         );
-                        cr.paint()?;
+                        _ = cr.paint();
                         cr.set_operator(cairo::Operator::Over);
                     }
                     DisplayItem::Rect { x, y, w, h, color } => {
@@ -74,7 +72,7 @@ impl RenderBackend for CairoBackend {
                             color.a as f64,
                         );
                         cr.rectangle(*x as f64, *y as f64, *w as f64, *h as f64);
-                        cr.fill()?;
+                        _ = cr.fill();
                     }
                     DisplayItem::TextRun {
                         x,
@@ -94,13 +92,13 @@ impl RenderBackend for CairoBackend {
                         cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
                         cr.set_font_size(*size as f64);
                         cr.move_to(*x as f64, *y as f64);
-                        cr.show_text(text)?;
+                        _ = cr.show_text(text);
                     }
                 }
             }
 
             let _ = cr.restore();
-        }
+        })?;
 
         s.frame_id = s.frame_id.wrapping_add(1);
         Ok(())
@@ -113,34 +111,24 @@ impl RenderBackend for CairoBackend {
             .downcast_mut::<CairoSurface>()
             .ok_or_else(|| anyhow!("CairoBackend used with non-Cairo surface"))?;
 
-        let ExternalHandle::CpuPixelsOwned {
-            pixels,
-            width,
-            height,
-            stride,
-            ..
-        } = s.take_external_owned()
-        else {
-            return Err(anyhow!("unexpected external handle kind"));
-        };
-
-        let img = RgbaImage::from_raw(pixels, width, height, stride, PixelFormat::PreMulArgb32);
-
-        Ok(img)
+        let pixels = s.pixels.as_ref().to_vec();
+        Ok(RgbaImage::from_raw(pixels, s.size.width, s.size.height, s.stride as u32, PixelFormat::PreMulArgb32))
     }
 
-    fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle> {
-        let s = surface.as_any_mut().downcast_mut::<CairoSurface>()?;
-        Some(s.take_external_owned())
-    }
+    // fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> anyhow::Result<ExternalHandle> {
+    //     let s = surface
+    //         .as_any_mut()
+    //         .downcast_mut::<CairoSurface>()
+    //         .ok_or_else(|| anyhow!("CairoBackend used with non-Cairo surface"))?;
+    //
+    //     Some(s.take_external_owned())
+    // }
 }
 
 /// A Cairo surface that can be used for rendering.
 pub struct CairoSurface {
-    /// This cairo image surface sits on top of the buf below
-    surface: cairo::ImageSurface,
-    /// Pixels will be written to here (through surface), but we ultimately own them
-    buf: Box<[u8]>,
+    /// The image buffer
+    pixels: Box<[u8]>,
     /// Size of the surface in pixels.
     size: SurfaceSize,
     /// Stride of the surface in bytes.
@@ -159,21 +147,10 @@ impl CairoSurface {
             .unwrap_or((size.width * 4) as i32);
 
         // Allocate a buffer large enough for the surface to be mapped on top.
-        let mut buf: Box<[u8]> = vec![0u8; (size.height as usize) * (stride as usize)].into_boxed_slice();
-
-        // SAFETY: `buf` is stored in `Self` and outlives `surface
-        let slice_static: &'static mut [u8] = unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *buf) };
-        let surface = cairo::ImageSurface::create_for_data(
-            slice_static,
-            cairo::Format::ARgb32,
-            size.width as i32,
-            size.height as i32,
-            stride,
-        )?;
+        let pixels: Box<[u8]> = vec![0u8; (size.height as usize) * (stride as usize)].into_boxed_slice();
 
         Ok(Self {
-            surface,
-            buf,
+            pixels,
             size,
             stride,
             present,
@@ -181,10 +158,31 @@ impl CairoSurface {
         })
     }
 
-    /// Returns a cairo context for this surface.
-    #[inline]
-    pub fn ctx(&self) -> Result<cairo::Context> {
-        Ok(cairo::Context::new(&self.surface)?)
+    pub fn with_ctx<R>(&mut self, f: impl FnOnce(&cairo::Context) -> R) -> Result<R> {
+        let w = self.size.width as i32;
+        let h = self.size.height as i32;
+        let stride = self.stride;
+
+        let ptr = self .pixels.as_mut_ptr();
+
+        debug_assert!(stride >= 4 * w);
+        debug_assert_eq!(stride % 4, 0);
+        debug_assert!(self.pixels.len() >= (stride as usize) * (h as usize));
+
+        let surface = unsafe {
+            cairo::ImageSurface::create_for_data_unsafe(
+                ptr,
+                cairo::Format::ARgb32,
+                w,
+                h,
+                stride,
+            )?
+        };
+
+        let cr = cairo::Context::new(&surface)?;
+        let out = f(&cr);
+        surface.flush();
+        Ok(out)
     }
 
     /// Returns the stride of the surface in bytes.
@@ -193,53 +191,33 @@ impl CairoSurface {
         self.stride
     }
 
-    /// Flushes the surface to ensure all operations are completed.
-    #[inline]
-    pub fn flush(&self) {
-        self.surface.flush();
-    }
+    // /// Flushes the surface to ensure all operations are completed.
+    // #[inline]
+    // pub fn flush(&self) {
+    //     self.surface.flush();
+    // }
 
     /// Cheap read-only borrow of the pixels (no copy).
     /// Lifetime is tied to &self, and you must not draw while holding this slice.
     pub fn pixels_borrowed(&self) -> (&[u8], u32, u32, u32) {
-        self.flush();
-
+        // self.flush();
         (
-            &self.buf,
+            &self.pixels,
             self.size.width,
             self.size.height,
             self.stride as u32,
         )
     }
 
-    /// Zero-copy move of the owned pixel Vec into your external handle.
-    /// After this, the Cairo surface is dropped and must not be used.
-    pub fn take_external_owned(&mut self) -> ExternalHandle {
-        self.flush();
-
-        let w = self.size.width as i32;
-        let h = self.size.height as i32;
-        let stride = self.stride;
-
-        // fresh buffer/surface to keep this surface usable
-        let mut fresh: Box<[u8]> = vec![0u8; (h as usize) * (stride as usize)].into_boxed_slice();
-        let fresh_static: &'static mut [u8] =
-            unsafe { std::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut *fresh) };
-        let new_surface = cairo::ImageSurface::create_for_data(fresh_static, cairo::Format::ARgb32, w, h, stride)
-            .expect("create_for_data(fresh)");
-
-        let old_surface = std::mem::replace(&mut self.surface, new_surface);
-        let old_buf = std::mem::replace(&mut self.buf, fresh);
-        drop(old_surface);
-
-        ExternalHandle::CpuPixelsOwned {
-            pixels: old_buf.into(),
-            width: self.size.width,
-            height: self.size.height,
-            stride: self.stride as u32,
-            format: PixelFormat::PreMulArgb32,
-        }
-    }
+    // pub fn take_external_owned(&self) -> ExternalHandle {
+    //     ExternalHandle::CpuPixelsOwned {
+    //         pixels: self.pixels.take(),
+    //         width: self.size.width,
+    //         height: self.size.height,
+    //         stride: self.stride as u32,
+    //         format: PixelFormat::PreMulArgb32,
+    //     }
+    // }
 }
 
 impl ErasedSurface for CairoSurface {

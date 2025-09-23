@@ -66,6 +66,13 @@ impl From<Uuid> for ZoneId {
     }
 }
 
+impl From<String> for ZoneId {
+    fn from(s: String) -> Self {
+        let uuid = Uuid::parse_str(&s).unwrap_or_else(|_| Uuid::new_v4());
+        Self(uuid)
+    }
+}
+
 impl Display for ZoneId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
