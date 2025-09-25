@@ -1,10 +1,9 @@
 use crate::engine::BrowsingContext;
-use crate::render::backend::{
-    ErasedSurface, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
-};
+use crate::render::backend::{ErasedSurface, ExternalHandle, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use crate::render::DisplayItem;
 use anyhow::{anyhow, Result};
 use std::any::Any;
+use std::ptr::NonNull;
 
 /// Cairo backend for rendering using cairo graphics library.
 pub struct CairoBackend;
@@ -17,7 +16,7 @@ impl CairoBackend {
 }
 
 impl RenderBackend for CairoBackend {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "cairo"
     }
 
@@ -28,7 +27,7 @@ impl RenderBackend for CairoBackend {
 
     /// Renders a surface by getting the DisplayItems from the browsing context and rendering them
     /// onto the ErasedSurface
-    fn render(&mut self, ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> Result<()> {
+    fn render(&self, ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> Result<()> {
         // Ensure the surface is a CairoSurface.
         let s = surface
             .as_any_mut()
@@ -97,6 +96,10 @@ impl RenderBackend for CairoBackend {
                 }
             }
 
+            cr.set_source_rgba(1.0, 0.0, 0.0, 0.25);
+            cr.rectangle(10.0, 10.0, 100.0, 100.0);
+            _ = cr.fill();
+
             let _ = cr.restore();
         })?;
 
@@ -105,7 +108,7 @@ impl RenderBackend for CairoBackend {
     }
 
     /// Generates a snapshot of the surface as a small RGBA8 image.
-    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, _max_dim: u32) -> Result<RgbaImage> {
+    fn snapshot(&self, surface: &mut dyn ErasedSurface, _max_dim: u32) -> Result<RgbaImage> {
         let s = surface
             .as_any_mut()
             .downcast_mut::<CairoSurface>()
@@ -115,14 +118,24 @@ impl RenderBackend for CairoBackend {
         Ok(RgbaImage::from_raw(pixels, s.size.width, s.size.height, s.stride as u32, PixelFormat::PreMulArgb32))
     }
 
-    // fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> anyhow::Result<ExternalHandle> {
-    //     let s = surface
-    //         .as_any_mut()
-    //         .downcast_mut::<CairoSurface>()
-    //         .ok_or_else(|| anyhow!("CairoBackend used with non-Cairo surface"))?;
-    //
-    //     Some(s.take_external_owned())
-    // }
+    fn external_handle(&self, surface: &mut dyn ErasedSurface) -> Result<ExternalHandle> {
+        let s = surface
+            .as_any_mut()
+            .downcast_mut::<CairoSurface>()
+            .ok_or_else(|| anyhow!("CairoBackend used with non-Cairo surface"))?;
+
+        if s.size.width == 0 || s.size.height == 0 || s.stride == 0 || s.pixels.is_empty() {
+            return Ok(ExternalHandle::NullHandle { width: s.size.width, height: s.size.height, frame_id: s.frame_id });
+        }
+
+        let ptr = NonNull::new(s.pixels.as_mut_ptr()).ok_or_else(|| anyhow!("CairoSurface has null pixel buffer"))?;
+        Ok(ExternalHandle::CpuPixelsPtr {
+            width: s.size.width,
+            height: s.size.height,
+            stride: s.stride as u32,
+            pixel_buf: ptr,
+        })
+    }
 }
 
 /// A Cairo surface that can be used for rendering.

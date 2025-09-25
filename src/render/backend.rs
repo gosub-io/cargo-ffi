@@ -21,6 +21,8 @@ use crate::engine::BrowsingContext;
 use crate::render::Viewport;
 use std::any::Any;
 use std::ptr::NonNull;
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 /// A surface rect has the same properties as a viewport, but a surface rect
 /// is usually computed with DevicePixelRatio.
@@ -253,19 +255,19 @@ pub trait ErasedSurface: Any {
 /// Implemented by all rendering backends. The engine calls these methods
 /// on the backend’s owning thread.
 pub trait RenderBackend: Send + Sync {
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 
     /// Create a new surface with the given size and present mode.
     fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> anyhow::Result<Box<dyn ErasedSurface + Send>>;
 
     /// Render the current state of the browsing context to the given surface.
-    fn render(&mut self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
+    fn render(&self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()>;
 
     /// Generate a small RGBA8 snapshot of the surface, suitable for thumbnails or previews.
-    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
+    fn snapshot(&self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage>;
 
-    // /// Returns an external handle for the surface, if supported.
-    // fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle>;
+    /// Returns an external handle for the surface, if supported.
+    fn external_handle(&self, surface: &mut dyn ErasedSurface) -> anyhow::Result<ExternalHandle>;
 }
 
 /// Interface for compositors to receive frames from backends.
@@ -275,5 +277,51 @@ pub trait RenderBackend: Send + Sync {
 /// that the host can composite into its UI.
 pub trait CompositorSink {
     /// Submit a rendered frame for the given tab.
-    fn submit_frame(&mut self, tab: crate::tab::TabId, handle: ExternalHandle);
+    fn submit_frame(&self, tab: crate::tab::TabId, handle: ExternalHandle);
+}
+
+
+
+/// Thread-safe router for switching between multiple render backends at runtime.
+pub struct RenderBackendRouter {
+    inner: RwLock<Arc<dyn RenderBackend + Send + Sync>>,
+}
+
+impl RenderBackendRouter {
+    pub fn new (initial: Arc<dyn RenderBackend + Send + Sync>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: RwLock::new(initial),
+        })
+    }
+
+    pub fn set_backend(&self, backend: Arc<dyn RenderBackend + Send + Sync>) {
+        *self.inner.write() = backend;
+    }
+
+    #[inline]
+    pub fn current(&self) -> Arc<dyn RenderBackend + Send + Sync> {
+        self.inner.read().clone()
+    }
+}
+
+impl RenderBackend for RenderBackendRouter {
+    fn name(&self) -> &'static str {
+        self.current().name()
+    }
+
+    fn create_surface(&self, size: SurfaceSize, present: PresentMode) -> anyhow::Result<Box<dyn ErasedSurface + Send>> {
+        self.current().create_surface(size, present)
+    }
+
+    fn render(&self, context: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> anyhow::Result<()> {
+        self.current().render(context, surface)
+    }
+
+    fn snapshot(&self, surface: &mut dyn ErasedSurface, max_dim: u32) -> anyhow::Result<RgbaImage> {
+        self.current().snapshot(surface, max_dim)
+    }
+
+    fn external_handle(&self, surface: &mut dyn ErasedSurface) -> anyhow::Result<ExternalHandle> {
+        self.current().external_handle(surface)
+    }
 }

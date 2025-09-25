@@ -97,6 +97,7 @@ regex = "1.11.1"
 mimetype-detector = "0.2.2"
 image = "0.25.8"
 async-trait = "0.1.89"
+async-channel = "2.5.0"
 
 [features]
 default = ["sqlite_cookie_store", "parley_layout"]

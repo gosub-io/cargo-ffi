@@ -114,12 +114,10 @@ pub struct TabWorker {
     desired_viewport: Viewport,
     /// Set when a resize arrives while rendering. Causes an immediate re-render after finishing the current rendering.
     dirty_after_inflight: bool,
-
     /// Keeps track of the tab worker runtime data
     pub(crate) runtime: TabRuntime,
-
+    /// Current in-flight navigation (if any)
     load: Option<NavJoin>,
-
     /// Current active navigation (if any)
     active_nav: Option<ActiveNav>,
 }
@@ -594,6 +592,23 @@ impl TabWorker {
 
     /// Do a draw tick. This will be called based on the FPS that is requested
     async fn tick_draw(&mut self) -> anyhow::Result<()> {
+        let render_backend = self.zone_context.render_backend.clone();
+
+        // Ensure we have a surface of the right size to draw on
+        self.ensure_surface(render_backend.clone(), self.desired_viewport.as_size())?;
+        // Rebuild the render list if anything has changed
+        self.context.rebuild_render_list_if_needed();
+
+        // Begin the render process
+        if let Some(ref mut surf) = self.surface {
+            log::trace!("Tab {:?} rendering...", self.tab_id);
+            render_backend.render(&mut self.context, surf.as_mut())?;
+            if let Ok(handle) = render_backend.external_handle(surf.as_mut()) {
+                log::trace!("Tab {:?} submitting rendered frame", self.tab_id);
+                self.zone_context.compositor.submit_frame(self.tab_id, handle);
+            }
+        }
+
         self.sink.inc_frame();
 
         let now = std::time::Instant::now();
@@ -668,7 +683,7 @@ impl TabWorker {
 
     /// Ensure the tab has a surface of the given size, creating it if necessary.
     #[allow(unused)]
-    fn ensure_surface(&mut self, backend: &dyn RenderBackend, size: SurfaceSize) -> anyhow::Result<()> {
+    fn ensure_surface(&mut self, backend: Arc<dyn RenderBackend + Send + Sync>, size: SurfaceSize) -> anyhow::Result<()> {
         if let Some(ref surf) = self.surface {
             if surf.size() == size {
                 return Ok(());
@@ -679,12 +694,12 @@ impl TabWorker {
     }
 
     #[allow(unused)]
-    fn begin_render(&mut self, backend: &dyn RenderBackend) -> anyhow::Result<()> {
+    fn begin_render(&mut self, render_backend: Arc<dyn RenderBackend + Send + Sync>) -> anyhow::Result<()> {
         if self.committed_viewport != self.desired_viewport {
             self.committed_viewport = self.desired_viewport;
 
             let surf_sz = self.committed_viewport.to_surface_size(self.dpr);
-            self.ensure_surface(backend, surf_sz)?;
+            self.ensure_surface(render_backend, surf_sz)?;
             self.context.set_viewport(self.committed_viewport);
         }
 
@@ -800,183 +815,6 @@ impl ControlFlow {
         matches!(self, ControlFlow::Break)
     }
 }
-
-// const PROGRESS_BYTES_STEP: usize = 32 * 1024;       // Emit events after every 32KB received
-
-// const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
-
-// async fn parse_main_document_stream<R>(
-//     tab_id: TabId,
-//     nav_id: NavigationId,
-//     final_url: Url,
-//     mut reader: R,
-//     cancel_token: CancellationToken,
-//     _ignore_cache: bool,
-//     event_tx: EventChannel,
-// ) -> anyhow::Result<Document>
-// where
-//     R: AsyncRead + Unpin + Send + 'static,
-// {
-//     let time_start = Instant::now();
-//
-//     let mut buf = vec![0u8; 16 * 1024];     // 16K buffer
-//     let mut total: usize = 0;
-//     let mut last_progress_total: usize = 0;
-//     let idle = sleep(IDLE_TIMEOUT);
-//     tokio::pin!(idle);
-//
-//     let mut document_buffer = Vec::new();
-//
-//     loop {
-//         select! {
-//             _ = cancel_token.cancelled() => {
-//                 return Err(NavigationError::Cancelled("stream cancelled".into()).into());
-//             }
-//             _ = &mut idle => {
-//                 return Err(NavigationError::Timeout("stream timeout".into()).into());
-//             }
-//             read_res = reader.read(&mut buf) => {
-//                 let n = match read_res {
-//                     Ok(n) => n,
-//                     Err(e) => return Err(e.into()),
-//                 };
-//
-//                 if n == 0 {
-//                     if total != last_progress_total {
-//                         // last_progress_total = total;
-//                     }
-//                     break;
-//                 }
-//
-//                 idle.as_mut().reset(Instant::now() + IDLE_TIMEOUT);
-//
-//                 if total == 0 {
-//                 }
-//
-//                 document_buffer.extend_from_slice(&buf[..n]);
-//                 total += n;
-//
-//                 // @TODO: here we can feed our HTML5 parser / bytestream with more bytes
-//
-//
-//                 let bytes_since = total - last_progress_total;
-//                 if bytes_since >= PROGRESS_BYTES_STEP {
-//                     last_progress_total = total;
-//
-//                     let _ = event_tx.send(EngineEvent::Load{tab_id, event: LoadEvent::Progress {
-//                         nav_id,
-//                         url: final_url.clone(),
-//                         finished: false,
-//                         ttfb: false,
-//                         bytes_received: total as u64,
-//                         elapsed: time_start.elapsed(),
-//                     }});
-//                 }
-//             }
-//         }
-//     }
-//
-//     // Parser should finish up and return a document
-//
-//     match String::from_utf8(document_buffer) {
-//         Ok(s) => Ok(Document(s)),
-//         Err(e) => Err(NavigationError::Other(anyhow!("invalid utf8: {e}")).into())
-//     }
-// }
-
-// async fn handle_stream(
-//     tab_id: TabId,
-//     nav_id: NavigationId,
-//     meta: &ContentMeta,
-//     shared: Arc<SharedBody>,
-//     cancel: CancellationToken,
-//     ignore_cache: bool,
-//     event_tx: EventChannel,
-// ) -> ResourceLoadResult {
-//     let stream = shared.subscribe_stream()
-//         .map_err(|e: NetError| e.to_io());
-//     let mut reader = StreamReader::new(stream);
-//
-//     let mut peek = vec![0u8; PEEK_BUF_SIZE];
-//     let n_peek = match select! {
-//         _ = cancel.cancelled() => return Err(NavigationError::Cancelled("navigation cancelled".into())),
-//         r = reader.read(&mut peek) => r.map_err(|e| NavigationError::from(e))?,
-//     };
-//     peek.truncate(n_peek);
-//
-//     // Create a new reader that first reads from the peek buffer, then continues with the rest of the stream
-//     let mut first = &peek[..];
-//     let mut chain = tokio_util::io::StreamReader::new(
-//         futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::copy_from_slice(first)) })
-//     );
-//
-//     // Figure out from the content-type and/or the first PEEK_BUF_SIZE bytes what kind of type this resource is
-//     let header_ct = meta.content_type.as_deref();
-//     let kind = classify_mime(header_ct, Some(&peek));
-//
-//     match kind {
-//         MimeKind::Html => {
-//             let doc = parse_main_document_stream(
-//                 tab_id,
-//                 nav_id,
-//                 meta.final_url.clone(),
-//                 chain,
-//                 cancel,
-//                 ignore_cache,
-//                 event_tx
-//             ).await?;
-//             Resource::Html(doc)
-//         }
-//         MimeKind::Json => {
-//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
-//             let value: serde_json::Value = serde_json::from_slice(&bytes) {
-//                 Ok(v) => v,
-//                 Err(e) => return Err(NavigationError::Other(anyhow!("Invalid JSON: {e}"))),
-//             };
-//             Resource::Json(value).into()
-//         }
-//         MimeKind::Image => {
-//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
-//             Resource::Image { bytes: bytes.into(), mime: meta.content_type.clone().unwrap_or_else(|| "image/*".into()) }.into()
-//         }
-//         MimeKind::Text => {
-//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
-//
-//             let s = String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-//             Resource::Text { text: s, mime: header_ct.unwrap_or("text/plain").to_string() }.into()
-//         }
-//         MimeKind::Binary => {
-//             let bytes = read_all_bounded(&mut chain, cancel.clone(), MAX_BUFFER_BYTES).await?;
-//             Resource::Binary { bytes: bytes.into(), mime: header_ct.unwrap_or("application/octet-stream").to_string() }.into()
-//         }
-//     }
-// }
-
-// async fn parse_main_document_bytes(
-//     tab_id: TabId,
-//     nav_id: NavigationId,
-//     final_url: Url,
-//     bytes: &[u8],
-//     _ignore_cache: bool,
-//     event_tx: EventChannel,
-// ) -> anyhow::Result<Document> {
-//     let reader = Cursor::new(bytes.to_vec());       // @TODO: can we remove the to_vec() copy)
-//     let cancel = CancellationToken::new();
-//
-//     tokio::task::block_in_place(|| {
-//         tokio::runtime::Handle::current().block_on(async move {
-//             parse_main_document_stream(
-//                 tab_id,
-//                 nav_id,
-//                 final_url,
-//                 reader,
-//                 cancel,
-//                 _ignore_cache,
-//                 event_tx,
-//             ).await
-//         })
-//     })
-// }
 
 #[cfg(test)]
 mod tests {

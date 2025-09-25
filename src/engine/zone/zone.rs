@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 use crate::net::req_ref_tracker::RequestReferenceMap;
+use crate::render::backend::{CompositorSink, RenderBackend};
 
 /// A unique identifier for a [`Zone`] within a [`GosubEngine`](crate::GosubEngine).
 ///
@@ -105,8 +106,11 @@ pub struct ZoneContext {
     pub(crate) io_tx: IoChannel,
     /// Map of request references to tab IDs, used to route network events back to the right tab
     pub(crate) request_reference_map: Arc<RwLock<RequestReferenceMap>>,
-    // /// Keeps track of all in-flight fetches so we can deduplicate them
-    // pub(crate) fetch_inflight_map: Arc<FetchInflightMap>,
+
+    /// Compositor router to use for this zone
+    pub(crate) compositor: Arc<dyn CompositorSink + Send + Sync>,
+    /// Rendering backend to use for this zone
+    pub(crate) render_backend: Arc<dyn RenderBackend + Send + Sync>,
 }
 
 // Things that are shared upwards to the engine
@@ -203,6 +207,8 @@ impl Zone {
             guard.as_ref().cloned().expect("I/O thread not running")
         };
         let request_reference_map = engine_context.request_reference_map.clone();
+        let compositor = engine_context.compositor.clone();
+        let render_backend = engine_context.render_backend.clone();
 
         let zone = Self {
             engine_context,
@@ -221,6 +227,8 @@ impl Zone {
                 event_tx,
                 io_tx,
                 request_reference_map,
+                compositor,
+                render_backend,
             }),
             id: zone_id,
             tabs: HashMap::new(),

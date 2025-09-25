@@ -1,7 +1,5 @@
 use crate::engine::BrowsingContext;
-use crate::render::backend::{
-    ErasedSurface, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize,
-};
+use crate::render::backend::{ErasedSurface, ExternalHandle, PixelFormat, PresentMode, RenderBackend, RgbaImage, SurfaceSize};
 use anyhow::{anyhow, Result};
 use std::any::Any;
 
@@ -16,7 +14,7 @@ impl NullBackend {
 }
 
 impl RenderBackend for NullBackend {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "NullBackend"
     }
 
@@ -24,7 +22,7 @@ impl RenderBackend for NullBackend {
         Ok(Box::new(NullSurface::new(size)?))
     }
 
-    fn render(&mut self, _ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> Result<()> {
+    fn render(&self, _ctx: &mut BrowsingContext, surface: &mut dyn ErasedSurface) -> Result<()> {
         let s = surface
             .as_any_mut()
             .downcast_mut::<NullSurface>()
@@ -34,7 +32,7 @@ impl RenderBackend for NullBackend {
         Ok(())
     }
 
-    fn snapshot(&mut self, surface: &mut dyn ErasedSurface, _max_dim: u32) -> Result<RgbaImage> {
+    fn snapshot(&self, surface: &mut dyn ErasedSurface, _max_dim: u32) -> Result<RgbaImage> {
         let s = surface
             .as_any_mut()
             .downcast_mut::<NullSurface>()
@@ -50,15 +48,15 @@ impl RenderBackend for NullBackend {
         ))
     }
 
-    // fn external_handle(&mut self, surface: &mut dyn ErasedSurface) -> Option<ExternalHandle> {
-    //     let s = surface.as_any_mut().downcast_mut::<NullSurface>()?;
-    //
-    //     Some(ExternalHandle::NullHandle {
-    //         width: s.size.width,
-    //         height: s.size.height,
-    //         frame_id: s.frame_id,
-    //     })
-    // }
+    fn external_handle(&self, surface: &mut dyn ErasedSurface) -> Result<ExternalHandle> {
+        let s = surface.as_any_mut().downcast_mut::<NullSurface>().ok_or_else(|| anyhow!("NullBackend used with non-Null surface"))?;
+
+        Ok(ExternalHandle::NullHandle {
+            width: s.size.width,
+            height: s.size.height,
+            frame_id: s.frame_id,
+        })
+    }
 }
 
 pub struct NullSurface {

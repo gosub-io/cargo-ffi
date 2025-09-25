@@ -1,12 +1,13 @@
 use crate::render::backend::{CompositorSink, ExternalHandle};
 use crate::tab::TabId;
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// A default compositor implementation that manages frames per tab
 /// and requests redraws when new frames are submitted.
 ///
 /// Often, you would implement your own compositor depending on the UI
-/// frame work you use (e.g. GTK, egui, etc). But this default compositor
+/// framework you use (e.g. GTK, egui, etc.). But this default compositor
 /// can be used as a simple starting point or for testing.
 ///
 /// The compositor acts as the sink for rendered frames: the backend
@@ -18,12 +19,12 @@ pub struct DefaultCompositor {
     /// A map of tab IDs to their corresponding external handles.
     /// Each [`TabId`] maps to an [`ExternalHandle`] provided by the
     /// render backend.
-    pub frames: HashMap<TabId, ExternalHandle>,
+    pub frames: RwLock<HashMap<TabId, ExternalHandle>>,
 
     /// A callback function invoked when a redraw is requested.
-    /// Typically this is connected to a GTK widget’s `queue_draw()`
+    /// Typically, this is connected to a GTK widget’s `queue_draw()`
     /// or similar function.
-    redraw_cb: Box<dyn Fn() + 'static>,
+    redraw_cb: Box<dyn Fn() + Send + Sync + 'static>,
 }
 
 impl DefaultCompositor {
@@ -33,9 +34,9 @@ impl DefaultCompositor {
     ///
     /// * `redraw_cb` - A closure that will be called whenever a new
     ///   frame is submitted and the UI should repaint.
-    pub fn new<F: Fn() + 'static>(redraw_cb: F) -> Self {
+    pub fn new<F: Fn() + Send + Sync + 'static>(redraw_cb: F) -> Self {
         Self {
-            frames: HashMap::new(),
+            frames: RwLock::new(HashMap::new()),
             redraw_cb: Box::new(redraw_cb),
         }
     }
@@ -57,17 +58,18 @@ impl DefaultCompositor {
     ///
     /// `Some(&ExternalHandle)` if a frame is stored for this tab,
     /// or `None` if no frame has been submitted yet.
-    #[allow(unused)]
-    pub fn frame_for(&self, tab_id: TabId) -> Option<&ExternalHandle> {
-        self.frames.get(&tab_id)
+    pub fn frame_for(&self, tab_id: TabId) -> Option<ExternalHandle> {
+        self.frames.read().unwrap().get(&tab_id).cloned()
     }
 
     /// Retrieves a mutable reference to the [`ExternalHandle`]
     /// for the given [`TabId`], if it exists.
     ///
     /// This can be used to update or replace the handle in place.
-    pub fn frame_for_mut(&mut self, tab_id: TabId) -> Option<&mut ExternalHandle> {
-        self.frames.get_mut(&tab_id)
+    pub fn frame_for_mut(&self, tab_id: TabId, f: impl FnOnce(&mut ExternalHandle)) {
+        if let Some(h) = self.frames.write().unwrap().get_mut(&tab_id) {
+            f(h);
+        }
     }
 }
 
@@ -82,8 +84,8 @@ impl CompositorSink for DefaultCompositor {
     ///
     /// * `tab_id` - The tab for which the frame is produced.
     /// * `handle` - The external handle containing the frame data.
-    fn submit_frame(&mut self, tab_id: TabId, handle: ExternalHandle) {
-        self.frames.insert(tab_id, handle);
+    fn submit_frame(&self, tab_id: TabId, handle: ExternalHandle) {
+        self.frames.write().unwrap().insert(tab_id, handle);
         self.request_redraw();
     }
 }

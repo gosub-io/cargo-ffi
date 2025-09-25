@@ -122,4 +122,7 @@ pub use viewport::DevicePixelRatio;
 pub use viewport::Viewport;
 
 mod compositor;
+mod compositor_router;
+
 pub use compositor::DefaultCompositor;
+pub use compositor_router::CompositorRouter;

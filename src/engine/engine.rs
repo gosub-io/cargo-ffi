@@ -24,12 +24,11 @@ use crate::engine::events::{EngineCommand, EngineEvent};
 use crate::engine::types::{EventChannel, IoChannel};
 use crate::engine::DEFAULT_CHANNEL_CAPACITY;
 use crate::net::{spawn_io_thread, FetcherConfig, IoHandle};
-use crate::render::backend::RenderBackend;
+use crate::render::backend::{CompositorSink, RenderBackend, RenderBackendRouter};
 use crate::util::spawn_named;
 use crate::zone::{Zone, ZoneConfig, ZoneId, ZoneServices, ZoneSink};
 use crate::{EngineConfig, EngineError};
 use anyhow::Result;
-use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -38,6 +37,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::instrument;
 use crate::net::req_ref_tracker::RequestReferenceMap;
+use crate::render::CompositorRouter;
 
 pub struct GosubEngine {
     /// Context is what can be shared downstream
@@ -59,7 +59,9 @@ pub struct GosubEngine {
 #[derive(Clone)]
 pub struct EngineContext {
     /// Active render backend for the engine.
-    pub backend: Arc<RwLock<Box<dyn RenderBackend + Send + Sync>>>,
+    pub render_backend: Arc<RenderBackendRouter>,
+    /// Compositor router sink to connect rendering output to the caller
+    pub compositor: Arc<CompositorRouter>,
     /// Event sender
     pub event_tx: EventChannel,
     /// Global engine configuration
@@ -73,9 +75,8 @@ pub struct EngineContext {
 impl Default for EngineContext {
     fn default() -> Self {
         Self {
-            backend: Arc::new(RwLock::new(Box::new(
-                crate::render::backends::null::NullBackend::new().unwrap(),
-            ))),
+            render_backend: RenderBackendRouter::new(Arc::new(crate::render::backends::null::NullBackend::new().unwrap())),
+            compositor: CompositorRouter::new(),
             event_tx: broadcast::channel::<EngineEvent>(DEFAULT_CHANNEL_CAPACITY).0,
             config: Arc::new(EngineConfig::default()),
             io_tx: Arc::new(RwLock::new(None)),
@@ -94,7 +95,7 @@ impl GosubEngine {
     /// let backend = ge::render::backends::null::NullBackend::new().unwrap();
     /// let engine = ge::GosubEngine::new(None, Box::new(backend));
     /// ```
-    pub fn new(config: Option<EngineConfig>, backend: Box<dyn RenderBackend + Send + Sync>) -> Self {
+    pub fn new(config: Option<EngineConfig>, backend: Arc<dyn RenderBackend + Send + Sync>) -> Self {
         let resolved_config = config.unwrap_or_else(EngineConfig::default);
 
         // Command channel on which to send and receive engine commands from the UA.
@@ -105,7 +106,8 @@ impl GosubEngine {
 
         Self {
             context: Arc::new(EngineContext {
-                backend: Arc::new(RwLock::new(backend)),
+                render_backend: RenderBackendRouter::new(backend),
+                compositor: CompositorRouter::new(),
                 event_tx: event_tx.clone(),
                 config: Arc::new(resolved_config),
                 io_tx: Arc::new(RwLock::new(None)),
@@ -151,19 +153,21 @@ impl GosubEngine {
     }
 
     /// Replace the active render backend.
-    pub fn set_backend_renderer(&mut self, new_backend: Box<dyn RenderBackend + Send + Sync>) {
-        {
-            let binding = self.context.backend.read().unwrap();
-            let old_name = binding.name();
-            let _ = self.context.event_tx.send(EngineEvent::BackendChanged {
-                old: old_name.to_string(),
-                new: new_backend.name().to_string(),
-            });
+    pub fn set_backend_renderer(&self, new_backend: Arc<dyn RenderBackend + Send + Sync>) {
+        if self.context.render_backend.name() == new_backend.name() {
+            // The same name, so we assume it’s the same backend.
+            return;
         }
+        self.context.render_backend.set_backend(new_backend);
+    }
 
-        let binding = self.context.borrow_mut();
-        let mut backend = binding.backend.write().unwrap();
-        *backend = new_backend;
+    pub fn set_compositor_sink(&self, sink: Arc<dyn CompositorSink + Send + Sync>) {
+        self.context.compositor.set_sink(sink);
+    }
+
+    /// Give this to zones/tabs when constructing them.
+    pub fn compositor(&self) -> Arc<CompositorRouter> {
+        Arc::clone(&self.context.compositor)
     }
 
     /// Get a clone of the engine’s command sender (mainly for testing or

@@ -1,11 +1,10 @@
-use crate::compositor::GtkCompositor;
 use crate::tiling::{
     close_leaf, collect_leaves, compute_layout, find_leaf_at, split_leaf_into_cols, split_leaf_into_rows, LayoutHandle,
     LayoutNode, Rect,
 };
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::render::backend::ExternalHandle;
-use gosub_engine::render::Viewport;
+use gosub_engine::render::{DefaultCompositor, Viewport};
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
 use gosub_engine::zone::{ZoneConfig, ZoneId, ZoneServices};
 use gosub_engine::GosubEngine;
@@ -26,20 +25,20 @@ use gosub_engine::tab::{TabDefaults, TabHandle, TabId};
 use once_cell::sync::Lazy;
 use tokio::runtime::{Builder, Runtime};
 
-mod compositor;
 mod tiling;
 
+/// We use a fixed UUID for the main zone in this example. This allows us to easily
+/// reconnect to the same zone if we restart the app and want to keep cookies/localStorage.
 const DEFAULT_MAIN_ZONE: uuid::Uuid = uuid!("95d9c701-5f1b-43ea-ba7e-bc509ee8aa54");
 
-
+/// UI message events
 #[derive(Debug, Clone)]
 enum UiMsg {
+    /// An engine event occurred
     EngineEvent(EngineEvent),
-    #[allow(unused)]
-    Redraw,
 }
 
-// Global Tokio runtime for the whole GTK app
+// Global Tokio runtime. This is needed to run the Gosub engine
 static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
     Builder::new_multi_thread()
         .enable_io()
@@ -49,45 +48,27 @@ static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
         .expect("init tokio runtime")
 });
 
-// fn current_url_for_tab(eng: &GosubEngine, tab_id: gosub_engine::tab::TabId) -> Option<Url> {
-//     eng.get_tab(tab_id)
-//         .unwrap()
-//         .lock()
-//         .unwrap()
-//         .current_url
-//         .clone()
-// }
-
 fn main() {
-    // let mut builder = env_logger::Builder::new();
-    // builder.filter_level(log::LevelFilter::Trace).target(env_logger::Target::Stderr).init();
-    // log::set_max_level(log::LevelFilter::Trace);
-
+    // Initialize logging
+    let mut builder = env_logger::Builder::new();
+    builder.filter_level(log::LevelFilter::Trace).target(env_logger::Target::Stderr).init();
+    log::set_max_level(log::LevelFilter::Trace);
 
     let app = Application::builder()
         .application_id("io.gosub.engine")
         .build();
-
-    //
-    //  let rt = Builder::new_multi_thread()
-    //         .worker_threads(num_cpus::get())
-    //         .enable_io()
-    //         .enable_time()
-    //         .thread_name("gosub-rt")
-    //         .build()
-    //         .expect("init tokio runtime");
-    // let _ = rt.enter();
-
 
     app.connect_activate(move |app| {
 
         // Enter Tokio so any internal tokio::spawn/time/io in engine works
         let _rt_guard = TOKIO_RT.enter();
 
-        // Start the engine
+
+        // Start the Gosub engine with the cairo backend
         let backend = gosub_engine::render::backends::cairo::CairoBackend::new();
-        let mut engine = GosubEngine::new(None, Box::new(backend));
+        let mut engine = GosubEngine::new(None, Arc::new(backend));
         let _engine_join_handle = engine.start().expect("engine start failed");
+        // Subscribe to engine events
         let event_rx = engine.subscribe_events();
 
         // Setup zone
@@ -115,8 +96,10 @@ fn main() {
                 .expect("create_zone failed")
         ));
 
+        // Save all tabs into a map
         let tabs: Rc<RefCell<HashMap<TabId, TabHandle>>> = Rc::new(RefCell::new(HashMap::new()));
 
+        // Since this is not an async main() function, we need to block on async calls.
         let tab = TOKIO_RT.block_on(async {
             zone.borrow_mut().create_tab(TabDefaults {
                 url: None,
@@ -145,111 +128,40 @@ fn main() {
         drawing_area.set_content_height(600);
         drawing_area.set_focusable(true);
 
-        // The compositor will call `queue_draw` on the drawing area after a frame is submitted (do we want this?)
-        let compositor = Rc::new(RefCell::new(
-            GtkCompositor::new({
-                let da = drawing_area.clone();
-                move || da.queue_draw()
+
+        // Since drawing_area is not Send + Sync, we cannot use it directly in the compositor
+        // callback. We set up a channel to the main loop instead so we can request a redraw there.
+        let (tx_redraw, mut rx_redraw) = mpsc::unbounded_channel();
+
+        let drawing_area_clone = drawing_area.clone();
+        glib::spawn_future_local(async move {
+            // When rx_redraw is triggered, request a redraw of the drawing_area
+            while let Some(()) = rx_redraw.recv().await {
+                log::trace!("**** COMPOSITOR REDRAW ****");
+                // Request a redraw of the drawing area
+                drawing_area_clone.queue_draw();
+            }
+        });
+
+        // Set up the compositor. This connects the engine's rendered frames to our GTK drawing area.
+        let compositor = Arc::new(
+            DefaultCompositor::new({
+                // Instead of doing the drawing directly here, we send a message to the GTK main loop
+                // This is because drawing on the drawing_area widget is not Send + Sync.
+                let tx = tx_redraw.clone();
+                move || {
+                    log::trace!("**** COMPOSITOR CALLBACK TX SEND****");
+                    let _ = tx.send(());
+                }
             })
-        ));
+        );
+        // Set the compositor as the engine's sink
+        engine.set_compositor_sink(compositor.clone());
 
         // Toolbar: Split Col, Split Row, Close Pane
         let btn_split_col = Button::with_label("Split Col");
         let btn_split_row = Button::with_label("Split Row");
         let btn_close = Button::with_label("Close Pane");
-
-        let btn_set_ls = Button::with_label("Set LS");
-        let btn_get_ls = Button::with_label("Get LS");
-
-        let btn_set_ss = Button::with_label("Set SS");
-        let btn_get_ss = Button::with_label("Get SS");
-
-        // let storage_debug = zone_services.storage.clone();
-        // let active_ls_set = active_tab.clone();
-        // btn_set_ls.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ls_set, @strong active_ls_set => move |_| {
-        //     let tab_id = *active_ls_set.borrow();
-        //     let Ok(eng_ref) = eng_ls_set.try_borrow() else { return; };
-        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-        //         eprintln!("[LS] No current URL for active tab; navigate somewhere first.");
-        //         return;
-        //     };
-        //     let origin = url.origin();
-        //
-        //     // Default partition unless you're testing CHIPS; tweak as needed:
-        //     let pk = gosub_engine::storage::PartitionKey::default();
-        //
-        //     let area = storage_debug.local_for(zone_id, &pk, &origin).unwrap();
-        //     if let Err(e) = area.set_item("foo", "bar") {
-        //         eprintln!("[LS] set_item error: {e}");
-        //     } else {
-        //         println!("[LS] set foo=bar for origin {}", url.origin().ascii_serialization());
-        //     }
-        // }));
-
-        // let storage_debug = storage.clone();
-        // let eng_ls_get = engine.clone();
-        // let active_ls_get = active_tab.clone();
-        // btn_get_ls.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ls_get, @strong active_ls_get => move |_| {
-        //     let tab_id = *active_ls_get.borrow();
-        //     let Ok(eng_ref) = eng_ls_get.try_borrow() else { return; };
-        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-        //         eprintln!("[LS] No current URL.");
-        //         return;
-        //     };
-        //     let origin = url.origin();
-        //     let pk = gosub_engine::storage::PartitionKey::default();
-        //
-        //     let area = storage_debug.local_for(zone_id, &pk, &origin).unwrap();
-        //     match area.get_item("foo") {
-        //         Some(v) => println!("[LS] get foo -> {v}"),
-        //         None    => println!("[LS] key foo not set"),
-        //     }
-        // }));
-
-        // // ---------- SessionStorage (per-(zone,tab,origin,partition)) ----------
-        // let storage_debug = storage.clone();
-        // let eng_ss_set = engine.clone();
-        // let active_ss_set = active_tab.clone();
-        //
-        // // Button: Set SessionStorage key=foo, value=bar
-        // // function: btn_set_ss.on_click
-        // btn_set_ss.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ss_set, @strong active_ss_set => move |_| {
-        //     let tab_id = *active_ss_set.borrow();
-        //     let Ok(eng_ref) = eng_ss_set.try_borrow() else { return; };
-        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-        //         eprintln!("[SS] No current URL.");
-        //         return;
-        //     };
-        //     let origin = url.origin();
-        //     let pk = gosub_engine::storage::PartitionKey::default();
-        //
-        //     let area = storage_debug.session_for(zone_id, tab_id, &pk, &origin);
-        //     if let Err(e) = area.set_item("foo", "bar") {
-        //         eprintln!("[SS] set_item error: {e}");
-        //     } else {
-        //         println!("[SS] set foo=bar for origin {}", url.origin().ascii_serialization());
-        //     }
-        // }));
-
-        // let storage_debug = storage.clone();
-        // let eng_ss_get = engine.clone();
-        // let active_ss_get = active_tab.clone();
-        // btn_get_ss.connect_clicked(glib::clone!(@strong storage_debug, @strong eng_ss_get, @strong active_ss_get => move |_| {
-        //     let tab_id = *active_ss_get.borrow();
-        //     let Ok(eng_ref) = eng_ss_get.try_borrow() else { return; };
-        //     let Some(url) = current_url_for_tab(&eng_ref, tab_id) else {
-        //         eprintln!("[SS] No current URL.");
-        //         return;
-        //     };
-        //     let origin = url.origin();
-        //     let pk = gosub_engine::storage::PartitionKey::default();
-        //
-        //     let area = storage_debug.session_for(zone_id, tab_id, &pk, &origin);
-        //     match area.get_item("foo") {
-        //         Some(v) => println!("[SS] get foo -> {v}"),
-        //         None    => println!("[SS] key foo not set"),
-        //     }
-        // }));
 
         // -----------------------------
         // Split handlers
@@ -271,7 +183,6 @@ fn main() {
             => move |_| {
             // Open a new tab sized like the active pane
             let (w, h) = *last_size_split.borrow();
-
 
             let new_tab = TOKIO_RT.block_on(async {
                 log::trace!("Created new tab");
@@ -392,90 +303,87 @@ fn main() {
 
             // Iterate all the tabs and draw their surfaces
             for (tab_id, r) in &pairs {
-                {
-                    let mut binding = compositor_draw.borrow_mut();
-                    if let Some(handle) = binding.frame_for_mut(*tab_id) {
-                        match handle {
-                            ExternalHandle::CpuPixelsPtr { width, height, stride, pixel_buf } => {
-                                let w = *width as i32;
-                                let h = *height as i32;
-                                let st = *stride as i32;
+                if let Some(handle) = compositor_draw.frame_for(*tab_id) {
+                    match handle {
+                        ExternalHandle::CpuPixelsPtr { width, height, stride, pixel_buf } => {
+                            let w = width as i32;
+                            let h = height as i32;
+                            let st = stride as i32;
 
-                                // SAFETY: `ptr` must remain valid & mutable for `len` bytes during this paint.
-                                let surface = unsafe {
-                                    gtk4::cairo::ImageSurface::create_for_data_unsafe(
-                                        pixel_buf.as_ptr(),
-                                        gtk4::cairo::Format::ARgb32,
-                                        w,
-                                        h,
-                                        st,
-                                    ).expect("cairo surface over ptr")
-                                };
+                            // SAFETY: `ptr` must remain valid & mutable for `len` bytes during this paint.
+                            let surface = unsafe {
+                                gtk4::cairo::ImageSurface::create_for_data_unsafe(
+                                    pixel_buf.as_ptr(),
+                                    gtk4::cairo::Format::ARgb32,
+                                    w,
+                                    h,
+                                    st,
+                                ).expect("cairo surface over ptr")
+                            };
 
-                                surface.flush();
+                            surface.flush();
 
-                                cr.save().unwrap();
-                                cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
-                                cr.clip();
-                                cr.translate(r.x as f64, r.y as f64);
+                            cr.save().unwrap();
+                            cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+                            cr.clip();
+                            cr.translate(r.x as f64, r.y as f64);
 
-                                let sw = *width as f64;
-                                let sh = *height as f64;
-                                if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
-                                    cr.scale(r.w as f64 / sw, r.h as f64 / sh);
-                                }
-                                cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
-                                cr.paint().unwrap();
-                                cr.restore().unwrap();
-                                // `surface` drops here while `data` still points to valid pixels
+                            let sw = width as f64;
+                            let sh = height as f64;
+                            if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
+                                cr.scale(r.w as f64 / sw, r.h as f64 / sh);
                             }
-                            ExternalHandle::CpuPixelsOwned { width, height, stride, pixels, .. } => {
-                                let w = *width as i32;
-                                let h = *height as i32;
-                                let st = *stride as i32;
-
-                                // Safe: create a surface over a &mut [u8]. Lifetime is tied to `surface`,
-                                // which we drop before `pixels` goes out of scope in this arm.
-                                // Use the unsafe pointer-based API to avoid `'static` borrow requirements.
-                                let surface = unsafe {
-                                    gtk4::cairo::ImageSurface::create_for_data_unsafe(
-                                        pixels.as_mut_ptr(),
-                                        gtk4::cairo::Format::ARgb32,
-                                        w, h, st
-                                    ).expect("cairo surface over Vec<u8> ptr")
-                                };
-
-                                surface.flush();
-
-                                cr.save().unwrap();
-                                cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
-                                cr.clip();
-                                cr.translate(r.x as f64, r.y as f64);
-
-                                // Fit the frame into tile rect (simple scale-to-fill)
-                                let sw = *width as f64;
-                                let sh = *height as f64;
-                                if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
-                                    cr.scale(r.w as f64 / sw, r.h as f64 / sh);
-                                }
-
-                                // If you need HiDPI: cr.scale(1.0/scale_factor, 1.0/scale_factor) before painting
-                                cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
-                                cr.paint().unwrap();
-                                cr.restore().unwrap();
-                            },
-                            _ => {
-                                eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
-                            }
+                            cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+                            cr.paint().unwrap();
+                            cr.restore().unwrap();
+                            // `surface` drops here while `data` still points to valid pixels
                         }
-                    } else {
-                        // draw placeholder
-                        cr.save().unwrap();
-                        cr.set_source_rgb(0.25, 0.25, 0.30);
-                        cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
-                        cr.fill().unwrap();
-                        cr.restore().unwrap();
+                        ExternalHandle::CpuPixelsOwned { width, height, stride, mut pixels, .. } => {
+                            let w = width as i32;
+                            let h = height as i32;
+                            let st = stride as i32;
+
+                            // Safe: create a surface over a &mut [u8]. Lifetime is tied to `surface`,
+                            // which we drop before `pixels` goes out of scope in this arm.
+                            // Use the unsafe pointer-based API to avoid `'static` borrow requirements.
+                            let surface = unsafe {
+                                gtk4::cairo::ImageSurface::create_for_data_unsafe(
+                                    pixels.as_mut_ptr(),
+                                    gtk4::cairo::Format::ARgb32,
+                                    w, h, st
+                                ).expect("cairo surface over Vec<u8> ptr")
+                            };
+
+                            surface.flush();
+
+                            cr.save().unwrap();
+                            cr.rectangle(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+                            cr.clip();
+                            cr.translate(r.x as f64, r.y as f64);
+
+                            // Fit the frame into tile rect (simple scale-to-fill)
+                            let sw = width as f64;
+                            let sh = height as f64;
+                            if sw > 0.0 && sh > 0.0 && (sw as i32 != r.w || sh as i32 != r.h) {
+                                cr.scale(r.w as f64 / sw, r.h as f64 / sh);
+                            }
+
+                            // If you need HiDPI: cr.scale(1.0/scale_factor, 1.0/scale_factor) before painting
+                            cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+                            cr.paint().unwrap();
+                            cr.restore().unwrap();
+                        },
+                        _ => {
+                            eprintln!("Unsupported handle type for tab {:?}: {:?}", tab_id, handle);
+                        }
                     }
+                } else {
+                    // draw placeholder
+                    cr.save().unwrap();
+                    cr.set_source_rgb(0.74, 0.74, 0.74);
+                    cr.rectangle(r.x as f64 + 0.5, r.y as f64 + 0.5, (r.w - 1) as f64, (r.h - 1) as f64);
+                    cr.fill().unwrap();
+                    cr.restore().unwrap();
                 }
             }
 
@@ -600,11 +508,6 @@ fn main() {
         toolbar.append(&btn_split_row);
         toolbar.append(&btn_close);
 
-        toolbar.append(&btn_set_ls);
-        toolbar.append(&btn_get_ls);
-        toolbar.append(&btn_set_ss);
-        toolbar.append(&btn_get_ss);
-
         let url_bar = GtkBox::new(Orientation::Horizontal, 1);
         url_bar.append(&address_entry);
 
@@ -624,42 +527,6 @@ fn main() {
 
         window.present();
 
-        // // FrameClock tick: redraw if any visible tab needs it
-        // let fc = drawing_area.frame_clock().unwrap();
-        // let root_fc = root.clone();
-        // let drawing_fc = drawing_area.clone();
-        // let last_size_fc = last_size.clone();
-        // let compositor_fc = compositor.clone();
-        // fc.connect_update(clone!(@strong drawing_fc, @strong eng_fc, @strong root_fc => move |_clk| {
-        //
-        //     // let mut eng_mut = eng_fc.borrow_mut();
-        //     // let results = eng_mut.tick(&mut *compositor_fc.borrow_mut());
-        //     //
-        //     // // If any leaf needs redraw, repaint
-        //     // let (w, h) = *last_size_fc.borrow();
-        //     // let mut pairs = Vec::new();
-        //     // compute_layout(&root_fc.borrow(), Rect { x:0, y:0, w, h }, &mut pairs);
-        //     //
-        //     // let mut redraw = false;
-        //     // for (tab_id, _r) in pairs {
-        //     //     if let Some(res) = results.get(&tab_id) {
-        //     //         if res.page_loaded {
-        //     //             println!("Tab {:?} page loaded", tab_id);
-        //     //         }
-        //     //         if res.needs_redraw {
-        //     //             println!("Tab {:?} needs redraw", tab_id);
-        //     //             redraw = true;
-        //     //         }
-        //     //     }
-        //     // }
-        //     //
-        //     // if redraw {
-        //     //     println!("Requesting redraw in frame tick");
-        //     //     drawing_fc.queue_draw();
-        //     // }
-        // }));
-
-
         // This will spawn a task in the GTK and in the tokio. If something is received in
         // tokio, it will send a message to the GTK thread, which will then request a redraw.
         use tokio::sync::mpsc;
@@ -667,18 +534,16 @@ fn main() {
 
         // let mut event_rx_tokio = event_rx.clone();
         TOKIO_RT.spawn({
-            log::trace!("Spawning event_rx task");
             let ui_tx = ui_tx.clone();
             let mut rx = event_rx;
             async move {
                 while let Ok(evt) = rx.recv().await {
-                    log::trace!("Forwarding Engineevent to GTK thread: {:?}", evt);
+                    log::trace!("Forwarding EngineEvent to GTK thread: {:?}", evt);
                     let _ = ui_tx.send(UiMsg::EngineEvent(evt));
                 }
-                log::trace!("event_rx task exiting");
             }
         });
-        // In GTK thread: on ping, request redraw
+        // When we receive someting on the ui_rx channel, we handle it here in the GTK main loop
         let drawing_for_events = drawing_area.clone();
         glib::spawn_future_local(async move {
             while let Some(msg) = ui_rx.recv().await {
@@ -691,10 +556,6 @@ fn main() {
                         }
 
                         handle_event(evt);
-                    }
-                    UiMsg::Redraw => {
-                        // Request a redraw
-                        drawing_for_events.queue_draw();
                     }
                 }
             }
