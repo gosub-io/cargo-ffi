@@ -9,7 +9,7 @@ pub mod types;
 
 /// Decide how to handle a fetched response.
 pub fn decide_handling(
-    // The meta data from the request, including headers like content-type, no-sniff etc.
+    // The metadata from the request, including headers like content-type, no-sniff etc.
     _meta: &FetchResultMeta,
     // The request destination (e.g. "document", "script", "image", etc.)
     _dest: RequestDestination,

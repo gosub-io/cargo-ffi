@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// The outcome of routing a fetch result.
 pub enum RoutedOutcome {
     /// The main document has been parsed and is ready.
-    MainDocument(DummyDocument),
+    MainDocument(Arc<DummyDocument>),
     /// The resource has been rendered in a viewer (text, image, pdf, etc.).
     ViewerRendered(Bytes),
     /// A download has been started (path to file).
@@ -128,7 +128,7 @@ pub async fn route_response_for(
                                 .await?
                         }
                     };
-                    Ok(RoutedOutcome::MainDocument(doc))
+                    Ok(RoutedOutcome::MainDocument(Arc::new(doc)))
                 }
                 RenderTarget::CssParser => Ok(RoutedOutcome::ViewerRendered(
                     body_content.to_bytes(peek_buf).await?,

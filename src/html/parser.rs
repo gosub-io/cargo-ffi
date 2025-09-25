@@ -32,7 +32,7 @@ pub struct ResourceHint {
 }
 
 /// The "document" we "parsed".
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DummyDocument {
     /// The final URL of the document (after redirects).
     pub final_url: Url,

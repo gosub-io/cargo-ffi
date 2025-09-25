@@ -1,5 +1,5 @@
 use crate::engine::errors::NavigationError;
-use crate::engine::events::{EngineEvent, NavigationEvent};
+use crate::engine::events::{EngineEvent, NavigationEvent, TabInternalCommand};
 use crate::engine::pipeline::Hooks;
 use crate::engine::types::{NavigationId, RequestId};
 use crate::engine::{BrowsingContext, UaPolicy};
@@ -120,6 +120,11 @@ pub struct TabWorker {
     load: Option<NavJoin>,
     /// Current active navigation (if any)
     active_nav: Option<ActiveNav>,
+
+    // Send channel for internal commands
+    internal_tx: mpsc::Sender<TabInternalCommand>,
+    // Receive channel for internal commands
+    internal_rx: mpsc::Receiver<TabInternalCommand>,
 }
 
 impl TabWorker {
@@ -132,6 +137,8 @@ impl TabWorker {
         sink: Arc<TabSink>,
         cmd_rx: mpsc::Receiver<TabCommand>,
     ) -> Self {
+        let (internal_tx, internal_rx) = mpsc::channel::<TabInternalCommand>(32);
+
         Self {
             tab_id,
             zone_id,
@@ -158,6 +165,8 @@ impl TabWorker {
             runtime: TabRuntime::default(),
             load: None,
             active_nav: None,
+            internal_tx,
+            internal_rx,
         }
     }
 
@@ -181,7 +190,7 @@ impl TabWorker {
 
         loop {
             select! {
-                // Tick for redraws
+                // Handle tick for redraws
                 _ = self.runtime.interval.tick(), if self.runtime.drawing_enabled => {
                     if let Err(e) = self.tick_draw().await {
                         self.state = TabState::Failed(format!("Tab {:?} tick error: {}", self.tab_id, e));
@@ -203,7 +212,13 @@ impl TabWorker {
                     }
                 }
 
-                // Handle incoming tab commands
+                // Handle internal commands send by the tab itself
+                msg = self.internal_rx.recv() => {
+                    let Some(cmd) = msg else { break; };
+                    self.handle_internal_command(cmd);
+                }
+
+                // Handle incoming tab commands from the UA
                 msg = self.cmd_rx.recv() => {
                     let Some(cmd) = msg else { break; };
                     if self.handle_tab_command(cmd).is_break() {
@@ -262,6 +277,15 @@ impl TabWorker {
                         error: Arc::new(error.into()),
                     },
                 });
+            }
+        }
+    }
+
+    fn handle_internal_command(&mut self, cmd: TabInternalCommand) {
+        match cmd {
+            TabInternalCommand::SetDocument { doc } => {
+                self.context.set_document(doc);
+                self.runtime.dirty = true;
             }
         }
     }
@@ -427,6 +451,7 @@ impl TabWorker {
         let zone_id = self.zone_id;
         let io_tx = self.zone_context.io_tx.clone();
         let event_tx = self.zone_context.event_tx.clone();
+        let internal_tx = self.internal_tx.clone();
 
         let span = tracing::info_span!(
             "tab_nav",
@@ -505,6 +530,10 @@ impl TabWorker {
 
             match outcome {
                 Ok(RoutedOutcome::MainDocument(doc)) => {
+
+                    // Update our document in the tab
+                    internal_tx.send(TabInternalCommand::SetDocument { doc: doc.clone() }).await.ok();
+
                     let _ = tx_done.send(NavigationResult::Ok {
                         nav_id,
                         final_url: doc.final_url.clone(),

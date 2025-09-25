@@ -38,7 +38,7 @@ use crate::engine::storage::{StorageArea, StorageHandles};
 use crate::render::{Color, DisplayItem, RenderList, Viewport};
 use std::sync::Arc;
 use url::Url;
-
+use crate::html::DummyDocument;
 // #[derive(Debug, thiserror::Error)]
 // pub enum LoadError {
 //     #[error("navigation cancelled")]
@@ -57,8 +57,8 @@ pub struct BrowsingContext {
     // dirty: DirtyFlags,
     /// Current URL being processed
     current_url: Option<Url>,
-    /// This should become the DOM document, but maybe we can leave the raw HTML here as well
-    raw_html: String,
+    /// "DOM" Document
+    document: Option<Arc<DummyDocument>>,
     /// True when the tab has failed loading (mostly net issues)
     failed: bool,
 
@@ -89,7 +89,7 @@ impl BrowsingContext {
     pub(crate) fn new() -> BrowsingContext {
         Self {
             current_url: None,
-            raw_html: String::new(),
+            document: None,
             failed: false,
             storage: None, // Default no storage unless binding manually by a tab
             render_list: RenderList::new(),
@@ -114,8 +114,8 @@ impl BrowsingContext {
     }
 
     /// Sets the raw HTML for the given tab
-    pub fn set_raw_html(&mut self, html: &str) {
-        self.raw_html = html.to_string();
+    pub fn set_document(&mut self, doc: Arc<DummyDocument>) {
+        self.document = Some(doc.clone());
         self.dom_dirty = true; // Mark the DOM as dirty, so it will be rendered
         self.style_dirty = true;
         self.layout_dirty = true;
@@ -162,16 +162,18 @@ impl BrowsingContext {
         let c = Color::new(0.0, 0.0, 0.0, 1.0);
         let font_size = 16.0;
         let mut y = 0.0;
-        for line in self.raw_html.lines() {
-            rl.items.push(DisplayItem::TextRun {
-                x: 0.0,
-                y,
-                text: line.to_string(),
-                size: font_size,
-                color: c,
-                max_width: Some(self.viewport.width as f32),
-            });
-            y += font_size;
+        if let Some(doc) = self.document.as_ref() {
+            for line in doc.raw_html.lines() {
+                rl.items.push(DisplayItem::TextRun {
+                    x: 0.0,
+                    y,
+                    text: line.to_string(),
+                    size: font_size,
+                    color: c,
+                    max_width: Some(self.viewport.width as f32),
+                });
+                y += font_size;
+            }
         }
 
         self.render_list = rl;

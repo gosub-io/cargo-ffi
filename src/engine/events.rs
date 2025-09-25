@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use url::Url;
+use crate::html::DummyDocument;
 use crate::net::req_ref_tracker::RequestReference;
 
 /// Represents a mouse button that can be pressed or released
@@ -200,6 +201,12 @@ pub enum TabCommand {
     EnableLogging { level: LogLevel },
     /// Dump dom tree
     DumpDomTree,
+}
+
+#[derive(Debug)]
+pub enum TabInternalCommand {
+    // Sets a document
+    SetDocument { doc: Arc<DummyDocument> },
 }
 
 #[derive(Debug)]
